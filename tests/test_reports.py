@@ -11,12 +11,21 @@ from agent_xray.reports import (
     report_broken_data,
     report_compare_days,
     report_compare_days_data,
+    report_compare_days_markdown,
+    report_cost,
+    report_cost_data,
+    report_cost_markdown,
+    report_fixes,
+    report_fixes_data,
+    report_fixes_markdown,
     report_flows,
     report_flows_data,
+    report_flows_markdown,
     report_golden,
     report_golden_data,
     report_health,
     report_health_data,
+    report_health_markdown,
     report_outcomes,
     report_outcomes_data,
     report_tools,
@@ -60,6 +69,13 @@ def test_health_empty():
     assert "Total: 0 tasks" in text
     data = report_health_data([], grades, analyses)
     assert data["total"] == 0
+
+
+def test_health_markdown_contains_table(all_tasks):
+    grades, analyses = _prepare(all_tasks)
+    text = report_health_markdown(all_tasks, grades, analyses)
+    assert "## Health Dashboard" in text
+    assert "| Grade | Count | Pct |" in text
 
 
 # ── Golden ───────────────────────────────────────────────────────────
@@ -136,7 +152,7 @@ def test_tools_empty():
 def test_flows_text_contains_header(all_tasks):
     _, analyses = _prepare(all_tasks)
     text = report_flows(all_tasks, analyses)
-    assert "FLOW FUNNEL" in text
+    assert "FLOW ANALYSIS" in text
 
 
 def test_flows_data_has_sites(all_tasks):
@@ -149,9 +165,17 @@ def test_flows_no_browser_tasks(coding_task, research_task):
     tasks = [coding_task, research_task]
     _, analyses = _prepare(tasks)
     text = report_flows(tasks, analyses)
-    assert "No browser tasks found" in text
+    assert "FLOW ANALYSIS" in text
     data = report_flows_data(tasks, analyses)
-    assert len(data["sites"]) == 0
+    assert "sites" in data
+    assert any(group["domain"] == "coding" for group in data["groups"])
+
+
+def test_flows_markdown_contains_stage_table(all_tasks):
+    _, analyses = _prepare(all_tasks)
+    text = report_flows_markdown(all_tasks, analyses)
+    assert "## Flow Analysis" in text
+    assert "| Stage | Reached | Reach % |" in text
 
 
 # ── Outcomes ─────────────────────────────────────────────────────────
@@ -196,6 +220,56 @@ def test_actions_empty():
     assert data["action_items"] == []
 
 
+# â”€â”€ Cost â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def test_cost_text_contains_header(all_tasks):
+    _, analyses = _prepare(all_tasks)
+    text = report_cost(all_tasks, analyses)
+    assert "COST ANALYSIS" in text
+    assert "MOST EXPENSIVE TASKS" in text
+
+
+def test_cost_data_has_groups(all_tasks):
+    _, analyses = _prepare(all_tasks)
+    data = report_cost_data(all_tasks, analyses)
+    assert "summary" in data
+    assert "by_model" in data
+    assert "by_category" in data
+    assert "by_day" in data
+
+
+def test_cost_markdown_contains_table(all_tasks):
+    _, analyses = _prepare(all_tasks)
+    text = report_cost_markdown(all_tasks, analyses)
+    assert "## Cost Analysis" in text
+    assert "| Metric | Value |" in text
+
+
+# â”€â”€ Fixes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def test_fixes_text_contains_header(all_tasks):
+    grades, analyses = _prepare(all_tasks)
+    text = report_fixes(all_tasks, grades, analyses)
+    assert "FIX PLAN REPORT" in text
+
+
+def test_fixes_data_has_entries(all_tasks):
+    grades, analyses = _prepare(all_tasks)
+    data = report_fixes_data(all_tasks, grades, analyses)
+    assert "fixes" in data
+    assert data["count"] >= 1
+    assert "affected_tasks" in data["fixes"][0]
+
+
+def test_fixes_markdown_contains_table(all_tasks):
+    grades, analyses = _prepare(all_tasks)
+    text = report_fixes_markdown(all_tasks, grades, analyses)
+    assert "## Fix Plan Report" in text
+    assert "| Priority | Root Cause | Affected Tasks | Impact Score | Investigate Task |" in text
+
+
 # ── Compare Days ─────────────────────────────────────────────────────
 
 
@@ -210,3 +284,10 @@ def test_compare_days_data(all_tasks):
     data = report_compare_days_data(all_tasks, grades, analyses, "20260326", "20260327")
     assert "day1" in data
     assert "day2" in data
+
+
+def test_compare_days_markdown(all_tasks):
+    grades, analyses = _prepare(all_tasks)
+    text = report_compare_days_markdown(all_tasks, grades, analyses, "20260326", "20260327")
+    assert "## Day Comparison" in text
+    assert "| Metric | 20260326 | 20260327 | Delta |" in text

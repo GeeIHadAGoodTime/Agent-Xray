@@ -1,19 +1,7 @@
-"""Report generation module — ports all Viola step-log-analysis report types.
-
-Report types:
-  health    — Grade distribution + day-over-day trends
-  golden    — GOLDEN/GOOD runs with aggregate stats
-  broken    — BROKEN tasks with WHY breakdown
-  tools     — Per-tool error rate and effectiveness
-  flows     — Commerce flow funnel (Started → Cart → Checkout → Payment)
-  outcomes  — Outcome distribution and cross-tab with grades
-  actions   — Prioritized action items by impact
-  compare   — Day-over-day comparison with deltas
-"""
+﻿"""Text, data, and Markdown report generation for agent-xray.`r`n`r`nEach report type exposes a text formatter, a structured ``*_data`` variant for`r`nJSON output, and a GitHub-flavored ``*_markdown`` variant for docs and issue`r`nthreads. Reports operate on already-loaded tasks, grades, and analyses so the`r`nCLI and tests can share the same computations.`r`n"""
 
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -119,7 +107,17 @@ def _task_has_url_keyword(analysis: TaskAnalysis, *keywords: str) -> bool:
     return any(keyword in urls for keyword in keywords)
 
 
-# ── Health Dashboard ─────────────────────────────────────────────────
+def _delta_arrow(v1: float | int, v2: float | int, higher_is_better: bool = True) -> str:
+    diff = v2 - v1
+    if diff == 0:
+        return "="
+    arrow = "^" if diff > 0 else "v"
+    good = (diff > 0) == higher_is_better
+    marker = "OK" if good else "!!"
+    return f"{arrow}{abs(diff)} {marker}"
+
+
+# â”€â”€ Health Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _health_summary(
@@ -275,7 +273,7 @@ def report_health_markdown(
     return "\n".join(parts)
 
 
-# ── Golden Report ────────────────────────────────────────────────────
+# â”€â”€ Golden Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _golden_items(
@@ -413,7 +411,7 @@ def report_golden_markdown(
     ])
 
 
-# ── Broken Report ────────────────────────────────────────────────────
+# â”€â”€ Broken Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_broken(
@@ -553,7 +551,7 @@ def report_broken_markdown(
     ])
 
 
-# ── Tool Effectiveness ───────────────────────────────────────────────
+# â”€â”€ Tool Effectiveness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_tools(
@@ -669,53 +667,206 @@ def report_tools_markdown(
     ])
 
 
-# ── Flow Funnel ──────────────────────────────────────────────────────
+# â”€â”€ Flow Funnel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _coding_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, bool]:
+    coding = analysis.signal_metrics.get("coding", {})
+    tools = _tool_sequence(task)
+    edit_indices = [
+        index for index, tool in enumerate(tools)
+        if any(keyword in tool for keyword in ("edit", "write", "patch", "create", "delete", "file"))
+    ]
+    test_indices = [
+        index for index, tool in enumerate(tools)
+        if any(keyword in tool for keyword in ("test", "lint", "build", "type"))
+    ]
+    last_edit = max(edit_indices) if edit_indices else -1
+    return {
+        "Started": bool(task.steps),
+        "Edit": coding.get("file_operations", 0) > 0 or bool(edit_indices),
+        "Test": (
+            coding.get("test_runs", 0) > 0
+            or coding.get("lint_runs", 0) > 0
+            or coding.get("build_runs", 0) > 0
+            or bool(test_indices)
+        ),
+        "Fix": bool(edit_indices and test_indices and any(index > min(test_indices) for index in edit_indices)),
+        "Verify": bool(test_indices and last_edit >= 0 and any(index > last_edit for index in test_indices)),
+    }
+
+
+def _research_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, bool]:
+    research = analysis.signal_metrics.get("research", {})
+    return {
+        "Started": bool(task.steps),
+        "Search": research.get("search_count", 0) > 0 or _task_has_tool_keyword(task, "search"),
+        "Read": research.get("read_count", 0) > 0 or _task_has_tool_keyword(task, "read", "fetch", "scrape"),
+        "Synthesize": research.get("has_synthesis_step", False) or _task_has_tool_keyword(task, "respond", "answer", "summarize"),
+    }
+
+
+def _browser_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, bool]:
+    return {
+        "Started": bool(task.steps),
+        "Browse": _has_browser_steps(task) or _task_has_url_keyword(analysis, "search", "docs", "issues"),
+        "Form": _task_has_tool_keyword(task, "fill", "type", "select") or _task_has_url_keyword(analysis, "form", "settings", "wizard"),
+        "Complete": (
+            bool(task.outcome and task.outcome.status == "success")
+            or _task_has_url_keyword(analysis, "review", "confirm", "complete", "success", "done")
+            or _task_has_result_keyword(task, "submitted", "completed", "confirmed", "success")
+        ),
+    }
+
+
+def _commerce_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, bool]:
+    commerce = analysis.signal_metrics.get("commerce", {})
+    return {
+        "Started": bool(task.steps),
+        "Cart": bool(commerce.get("reached_cart")),
+        "Checkout": bool(commerce.get("reached_checkout")),
+        "Payment": bool(commerce.get("reached_payment")),
+    }
+
+
+def _detect_flow_group(analysis: TaskAnalysis) -> dict[str, Any] | None:
+    task = analysis.task
+    category = _task_category(task)
+    commerce = analysis.signal_metrics.get("commerce", {})
+    coding = analysis.signal_metrics.get("coding", {})
+    research = analysis.signal_metrics.get("research", {})
+    if (
+        category == "commerce"
+        or commerce.get("reached_cart")
+        or commerce.get("reached_checkout")
+        or commerce.get("reached_payment")
+        or _task_has_url_keyword(analysis, "cart", "checkout", "payment")
+    ):
+        return {
+            "domain": "commerce",
+            "label": analysis.site_name or "commerce",
+            "stage_order": ["Started", "Cart", "Checkout", "Payment"],
+            "flags": _commerce_flow_flags(task, analysis),
+            "final_url": analysis.final_url,
+        }
+    if (
+        category == "coding"
+        or coding.get("file_operations", 0) > 0
+        or _task_has_tool_keyword(task, "edit", "patch", "write", "test", "lint", "build")
+    ):
+        return {
+            "domain": "coding",
+            "label": "coding",
+            "stage_order": ["Started", "Edit", "Test", "Fix", "Verify"],
+            "flags": _coding_flow_flags(task, analysis),
+            "final_url": "",
+        }
+    if (
+        category == "research"
+        or research.get("search_count", 0) > 0
+        or research.get("read_count", 0) > 0
+        or _task_has_tool_keyword(task, "search", "read", "respond")
+    ):
+        return {
+            "domain": "research",
+            "label": "research",
+            "stage_order": ["Started", "Search", "Read", "Synthesize"],
+            "flags": _research_flow_flags(task, analysis),
+            "final_url": analysis.final_url,
+        }
+    if _has_browser_steps(task):
+        return {
+            "domain": "browser",
+            "label": analysis.site_name or "browser",
+            "stage_order": ["Started", "Browse", "Form", "Complete"],
+            "flags": _browser_flow_flags(task, analysis),
+            "final_url": analysis.final_url,
+        }
+    return None
+
+
+def _flow_summary(analyses: dict[str, TaskAnalysis]) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    for analysis in analyses.values():
+        detected = _detect_flow_group(analysis)
+        if detected is None:
+            continue
+        key = f"{detected['domain']}::{detected['label']}"
+        group = groups.setdefault(
+            key,
+            {
+                "label": detected["label"],
+                "domain": detected["domain"],
+                "tasks": 0,
+                "stage_order": list(detected["stage_order"]),
+                "stages": {stage: 0 for stage in detected["stage_order"]},
+                "spins": 0,
+                "avg_steps": 0.0,
+                "final_urls": Counter(),
+            },
+        )
+        group["tasks"] += 1
+        group["avg_steps"] += analysis.step_count
+        if analysis.is_spin:
+            group["spins"] += 1
+        for stage in detected["stage_order"]:
+            if detected["flags"].get(stage):
+                group["stages"][stage] += 1
+        if detected["final_url"]:
+            group["final_urls"][detected["final_url"]] += 1
+    ordered = sorted(groups.values(), key=lambda item: (-item["tasks"], item["domain"], item["label"]))
+    for group in ordered:
+        if group["tasks"]:
+            group["avg_steps"] = round(group["avg_steps"] / group["tasks"], 1)
+        group["final_urls"] = dict(group["final_urls"].most_common(3))
+    legacy_sites = {
+        group["label"]: {
+            "domain": group["domain"],
+            "tasks": group["tasks"],
+            "stages": dict(group["stages"]),
+            "avg_steps": group["avg_steps"],
+            "spins": group["spins"],
+        }
+        for group in ordered
+    }
+    return {"sites": legacy_sites, "groups": ordered}
 
 
 def report_flows(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> str:
-    """Render a commerce-style funnel report grouped by inferred site."""
-    by_site: dict[str, list[TaskAnalysis]] = defaultdict(list)
-    for analysis in analyses.values():
-        if any(step.tool_name.startswith(("browser_", "desktop_")) for step in analysis.task.steps):
-            by_site[analysis.site_name].append(analysis)
+    """Render detected flows as terminal text.
 
-    lines = ["FLOW FUNNEL ANALYSIS", "=" * 60]
-    if not by_site:
-        lines.append("  No browser tasks found.")
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report showing domain-specific flow progression.
+    """
+    _ = tasks
+    data = _flow_summary(analyses)
+    lines = ["FLOW ANALYSIS", "=" * 60]
+    if not data["groups"]:
+        lines.append("  No detectable flows found.")
         return "\n".join(lines)
 
-    for site in sorted(by_site, key=lambda s: -len(by_site[s])):
-        site_analyses = by_site[site]
-        total = len(site_analyses)
-        cart = sum(1 for a in site_analyses if a.signal_metrics.get("commerce", {}).get("reached_cart"))
-        checkout = sum(1 for a in site_analyses if a.signal_metrics.get("commerce", {}).get("reached_checkout"))
-        payment = sum(1 for a in site_analyses if a.signal_metrics.get("commerce", {}).get("reached_payment"))
-        fills = sum(1 for a in site_analyses if a.signal_metrics.get("commerce", {}).get("real_fill_count", 0) > 0)
-        spins = sum(1 for a in site_analyses if a.is_spin)
-        avg_steps = sum(a.step_count for a in site_analyses) / max(1, total)
-
-        site_total = total  # bind for closure
-        pct = lambda n, t=site_total: f"{round(n * 100 / max(1, t))}%"  # noqa: E731
+    for group in data["groups"]:
+        counts = "   ".join(f"{group['stages'][stage]:>8d}" for stage in group["stage_order"])
+        rates = "   ".join(f"{_pct(group['stages'][stage], group['tasks']):>7d}%" for stage in group["stage_order"])
         lines.extend([
             "",
-            f"  {site} ({total} tasks)",
-            "    Started  -> Cart     -> Checkout -> Payment",
-            f"    {total:7d}   {cart:8d}   {checkout:8d}   {payment:7d}",
-            f"    {'100%':>7s}   {pct(cart):>8s}   {pct(checkout):>8s}   {pct(payment):>7s}",
-            f"    fills={fills}  spins={spins}  avg_steps={avg_steps:.0f}",
+            f"  {group['label']} [{group['domain']}] ({group['tasks']} tasks)",
+            f"    {' -> '.join(group['stage_order'])}",
+            f"    {counts}",
+            f"    {rates}",
+            f"    spins={group['spins']}  avg_steps={group['avg_steps']}",
         ])
 
-        # Common endpoints (where tasks ended)
-        final_urls: Counter[str] = Counter()
-        for a in site_analyses:
-            if a.final_url:
-                final_urls[a.final_url] += 1
-        if final_urls:
+        if group["final_urls"]:
             lines.append("    Common endpoints:")
-            for url, count in final_urls.most_common(3):
+            for url, count in group["final_urls"].items():
                 lines.append(f"      {url} ({count})")
 
     return "\n".join(lines)
@@ -725,28 +876,60 @@ def report_flows_data(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> dict[str, Any]:
-    """Return structured commerce funnel data grouped by inferred site."""
-    by_site: dict[str, list[TaskAnalysis]] = defaultdict(list)
-    for analysis in analyses.values():
-        if any(step.tool_name.startswith(("browser_", "desktop_")) for step in analysis.task.steps):
-            by_site[analysis.site_name].append(analysis)
-    sites = {}
-    for site in sorted(by_site, key=lambda s: -len(by_site[s])):
-        sa = by_site[site]
-        total = len(sa)
-        sites[site] = {
-            "tasks": total,
-            "cart": sum(1 for a in sa if a.signal_metrics.get("commerce", {}).get("reached_cart")),
-            "checkout": sum(1 for a in sa if a.signal_metrics.get("commerce", {}).get("reached_checkout")),
-            "payment": sum(1 for a in sa if a.signal_metrics.get("commerce", {}).get("reached_payment")),
-            "fills": sum(1 for a in sa if a.signal_metrics.get("commerce", {}).get("real_fill_count", 0) > 0),
-            "spins": sum(1 for a in sa if a.is_spin),
-            "avg_steps": round(sum(a.step_count for a in sa) / max(1, total), 1),
-        }
-    return {"sites": sites}
+    """Return structured domain-neutral flow data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing grouped domain-neutral flow summaries.
+    """
+    _ = tasks
+    return _flow_summary(analyses)
 
 
-# ── Outcome Distribution ─────────────────────────────────────────────
+def report_flows_markdown(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render detected flows as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown flow report showing domain-specific progression.
+    """
+    _ = tasks
+    data = _flow_summary(analyses)
+    if not data["groups"]:
+        return "## Flow Analysis\n\nNo detectable flows found."
+    summary_rows = [
+        [group["label"], group["domain"], group["tasks"], group["spins"], group["avg_steps"]]
+        for group in data["groups"]
+    ]
+    parts = [
+        "## Flow Analysis",
+        "",
+        _markdown_table(["Group", "Domain", "Tasks", "Spins", "Avg Steps"], summary_rows),
+    ]
+    for group in data["groups"]:
+        stage_rows = [
+            [stage, group["stages"][stage], f"{_pct(group['stages'][stage], group['tasks'])}%"]
+            for stage in group["stage_order"]
+        ]
+        parts.extend([
+            "",
+            f"## {group['label']} [{group['domain']}]",
+            "",
+            _markdown_table(["Stage", "Reached", "Reach %"], stage_rows),
+        ])
+    return "\n".join(parts)
+
+
+# â”€â”€ Outcome Distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_outcomes(
@@ -754,7 +937,16 @@ def report_outcomes(
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
 ) -> str:
-    """Render outcome distribution and outcome-versus-grade summaries."""
+    """Render outcome distribution and outcome-versus-grade summaries.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report describing outcome distribution and grade cross-tabs.
+    """
     grade_by_id = {g.task_id: g for g in grades}
     outcome_counts: Counter[str] = Counter()
     with_text = 0
@@ -803,7 +995,16 @@ def report_outcomes_data(
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
 ) -> dict[str, Any]:
-    """Return structured outcome distribution and cross-tab data."""
+    """Return structured outcome-distribution data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary with outcome counts and grade cross-tabs.
+    """
     grade_by_id = {g.task_id: g for g in grades}
     outcome_counts: Counter[str] = Counter()
     grade_by_outcome: dict[str, Counter[str]] = defaultdict(Counter)
@@ -819,7 +1020,40 @@ def report_outcomes_data(
     }
 
 
-# ── Action Items ─────────────────────────────────────────────────────
+def report_outcomes_markdown(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render outcome distribution as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown outcome-distribution report.
+    """
+    data = report_outcomes_data(tasks, grades, analyses)
+    total = len(tasks)
+    outcome_rows = [[name, count, f"{_pct(count, total)}%"] for name, count in data["outcomes"].items()]
+    cross_rows = [
+        [outcome, *[data["outcome_x_grade"][outcome].get(label, 0) for label in GRADE_LABELS]]
+        for outcome in sorted(data["outcome_x_grade"])
+    ]
+    parts = ["## Outcome Distribution", "", _markdown_table(["Outcome", "Count", "Pct"], outcome_rows)]
+    if cross_rows:
+        parts.extend([
+            "",
+            "## Outcome x Grade",
+            "",
+            _markdown_table(["Outcome", *GRADE_LABELS], cross_rows),
+        ])
+    return "\n".join(parts)
+
+
+# â”€â”€ Action Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_actions(
@@ -827,7 +1061,16 @@ def report_actions(
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
 ) -> str:
-    """Render prioritized action items inferred from task and tool failures."""
+    """Render prioritized action items inferred from task and tool failures.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report listing operational priorities.
+    """
     lines = ["PRIORITIZED ACTION ITEMS", "=" * 60, ""]
     priority = 0
 
@@ -924,7 +1167,16 @@ def report_actions_data(
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
 ) -> dict[str, Any]:
-    """Return structured prioritized action items inferred from failures."""
+    """Return structured action-item data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing prioritized operational action items.
+    """
     items: list[dict[str, Any]] = []
     tool_calls: Counter[str] = Counter()
     tool_errors: Counter[str] = Counter()
@@ -953,7 +1205,402 @@ def report_actions_data(
     return {"action_items": items}
 
 
-# ── Day Comparison ───────────────────────────────────────────────────
+def report_actions_markdown(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render action items as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown report listing operational priorities.
+    """
+    data = report_actions_data(tasks, grades, analyses)
+    rows = [
+        [index, item["type"], item.get("affected_tasks", "-"), item.get("details", "-")]
+        for index, item in enumerate(data["action_items"], start=1)
+    ]
+    return "\n".join([
+        "## Prioritized Action Items",
+        "",
+        _markdown_table(["Priority", "Type", "Affected", "Details"], rows),
+    ])
+
+
+# Ã¢â€â‚¬Ã¢â€â‚¬ Cost Analysis Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+
+def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> dict[str, Any]:
+    total_tokens_in = 0
+    total_tokens_out = 0
+    total_cost = 0.0
+    total_steps = 0
+    task_rows: list[dict[str, Any]] = []
+    by_model: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": set(), "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
+    by_category: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
+    by_day: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
+
+    for task in tasks:
+        analysis = analyses[task.task_id]
+        task_tokens_in = analysis.tokens_in
+        task_tokens_out = analysis.tokens_out
+        task_cost = analysis.total_cost_usd
+        task_steps = analysis.step_count
+        total_tokens_in += task_tokens_in
+        total_tokens_out += task_tokens_out
+        total_cost += task_cost
+        total_steps += task_steps
+
+        category = _task_category(task)
+        day = task.day or "unknown"
+        category_bucket = by_category[category]
+        category_bucket["tasks"] += 1
+        category_bucket["steps"] += task_steps
+        category_bucket["tokens_in"] += task_tokens_in
+        category_bucket["tokens_out"] += task_tokens_out
+        category_bucket["cost_usd"] += task_cost
+
+        day_bucket = by_day[day]
+        day_bucket["tasks"] += 1
+        day_bucket["steps"] += task_steps
+        day_bucket["tokens_in"] += task_tokens_in
+        day_bucket["tokens_out"] += task_tokens_out
+        day_bucket["cost_usd"] += task_cost
+
+        task_rows.append({
+            "task_id": task.task_id,
+            "model": _primary_model(task),
+            "models": _task_models(task),
+            "category": category,
+            "day": day,
+            "steps": task_steps,
+            "tokens_in": task_tokens_in,
+            "tokens_out": task_tokens_out,
+            "cost_usd": round(task_cost, 6),
+            "cost_per_step": round(task_cost / max(1, task_steps), 6),
+        })
+
+        for step in task.sorted_steps:
+            model = step.model_name or "unknown"
+            bucket = by_model[model]
+            bucket["tasks"].add(task.task_id)
+            bucket["steps"] += 1
+            bucket["tokens_in"] += step.input_tokens or 0
+            bucket["tokens_out"] += step.output_tokens or 0
+            bucket["cost_usd"] += float(step.cost_usd or 0.0)
+
+    task_rows.sort(key=lambda item: (-item["cost_usd"], item["task_id"]))
+
+    def _finalize(name: str, bucket: dict[str, Any]) -> dict[str, Any]:
+        task_count = len(bucket["tasks"]) if isinstance(bucket["tasks"], set) else int(bucket["tasks"])
+        return {
+            "tasks": task_count,
+            "steps": bucket["steps"],
+            "tokens_in": bucket["tokens_in"],
+            "tokens_out": bucket["tokens_out"],
+            "cost_usd": round(bucket["cost_usd"], 6),
+            "avg_cost_per_task": round(bucket["cost_usd"] / max(1, task_count), 6),
+            "avg_cost_per_step": round(bucket["cost_usd"] / max(1, bucket["steps"]), 6),
+            "name": name,
+        }
+
+    return {
+        "summary": {
+            "tasks": len(tasks),
+            "steps": total_steps,
+            "tokens_in": total_tokens_in,
+            "tokens_out": total_tokens_out,
+            "cost_usd": round(total_cost, 6),
+            "avg_cost_per_task": round(total_cost / max(1, len(tasks)), 6),
+            "avg_cost_per_step": round(total_cost / max(1, total_steps), 6),
+        },
+        "by_model": [_finalize(name, bucket) for name, bucket in sorted(by_model.items())],
+        "by_category": [_finalize(name, bucket) for name, bucket in sorted(by_category.items())],
+        "by_day": [_finalize(name, bucket) for name, bucket in sorted(by_day.items())],
+        "most_expensive_tasks": task_rows[:10],
+    }
+
+
+def report_cost(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render cost analysis as terminal text.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report describing token and cost distribution.
+    """
+    data = _cost_summary(tasks, analyses)
+    summary = data["summary"]
+    lines = ["COST ANALYSIS", "=" * 60, ""]
+    lines.extend([
+        f"  Total tokens in:  {summary['tokens_in']}",
+        f"  Total tokens out: {summary['tokens_out']}",
+        f"  Total cost:       {_format_money(summary['cost_usd'])}",
+        f"  Cost per task:    {_format_money(summary['avg_cost_per_task'])}",
+        f"  Cost per step:    {_format_money(summary['avg_cost_per_step'])}",
+    ])
+
+    def _append_group(title: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        table = [
+            [
+                row["name"],
+                row["tasks"],
+                row["steps"],
+                row["tokens_in"],
+                row["tokens_out"],
+                _format_money(row["cost_usd"]),
+                _format_money(row["avg_cost_per_task"]),
+                _format_money(row["avg_cost_per_step"]),
+            ]
+            for row in rows
+        ]
+        lines.extend(["", f"{title}:", *_text_table(["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"], table)])
+
+    _append_group("BY MODEL", data["by_model"])
+    _append_group("BY CATEGORY", data["by_category"])
+    _append_group("BY DAY", data["by_day"])
+
+    task_rows = [
+        [
+            item["task_id"],
+            item["model"],
+            item["category"],
+            item["day"],
+            item["steps"],
+            item["tokens_in"],
+            item["tokens_out"],
+            _format_money(item["cost_usd"]),
+            _format_money(item["cost_per_step"]),
+        ]
+        for item in data["most_expensive_tasks"]
+    ]
+    if task_rows:
+        lines.extend(["", "MOST EXPENSIVE TASKS:", *_text_table(["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"], task_rows)])
+    return "\n".join(lines)
+
+
+def report_cost_data(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    """Return structured cost-analysis data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing task-level and grouped token/cost metrics.
+    """
+    return _cost_summary(tasks, analyses)
+
+
+def report_cost_markdown(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render cost analysis as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown cost-analysis report.
+    """
+    data = _cost_summary(tasks, analyses)
+    summary = data["summary"]
+    parts = [
+        "## Cost Analysis",
+        "",
+        _markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Total tokens in", summary["tokens_in"]],
+                ["Total tokens out", summary["tokens_out"]],
+                ["Total cost", _format_money(summary["cost_usd"])],
+                ["Cost per task", _format_money(summary["avg_cost_per_task"])],
+                ["Cost per step", _format_money(summary["avg_cost_per_step"])],
+            ],
+        ),
+    ]
+    for title, rows in (("By Model", data["by_model"]), ("By Category", data["by_category"]), ("By Day", data["by_day"])):
+        parts.extend([
+            "",
+            f"## {title}",
+            "",
+            _markdown_table(
+                ["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"],
+                [
+                    [row["name"], row["tasks"], row["steps"], row["tokens_in"], row["tokens_out"], _format_money(row["cost_usd"]), _format_money(row["avg_cost_per_task"]), _format_money(row["avg_cost_per_step"])]
+                    for row in rows
+                ],
+            ),
+        ])
+    parts.extend([
+        "",
+        "## Most Expensive Tasks",
+        "",
+        _markdown_table(
+            ["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"],
+            [
+                [item["task_id"], item["model"], item["category"], item["day"], item["steps"], item["tokens_in"], item["tokens_out"], _format_money(item["cost_usd"]), _format_money(item["cost_per_step"])]
+                for item in data["most_expensive_tasks"]
+            ],
+        ),
+    ])
+    return "\n".join(parts)
+
+
+# Ã¢â€â‚¬Ã¢â€â‚¬ Fix Plan Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+
+def _fix_plan_summary(tasks: list[AgentTask], grades: list[GradeResult]) -> dict[str, Any]:
+    failures = classify_failures(tasks, grades)
+    plan = build_fix_plan(failures)
+    failures_by_cause: dict[str, list[Any]] = defaultdict(list)
+    for failure in failures:
+        failures_by_cause[failure.root_cause].append(failure)
+    fixes = []
+    for entry in plan:
+        cause_meta = ROOT_CAUSES.get(entry.root_cause, {})
+        evidence: list[str] = []
+        for failure in failures_by_cause.get(entry.root_cause, []):
+            for item in failure.evidence:
+                if item not in evidence:
+                    evidence.append(item)
+        fixes.append({
+            "priority": entry.priority,
+            "root_cause": entry.root_cause,
+            "root_cause_label": cause_meta.get("label", entry.root_cause),
+            "affected_tasks": sorted(item.task_id for item in failures_by_cause.get(entry.root_cause, [])),
+            "affected_count": entry.count,
+            "impact_score": entry.impact,
+            "investigate_task": entry.investigate_task,
+            "targets": list(entry.targets),
+            "fix_hint": entry.fix_hint,
+            "evidence": evidence[:5] or list(entry.evidence),
+        })
+    return {"count": len(fixes), "failures_considered": len(failures), "fixes": fixes}
+
+
+def report_fixes(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render the prioritized fix plan as terminal text.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report describing the prioritized fix plan.
+    """
+    _ = analyses
+    data = _fix_plan_summary(tasks, grades)
+    lines = ["FIX PLAN REPORT", "=" * 60, ""]
+    if not data["fixes"]:
+        lines.append("  No BROKEN or WEAK tasks found. Nothing to diagnose.")
+        return "\n".join(lines)
+    for item in data["fixes"]:
+        lines.extend([
+            f"Priority #{item['priority']}: {item['root_cause']} ({item['affected_count']} task(s), impact={item['impact_score']})",
+            f"  Targets: {', '.join(item['targets'])}",
+            f"  Fix hint: {item['fix_hint']}",
+            f"  Investigate task: {item['investigate_task']}",
+            f"  Affected tasks: {', '.join(item['affected_tasks'])}",
+            f"  Evidence: {'; '.join(item['evidence'])}" if item["evidence"] else "  Evidence: none",
+            "",
+        ])
+    return "\n".join(lines)
+
+
+def report_fixes_data(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    """Return structured fix-plan data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing prioritized root-cause fixes.
+    """
+    _ = analyses
+    return _fix_plan_summary(tasks, grades)
+
+
+def report_fixes_markdown(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render the prioritized fix plan as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown report describing the prioritized fix plan.
+    """
+    _ = analyses
+    data = _fix_plan_summary(tasks, grades)
+    if not data["fixes"]:
+        return "## Fix Plan Report\n\nNo BROKEN or WEAK tasks found. Nothing to diagnose."
+    summary_rows = [
+        [item["priority"], item["root_cause"], item["affected_count"], item["impact_score"], item["investigate_task"]]
+        for item in data["fixes"]
+    ]
+    parts = [
+        "## Fix Plan Report",
+        "",
+        _markdown_table(["Priority", "Root Cause", "Affected Tasks", "Impact Score", "Investigate Task"], summary_rows),
+    ]
+    for item in data["fixes"]:
+        parts.extend([
+            "",
+            f"## Priority {item['priority']}: {item['root_cause']}",
+            "",
+            _markdown_table(
+                ["Field", "Value"],
+                [
+                    ["Root cause", item["root_cause_label"]],
+                    ["Affected tasks", ", ".join(item["affected_tasks"]) or "-"],
+                    ["Impact score", item["impact_score"]],
+                    ["Targets", ", ".join(item["targets"])],
+                    ["Fix hint", item["fix_hint"]],
+                ],
+            ),
+            "",
+            "```text",
+            "\n".join(item["evidence"]) if item["evidence"] else "none",
+            "```",
+        ])
+    return "\n".join(parts)
+
+
+# â”€â”€ Day Comparison â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_compare_days(
@@ -963,7 +1610,18 @@ def report_compare_days(
     day1: str,
     day2: str,
 ) -> str:
-    """Render a side-by-side comparison between two day buckets."""
+    """Render a side-by-side comparison between two day buckets.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        day1: First day in ``YYYYMMDD`` form.
+        day2: Second day in ``YYYYMMDD`` form.
+
+    Returns:
+        A text comparison report with deltas between the two days.
+    """
     grade_by_id = {g.task_id: g for g in grades}
 
     def _day_stats(day: str) -> dict[str, Any]:
@@ -1024,7 +1682,18 @@ def report_compare_days_data(
     day1: str,
     day2: str,
 ) -> dict[str, Any]:
-    """Return structured comparison data for two day buckets."""
+    """Return structured comparison data for two day buckets.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        day1: First day in ``YYYYMMDD`` form.
+        day2: Second day in ``YYYYMMDD`` form.
+
+    Returns:
+        A dictionary containing per-day metrics for comparison.
+    """
     grade_by_id = {g.task_id: g for g in grades}
 
     def _day_stats(day: str) -> dict[str, Any]:
@@ -1046,14 +1715,58 @@ def report_compare_days_data(
     return {"day1": {day1: _day_stats(day1)}, "day2": {day2: _day_stats(day2)}}
 
 
-# ── Coding Report ───────────────────────────────────────────────────
+def report_compare_days_markdown(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+    day1: str,
+    day2: str,
+) -> str:
+    """Render a day-over-day comparison as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        day1: First day in ``YYYYMMDD`` form.
+        day2: Second day in ``YYYYMMDD`` form.
+
+    Returns:
+        A Markdown comparison report with deltas between the two days.
+    """
+    data = report_compare_days_data(tasks, grades, analyses, day1, day2)
+    s1 = data["day1"][day1]
+    s2 = data["day2"][day2]
+    rows = [
+        ["Tasks", s1["total"], s2["total"], "-"],
+        ["Golden+Good%", f"{s1['golden_good_pct']}%", f"{s2['golden_good_pct']}%", _delta_arrow(s1["golden_good_pct"], s2["golden_good_pct"])],
+        ["Broken%", f"{s1['broken_pct']}%", f"{s2['broken_pct']}%", _delta_arrow(s1["broken_pct"], s2["broken_pct"], higher_is_better=False)],
+        ["Spin%", f"{s1['spin_pct']}%", f"{s2['spin_pct']}%", _delta_arrow(s1["spin_pct"], s2["spin_pct"], higher_is_better=False)],
+        ["Avg steps", s1["avg_steps"], s2["avg_steps"], "-"],
+    ]
+    return "\n".join([
+        f"## Day Comparison: {day1} vs {day2}",
+        "",
+        _markdown_table(["Metric", day1, day2, "Delta"], rows),
+    ])
+
+
+# â”€â”€ Coding Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_coding(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> str:
-    """Render a report focused on coding-oriented task behavior."""
+    """Render a report focused on coding-oriented task behavior.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report summarizing coding-task behavior.
+    """
     coding_tasks = [
         (t, analyses[t.task_id])
         for t in tasks
@@ -1102,7 +1815,15 @@ def report_coding_data(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> dict[str, Any]:
-    """Return structured data for coding-oriented task behavior."""
+    """Return structured coding-task report data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing per-task coding metrics.
+    """
     coding_tasks = [
         (t, analyses[t.task_id])
         for t in tasks
@@ -1125,14 +1846,57 @@ def report_coding_data(
     return {"count": len(items), "tasks": items}
 
 
-# ── Research Report ─────────────────────────────────────────────────
+def report_coding_markdown(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render coding-task behavior as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown coding-task report.
+    """
+    data = report_coding_data(tasks, analyses)
+    rows = [
+        [
+            item["task_id"],
+            item["file_operations"],
+            item["test_runs"],
+            item["lint_runs"],
+            item["git_operations"],
+            item["unique_files"],
+            item["has_verify_cycle"],
+            item["errors"],
+            item["steps"],
+        ]
+        for item in data["tasks"]
+    ]
+    return "\n".join([
+        "## Coding Report",
+        "",
+        _markdown_table(["Task", "File Ops", "Tests", "Lints", "Git", "Unique Files", "Verify Cycle", "Errors", "Steps"], rows),
+    ])
+
+
+# â”€â”€ Research Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def report_research(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> str:
-    """Render a report focused on research-oriented task behavior."""
+    """Render a report focused on research-oriented task behavior.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A text report summarizing research-task behavior.
+    """
     research_tasks = [
         (t, analyses[t.task_id])
         for t in tasks
@@ -1181,7 +1945,15 @@ def report_research_data(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
 ) -> dict[str, Any]:
-    """Return structured data for research-oriented task behavior."""
+    """Return structured research-task report data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary containing per-task research metrics.
+    """
     research_tasks = [
         (t, analyses[t.task_id])
         for t in tasks
@@ -1199,3 +1971,36 @@ def report_research_data(
             "has_synthesis": rm.get("has_synthesis_step", False),
         })
     return {"count": len(items), "tasks": items}
+
+
+def report_research_markdown(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render research-task behavior as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown research-task report.
+    """
+    data = report_research_data(tasks, analyses)
+    rows = [
+        [
+            item["task_id"],
+            item["search_count"],
+            item["read_count"],
+            item["source_diversity"],
+            item["citation_count"],
+            item["has_synthesis"],
+        ]
+        for item in data["tasks"]
+    ]
+    return "\n".join([
+        "## Research Report",
+        "",
+        _markdown_table(["Task", "Searches", "Reads", "Domains", "Citations", "Synthesis"], rows),
+    ])
+

@@ -22,24 +22,40 @@ from .replay import format_replay_text, replay_fixture
 from .reports import (
     report_actions,
     report_actions_data,
+    report_actions_markdown,
     report_broken,
     report_broken_data,
+    report_broken_markdown,
     report_coding,
     report_coding_data,
+    report_coding_markdown,
     report_compare_days,
     report_compare_days_data,
+    report_compare_days_markdown,
+    report_cost,
+    report_cost_data,
+    report_cost_markdown,
+    report_fixes,
+    report_fixes_data,
+    report_fixes_markdown,
     report_flows,
     report_flows_data,
+    report_flows_markdown,
     report_golden,
     report_golden_data,
+    report_golden_markdown,
     report_health,
     report_health_data,
+    report_health_markdown,
     report_outcomes,
     report_outcomes_data,
+    report_outcomes_markdown,
     report_research,
     report_research_data,
+    report_research_markdown,
     report_tools,
     report_tools_data,
+    report_tools_markdown,
 )
 from .root_cause import classify_failures
 from .schema import AgentTask
@@ -738,6 +754,11 @@ def cmd_report(args: argparse.Namespace) -> int:
         tasks, grades, analyses = _grade_and_analyze(args)
         report_type = args.report_type
         use_json = getattr(args, "json", False)
+        use_markdown = getattr(args, "markdown", False)
+
+        if use_json and use_markdown:
+            _emit("--json and --markdown are mutually exclusive", args, final=True)
+            return 1
 
         if report_type == "compare":
             if not args.day1 or not args.day2:
@@ -745,6 +766,8 @@ def cmd_report(args: argparse.Namespace) -> int:
                 return 1
             if use_json:
                 _dump(report_compare_days_data(tasks, grades, analyses, args.day1, args.day2))
+            elif use_markdown:
+                _emit(report_compare_days_markdown(tasks, grades, analyses, args.day1, args.day2), args, final=True)
             else:
                 _emit(
                     _colorize_report_headers(
@@ -766,6 +789,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             "actions": lambda: report_actions(tasks, grades, analyses),
             "coding": lambda: report_coding(tasks, analyses),
             "research": lambda: report_research(tasks, analyses),
+            "cost": lambda: report_cost(tasks, analyses),
+            "fixes": lambda: report_fixes(tasks, grades, analyses),
         }
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
@@ -777,6 +802,21 @@ def cmd_report(args: argparse.Namespace) -> int:
             "actions": lambda: report_actions_data(tasks, grades, analyses),
             "coding": lambda: report_coding_data(tasks, analyses),
             "research": lambda: report_research_data(tasks, analyses),
+            "cost": lambda: report_cost_data(tasks, analyses),
+            "fixes": lambda: report_fixes_data(tasks, grades, analyses),
+        }
+        markdown_funcs: dict[str, Any] = {
+            "health": lambda: report_health_markdown(tasks, grades, analyses),
+            "golden": lambda: report_golden_markdown(tasks, grades, analyses),
+            "broken": lambda: report_broken_markdown(tasks, grades, analyses),
+            "tools": lambda: report_tools_markdown(tasks, analyses),
+            "flows": lambda: report_flows_markdown(tasks, analyses),
+            "outcomes": lambda: report_outcomes_markdown(tasks, grades, analyses),
+            "actions": lambda: report_actions_markdown(tasks, grades, analyses),
+            "coding": lambda: report_coding_markdown(tasks, analyses),
+            "research": lambda: report_research_markdown(tasks, analyses),
+            "cost": lambda: report_cost_markdown(tasks, analyses),
+            "fixes": lambda: report_fixes_markdown(tasks, grades, analyses),
         }
 
         if report_type not in text_funcs:
@@ -785,6 +825,8 @@ def cmd_report(args: argparse.Namespace) -> int:
 
         if use_json:
             _dump(data_funcs[report_type]())
+        elif use_markdown:
+            _emit(markdown_funcs[report_type](), args, final=True)
         else:
             _emit(_colorize_report_headers(text_funcs[report_type](), args), args, final=True)
         return 0
@@ -964,7 +1006,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report = _add_subparser(
         sub,
         "report",
-        help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, compare)",
+        help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, compare)",
         example="agent-xray report ./traces health",
     )
     p_report.add_argument("log_dir")
@@ -980,6 +1022,8 @@ def build_parser() -> argparse.ArgumentParser:
             "actions",
             "coding",
             "research",
+            "cost",
+            "fixes",
             "compare",
         ],
     )
@@ -989,6 +1033,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
     p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
     p_report.add_argument("--json", action="store_true")
+    p_report.add_argument("--markdown", action="store_true")
     p_report.set_defaults(func=cmd_report)
 
     p_tui = _add_subparser(

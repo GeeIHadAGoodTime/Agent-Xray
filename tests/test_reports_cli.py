@@ -6,7 +6,7 @@ from argparse import Namespace
 from agent_xray.cli import cmd_report
 
 
-def _ns(report_type: str, log_dir, *, use_json: bool = False, day1=None, day2=None):
+def _ns(report_type: str, log_dir, *, use_json: bool = False, markdown: bool = False, day1=None, day2=None):
     return Namespace(
         log_dir=log_dir,
         days=None,
@@ -14,6 +14,7 @@ def _ns(report_type: str, log_dir, *, use_json: bool = False, day1=None, day2=No
         format="auto",
         report_type=report_type,
         json=use_json,
+        markdown=markdown,
         day1=day1,
         day2=day2,
     )
@@ -32,6 +33,13 @@ def test_report_health_json(tmp_trace_dir, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["total"] == 4
     assert "distribution" in data
+
+
+def test_report_health_markdown(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("health", tmp_trace_dir, markdown=True)) == 0
+    out = capsys.readouterr().out
+    assert "## Health Dashboard" in out
+    assert "| Grade | Count | Pct |" in out
 
 
 # ── Golden ───────────────────────────────────────────────────────────
@@ -84,7 +92,7 @@ def test_report_tools_json(tmp_trace_dir, capsys):
 
 def test_report_flows_text(tmp_trace_dir, capsys):
     assert cmd_report(_ns("flows", tmp_trace_dir)) == 0
-    assert "FLOW FUNNEL" in capsys.readouterr().out
+    assert "FLOW ANALYSIS" in capsys.readouterr().out
 
 
 def test_report_flows_json(tmp_trace_dir, capsys):
@@ -121,6 +129,50 @@ def test_report_actions_json(tmp_trace_dir, capsys):
     assert "action_items" in data
 
 
+# â”€â”€ Cost â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def test_report_cost_text(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("cost", tmp_trace_dir)) == 0
+    assert "COST ANALYSIS" in capsys.readouterr().out
+
+
+def test_report_cost_json(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("cost", tmp_trace_dir, use_json=True)) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert "summary" in data
+    assert "by_model" in data
+
+
+def test_report_cost_markdown(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("cost", tmp_trace_dir, markdown=True)) == 0
+    out = capsys.readouterr().out
+    assert "## Cost Analysis" in out
+    assert "| Metric | Value |" in out
+
+
+# â”€â”€ Fixes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def test_report_fixes_text(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("fixes", tmp_trace_dir)) == 0
+    assert "FIX PLAN REPORT" in capsys.readouterr().out
+
+
+def test_report_fixes_json(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("fixes", tmp_trace_dir, use_json=True)) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert "fixes" in data
+    assert data["count"] >= 1
+
+
+def test_report_fixes_markdown(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("fixes", tmp_trace_dir, markdown=True)) == 0
+    out = capsys.readouterr().out
+    assert "## Fix Plan Report" in out
+    assert "| Priority | Root Cause | Affected Tasks | Impact Score | Investigate Task |" in out
+
+
 # ── Compare ──────────────────────────────────────────────────────────
 
 
@@ -140,3 +192,10 @@ def test_report_compare_json(tmp_trace_dir, capsys):
     data = json.loads(capsys.readouterr().out)
     assert "day1" in data
     assert "day2" in data
+
+
+def test_report_compare_markdown(tmp_trace_dir, capsys):
+    assert cmd_report(_ns("compare", tmp_trace_dir, markdown=True, day1="20260326", day2="20260327")) == 0
+    out = capsys.readouterr().out
+    assert "## Day Comparison" in out
+    assert "| Metric | 20260326 | 20260327 | Delta |" in out
