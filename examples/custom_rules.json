@@ -1,0 +1,26 @@
+{
+  "name": "custom_browser",
+  "description": "Example of a narrow custom scoring profile.",
+  "signals": [
+    {
+      "name": "must_progress",
+      "metric": "unique_urls",
+      "gte": 2,
+      "points": 2,
+      "reason": "+2 visited at least two pages"
+    },
+    {
+      "name": "punish_loops",
+      "metric": "max_repeat_count",
+      "gte": 4,
+      "points": -2,
+      "reason": "-2 repeated the same tool too many times"
+    }
+  ],
+  "grade_thresholds": {
+    "GOLDEN": 2,
+    "GOOD": 1,
+    "OK": 0,
+    "WEAK": 0
+  }
+}

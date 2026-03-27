@@ -1,0 +1,115 @@
+{
+  "name": "browser_flow",
+  "description": "Commerce and navigation-oriented grading rules. Rewards real URL progression, milestone reach, and meaningful fills.",
+  "signals": [
+    {
+      "name": "url_progression",
+      "metric": "unique_urls",
+      "gte": 3,
+      "points": 2,
+      "reason": "+2 URL progression ({actual} pages)"
+    },
+    {
+      "name": "checkout_reached",
+      "metric": "reached_checkout",
+      "equals": true,
+      "points": 3,
+      "reason": "+3 checkout reached"
+    },
+    {
+      "name": "payment_reached",
+      "metric": "reached_payment",
+      "equals": true,
+      "points": 4,
+      "reason": "+4 payment reached"
+    },
+    {
+      "name": "cart_reached",
+      "metric": "reached_cart",
+      "equals": true,
+      "points": 2,
+      "reason": "+2 cart reached"
+    },
+    {
+      "name": "real_fills",
+      "metric": "real_fill_count",
+      "gte": 1,
+      "points": 2,
+      "reason": "+2 real form fills"
+    },
+    {
+      "name": "tool_diversity",
+      "metric": "unique_tools",
+      "gte": 3,
+      "points": 1,
+      "reason": "+1 tool diversity"
+    },
+    {
+      "name": "healthy_step_count",
+      "metric": "step_count",
+      "gte": 8,
+      "points": 1,
+      "reason": "+1 healthy step count"
+    },
+    {
+      "name": "zero_errors",
+      "metric": "errors",
+      "equals": 0,
+      "points": 1,
+      "reason": "+1 zero errors"
+    },
+    {
+      "name": "timeout_penalty",
+      "metric": "timeout_like",
+      "equals": true,
+      "points": -4,
+      "reason": "-4 timeout"
+    },
+    {
+      "name": "spin_penalty",
+      "metric": "max_repeat_count",
+      "gte": 5,
+      "points": -2,
+      "reason": "-2 moderate or worse spin"
+    },
+    {
+      "name": "error_rate_penalty",
+      "metric": "error_rate",
+      "gt": 0.5,
+      "points": -3,
+      "reason": "-3 error rate above 50%"
+    },
+    {
+      "name": "stuck_on_page_penalty",
+      "metric": "unique_urls",
+      "lte": 1,
+      "points": -2,
+      "reason": "-2 stayed on one page"
+    },
+    {
+      "name": "hallucination_penalty",
+      "metric": "hallucinated_tools",
+      "gte": 2,
+      "points": -2,
+      "reason": "-2 hallucinated tools"
+    }
+  ],
+  "grade_thresholds": {
+    "GOLDEN": 8,
+    "GOOD": 5,
+    "OK": 2,
+    "WEAK": 0
+  },
+  "golden_requirements": [
+    {
+      "metric": "payment_fields_confirmed",
+      "equals": true,
+      "reason": "~0 capped at GOOD: payment details were not visibly confirmed"
+    },
+    {
+      "metric": "url_has_terminal",
+      "equals": true,
+      "reason": "~0 capped at GOOD: terminal payment URL was never reached"
+    }
+  ]
+}

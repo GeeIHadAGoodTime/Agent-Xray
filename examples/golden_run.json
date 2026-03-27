@@ -1,0 +1,54 @@
+{
+  "task_id": "example-order-001",
+  "user_text": "Order a large pepperoni pizza for delivery to *address*",
+  "site": "shop",
+  "category": "commerce",
+  "grade_hint": "GOLDEN",
+  "step_sequence": [
+    {
+      "step": 1,
+      "tool_name": "browser_navigate",
+      "tool_input": {
+        "url": "https://shop.example.test/"
+      },
+      "page_url": "https://shop.example.test/",
+      "expected_result_contains": [
+        "your cart"
+      ],
+      "milestone": "CART"
+    },
+    {
+      "step": 2,
+      "tool_name": "browser_fill_ref",
+      "tool_input": {
+        "ref": "e12",
+        "text": "*address*"
+      },
+      "page_url": "https://shop.example.test/checkout",
+      "expected_result_contains": [
+        "checkout"
+      ],
+      "milestone": "CHECKOUT"
+    },
+    {
+      "step": 3,
+      "tool_name": "browser_fill_ref",
+      "tool_input": {
+        "ref": "e24",
+        "text": "*card_number*"
+      },
+      "page_url": "https://shop.example.test/payment",
+      "expected_result_contains": [
+        "card number",
+        "cvv"
+      ],
+      "milestone": "PAYMENT"
+    }
+  ],
+  "milestones_reached": [
+    "CART",
+    "CHECKOUT",
+    "PAYMENT"
+  ],
+  "total_steps": 3
+}
