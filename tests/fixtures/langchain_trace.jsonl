@@ -1,0 +1,15 @@
+{"event":"on_chain_start","name":"AgentExecutor","run_id":"chain-1","metadata":{"task_id":"task-lang-1"},"timestamp":"2024-01-15T10:00:00Z"}
+{"event":"on_llm_start","name":"ChatOpenAI","run_id":"llm-1","parent_run_id":"chain-1","timestamp":"2024-01-15T10:00:01Z"}
+{"event":"on_llm_end","run_id":"llm-1","parent_run_id":"chain-1","timestamp":"2024-01-15T10:00:02Z","data":{"generations":[["Let's use web search first."]]}}
+{"event":"on_tool_start","name":"web_search","data":{"input":{"query":"AI chip market 2026"}},"run_id":"tool-1","parent_run_id":"chain-1","metadata":{"task_id":"task-lang-1"},"timestamp":"2024-01-15T10:00:03Z"}
+{"event":"on_tool_end","name":"web_search","data":{"output":"Found 4 industry reports."},"run_id":"tool-1","timestamp":"2024-01-15T10:00:05Z"}
+{"event":"on_tool_start","name":"browser_open","data":{"input":{"url":"https://example.com/report"}},"run_id":"tool-2","parent_run_id":"chain-1","metadata":{"task_id":"task-lang-1"},"timestamp":"2024-01-15T10:00:06Z"}
+{"event":"on_tool_end","name":"browser_open","data":{"output":"Page loaded successfully."},"run_id":"tool-2","timestamp":"2024-01-15T10:00:08Z"}
+{"event":"on_llm_start","name":"ChatOpenAI","run_id":"llm-2","parent_run_id":"chain-1","timestamp":"2024-01-15T10:00:09Z"}
+{"event":"on_llm_end","run_id":"llm-2","parent_run_id":"chain-1","timestamp":"2024-01-15T10:00:10Z","data":{"generations":[["Extract the table values."]]}}
+{"event":"on_tool_start","name":"extract_numbers","data":{"input":{"selector":"table.market"}},"run_id":"tool-3","parent_run_id":"chain-1","metadata":{"task_id":"task-lang-1"},"timestamp":"2024-01-15T10:00:11Z"}
+{"event":"on_text","name":"debug","run_id":"tool-3","timestamp":"2024-01-15T10:00:12Z","data":{"text":"processing rows"}}
+{"event":"on_tool_end","name":"extract_numbers","data":{"output":"Extracted 12 rows."},"run_id":"tool-3","timestamp":"2024-01-15T10:00:15Z"}
+{"event":"on_chain_end","name":"AgentExecutor","run_id":"chain-1","timestamp":"2024-01-15T10:00:16Z"}
+{"event":"on_tool_start","name":"send_email","data":{"input":{"to":"ops@example.com"}},"run_id":"tool-4","parent_run_id":"chain-2","metadata":{"task_id":"task-lang-2"},"timestamp":"2024-01-15T10:05:00Z"}
+{"event":"on_tool_end","name":"send_email","data":{"output":"Summary delivered."},"run_id":"tool-4","timestamp":"2024-01-15T10:05:02Z"}

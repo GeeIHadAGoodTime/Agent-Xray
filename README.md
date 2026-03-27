@@ -1,227 +1,215 @@
 # agent-xray
 
-`agent-xray` turns raw agent step logs into something you can debug: grades, replay surfaces, root-cause buckets, fixture capture, and regression checks.
+**See what your agent saw.**
 
-It was extracted from an internal step-log-analysis workflow and rebuilt as a standalone Python package with no hard dependency on any single agent stack.
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-181717?logo=github)](https://github.com/agent-xray/agent-xray/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/agent-xray)](https://pypi.org/project/agent-xray/)
+[![Python](https://img.shields.io/pypi/pyversions/agent-xray)](https://pypi.org/project/agent-xray/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+`agent-xray` is a local-first debugger for AI agent decisions. It reconstructs the exact decision surface the model saw at each step: prompt context, available tools, conversation history, page state, context pressure, and corrective signals.
+
+When a run goes sideways, most tracing tools tell you what happened. `agent-xray` tells you what the model had in front of it when it made the choice.
+
+## Why agent-xray?
+
+- Local-first: inspect traces on your machine, in CI, or offline.
+- Framework-agnostic: normalize JSONL, OpenAI, LangChain, Anthropic, CrewAI, and OTel traces into one schema.
+- Decision-surface replay: rebuild prompt, tool, reasoning, and browser context step by step.
+- Practical triage: grade runs, classify likely root causes, capture golden fixtures, and compare regressions over time.
+- Typed and scriptable: use it as a CLI, import it as a library, or wire it into pytest.
+
+| Feature | agent-xray |
+| --- | --- |
+| Runs locally | Yes |
+| Works offline | Yes |
+| Account required | No |
+| Framework-agnostic | Yes |
+| Rule-based grading | Yes |
+| Root-cause heuristics | Yes |
+| Golden replay | Yes |
+| Optional TUI | Yes |
+
+> Use your tracing stack to collect runs. Use `agent-xray` to understand why a specific decision failed.
+
+## Install
+
+```bash
+pip install agent-xray
+```
+
+Optional extras:
+
+```bash
+pip install "agent-xray[all]"
+```
+
+`[all]` pulls in the optional runner, TUI, OTel adapter, lint, typecheck, and test dependencies.
 
 ## Quick Start
 
-```powershell
-cd J:\PROJECTS\agent-xray
-python -m pip install -e .
+```bash
+# Analyze a directory of traces
+agent-xray analyze ./traces
 
-agent-xray analyze .\logs --json
-agent-xray grade .\logs --rules .\src\agent_xray\rules\browser_flow.json
-agent-xray surface 51f3fd8d --log-dir .\logs
-agent-xray reasoning 51f3fd8d --log-dir .\logs
-agent-xray diff task-a task-b --log-dir .\logs --json
-agent-xray tree --log-dir .\logs
-agent-xray capture 51f3fd8d --log-dir .\logs --out .\captured\golden.json
-agent-xray replay .\captured\golden.json --log-dir .\logs
+# Reconstruct the full decision surface for one task
+agent-xray surface task-001 --log-dir ./traces
+
+# Grade tasks with a bundled ruleset
+agent-xray grade ./traces --rules browser_flow
+
+# Compare two task runs step-by-step
+agent-xray diff task-a task-b --log-dir ./traces
+
+# Run the full flywheel: grading, root causes, fixture replay, baseline deltas
+agent-xray flywheel ./traces --fixture-dir ./captured --baseline ./baseline.json
+
+# Compare two model runs across matched tasks
+agent-xray compare ./runs-gpt4 ./runs-gpt5
+
+# Open the interactive inspector
+agent-xray tui ./traces
 ```
 
-Set `AGENT_XRAY_LOG_DIR` if you want `surface`, `reasoning`, `diff`, `tree`, `capture`, and `replay` to default to a shared log directory.
+Set `AGENT_XRAY_LOG_DIR` if you want task-centric commands like `surface`, `reasoning`, `tree`, `capture`, and `replay` to default to one shared trace directory.
 
-## Pitch
+## What Is A Decision Surface?
 
-Most agent traces are only useful in the moment they were recorded. `agent-xray` makes them reusable:
+At each step, an agent acts with a specific view of the world:
 
-- It defines a formal JSONL schema for portable step logs.
-- It grades runs with configurable JSON rules instead of hardcoded repo logic.
-- It reconstructs the information surface the model saw at each step.
-- It classifies likely failure modes so fix work can be prioritized.
-- It captures sanitized golden fixtures and checks new runs against them.
+- A system prompt or prompt hash
+- A conversation history, including compression side effects
+- A tool set that may change step to step
+- Model metadata like token usage, tool choice, and context pressure
+- Browser cues like URL, screenshots, and page transitions
+- Corrections, interventions, or retries from previous failures
 
-## Architecture
+`agent-xray` reconstructs that surface so you can inspect the exact conditions behind a tool choice instead of guessing from the final trace alone.
 
-```text
-JSONL step logs
-  -> adapter.py        normalize external trace formats into AgentStep
-  -> schema.py         AgentStep / AgentTask / TaskOutcome
-  -> analyzer.py       URL, fill, error, spin, and site-level signals
-  -> grader.py         configurable scoring via JSON rules
-  -> surface.py        prompt/tool/context replay and run diffs
-  -> root_cause.py     failure bucket classification
-  -> capture.py        sanitized golden fixture generation
-  -> replay.py         fixture-vs-run comparison
-  -> diagnose.py       prioritized fix plan
-  -> flywheel.py       end-to-end pass across grading + diagnosis + replay
-```
+## Supported Frameworks
 
-## JSONL Schema
+| Framework | Format Flag | Status |
+| --- | --- | --- |
+| Generic JSONL | `--format generic` | Stable |
+| OpenAI Agents / Responses-style traces | `--format openai` | Stable |
+| Anthropic Messages traces | `--format anthropic` | Stable |
+| LangChain / LangGraph traces | `--format langchain` | Stable |
+| CrewAI traces | `--format crewai` | Stable |
+| OpenTelemetry GenAI spans | `--format otel` | Experimental |
+| Auto-detect | `--format auto` | Stable |
 
-Core step shape:
+## Grading System
 
-```python
-from dataclasses import dataclass
+Every task is analyzed once, then scored by a JSON ruleset. Bundled rules include:
 
-@dataclass
-class AgentStep:
-    task_id: str
-    step: int
-    tool_name: str
-    tool_input: dict
-    tool_result: str | None = None
-    llm_reasoning: str | None = None
-    error: str | None = None
-    duration_ms: int | None = None
-    timestamp: str | None = None
-    model_name: str | None = None
-    temperature: float | None = None
-    tool_choice: str | None = None
-    message_count: int | None = None
-    tools_available: list[str] | None = None
-    page_url: str | None = None
-    system_prompt_hash: str | None = None
-    context_usage_pct: float | None = None
-    context_window: int | None = None
-    compaction_count: int | None = None
-    snapshot_compressed: bool | None = None
-    had_screenshot: bool | None = None
-    correction_messages: list[str] | None = None
-    spin_intervention: str | None = None
-```
+- `default`: general reliability and loop-detection signals
+- `browser_flow`: browser and commerce progression signals
+- `coding_agent`: file-edit, test, lint, and shell behavior
+- `research_agent`: browsing and evidence-oriented signals
 
-`schema.py` also defines:
-
-- `AgentTask`: a collection of steps plus metadata and optional task outcome
-- `TaskOutcome`: final status, answer, duration, and metadata
-- JSON Schema dictionaries for the three objects
-
-## Grading
-
-Rules live in JSON files. Two bundled rule sets ship with the package:
-
-- `src/agent_xray/rules/default.json`: generic reliability and spin signals
-- `src/agent_xray/rules/browser_flow.json`: browser and commerce progression signals
-
-Rule files define:
-
-- positive and negative signals
-- metric comparisons like `gte`, `lte`, and `equals`
-- point values
-- grade thresholds
-- optional `golden_requirements` to cap `GOLDEN` unless a terminal condition was visibly reached
-
-Example custom rule:
+Rule files support both legacy metric syntax and the newer field/operator form:
 
 ```json
 {
-  "name": "custom",
+  "name": "browser_flow",
   "signals": [
     {
-      "name": "must_use_multiple_tools",
-      "metric": "unique_tools",
-      "gte": 2,
+      "label": "high_error_rate",
+      "field": "error_rate",
+      "op": "gte",
+      "value": 0.5,
+      "points": -3,
+      "reason": "error rate is too high"
+    },
+    {
+      "label": "good_tool_diversity",
+      "field": "unique_tools",
+      "op": "gte",
+      "value": 3,
       "points": 2,
-      "reason": "+2 used more than one tool"
+      "reason": "used multiple tools"
     }
   ],
-  "grade_thresholds": {
-    "GOLDEN": 2,
-    "GOOD": 1,
-    "OK": 0,
+  "thresholds": {
+    "GOLDEN": 8,
+    "GOOD": 5,
+    "OK": 2,
     "WEAK": 0
   }
 }
 ```
 
-## Information Surfaces
+## Root Cause Classification
 
-The surface replay is built around the idea that a bad tool call is rarely just a bad tool call. The model acted under a specific surface:
+When a task grades poorly, `agent-xray` classifies the most likely failure mode:
 
-- prompt text or prompt hash
-- tools available at the step
-- reasoning text before the action
-- conversation history carried into the step
-- context pressure signals like message count and compactions
-- page URL and browser state
-- injected corrections or spin interventions
+| Root Cause | What it means |
+| --- | --- |
+| `routing_bug` | The task never got the right tool exposure |
+| `approval_block` | Policy or permission gates blocked progress |
+| `spin` | The same action repeated without forward movement |
+| `tool_selection_bug` | The right tool existed, but the model chose poorly |
+| `early_abort` | The run ended before enough work was attempted |
+| `stuck_loop` | The run kept acting without meaningful state progress |
+| `tool_bug` | A tool call failed or returned unusable output |
+| `environment_drift` | The target environment changed underneath the agent |
+| `reasoning_bug` | Strategy was wrong even with adequate tools |
+| `prompt_bug` | Instructions likely nudged the model toward failure |
+| `model_limit` | The task appears to exceed model capability |
 
-`agent-xray surface <task_id>` prints those layers in order.
-
-## Root Causes
-
-The classifier is heuristic on purpose. It tries to separate operational failures from prompt failures:
-
-- `routing_bug`
-- `approval_block`
-- `spin`
-- `environment_drift`
-- `tool_bug`
-- `tool_selection_bug`
-- `early_abort`
-- `stuck_loop`
-- `reasoning_bug`
-- `prompt_bug`
-- `model_limit`
-
-Use it for triage, not for absolutes.
-
-## CLI Reference
-
-```text
-agent-xray analyze <log_dir> [--days N] [--json]
-agent-xray surface <task_id> [--log-dir DIR] [--json]
-agent-xray reasoning <task_id> [--log-dir DIR] [--json]
-agent-xray diff <task_id_1> <task_id_2> [--log-dir DIR] [--json]
-agent-xray grade <log_dir> [--rules rules.json] [--json]
-agent-xray tree [--log-dir DIR] [--json]
-agent-xray capture <task_id> [--log-dir DIR] [--out fixture.json] [--json]
-agent-xray replay <golden.json> [--log-dir DIR] [--json]
-```
-
-## Adapters
-
-See `examples/adapters/` for converters from:
-
-- OpenAI Agents SDK traces
-- LangChain action traces
-- Claude Code style step logs
-- generic JSONL records
-
-The package itself does not force one trace format. You adapt into `AgentStep` and everything else works on top.
-
-## Pluggable Interfaces
-
-`adapter.py` exposes:
-
-- `ToolRegistry`: optional source of tool names and descriptions
-- `PromptBuilder`: optional prompt reconstruction hook
-- `StaticToolRegistry` and `StaticPromptBuilder`: minimal built-ins
-
-`runner.py` exposes:
+## Library Usage
 
 ```python
-class TaskRunner(Protocol):
-    async def send(self, task_text: str) -> str: ...
-    async def get_status(self, task_id: str) -> str: ...
+from agent_xray import AgentStep, AgentTask, build_surface, classify_task, grade_task, load_rules
+
+records = [
+    {"task_id": "task-1", "step": 1, "tool_name": "browser_navigate", "tool_input": {"url": "https://example.test"}},
+    {"task_id": "task-1", "step": 2, "tool_name": "browser_snapshot", "tool_input": {}, "tool_result": "checkout"},
+]
+
+steps = [AgentStep.from_dict(record) for record in records]
+task = AgentTask.from_steps(steps, task_text="Inspect the checkout flow")
+
+grade = grade_task(task, load_rules("browser_flow"))
+surface = build_surface(task)
+
+print(grade.grade, grade.score)
+print(surface["steps"][0]["tools_available_names"])
+
+if grade.grade in {"WEAK", "BROKEN"}:
+    cause = classify_task(task, grade)
+    print(cause.root_cause, cause.evidence)
 ```
 
-and includes `GenericHTTPRunner`.
+## Architecture
 
-## Fixtures
-
-Golden fixtures are JSON snapshots of successful runs with sensitive content sanitized:
-
-- emails become `*email*`
-- phone numbers become `*phone*`
-- card numbers become `*card_number*`
-- ZIPs become `*zip*`
-- URLs become `https://shop.example.test/...`
-
-See `examples/golden_run.json`.
+```text
+JSONL / framework trace files
+  -> adapters/         normalize source formats into AgentStep
+  -> schema.py         AgentStep / AgentTask / typed contexts
+  -> signals/          detector packs for commerce, coding, and research
+  -> analyzer.py       task metrics, cost tracking, and site extraction
+  -> grader.py         configurable JSON rules
+  -> surface.py        decision-surface replay, reasoning chain, tree, diff
+  -> root_cause.py     failure classification
+  -> capture.py        sanitized golden fixtures
+  -> replay.py         fixture-vs-run comparison
+  -> flywheel.py       end-to-end quality loop and baseline comparison
+  -> comparison.py     model-vs-model divergence analysis
+```
 
 ## Contributing
 
-1. Keep the log schema stable.
-2. Prefer new rule files over hardcoded grading branches.
-3. Add tests for any new metric, rule operator, or replay behavior.
-4. Keep adapters as examples unless the source format is stable enough for core support.
+`agent-xray` is designed to be extended. Add a detector, adapter, rule set, or CLI improvement and keep the behavior observable.
 
-## Development
+See [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
-```powershell
-python -m compileall .\src\agent_xray
-python -m pytest
-```
+- local setup
+- your first signal detector
+- writing a new adapter
+- adding a rule set
+- style, test, and PR expectations
+
+## License
+
+MIT

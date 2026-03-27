@@ -31,8 +31,8 @@ class StaticToolRegistry:
     def tool_names(
         self, *, task: AgentTask | None = None, step: AgentStep | None = None
     ) -> list[str]:
-        if step and step.tools_available:
-            return list(step.tools_available)
+        if step and step.tools and step.tools.tools_available is not None:
+            return list(step.tools.tools_available)
         if self.names:
             return list(self.names)
         return sorted(self.descriptions)
@@ -56,7 +56,8 @@ def coerce_step(record: Mapping[str, Any]) -> AgentStep | None:
     task_id = record.get("task_id")
     if tool_name is None or task_id is None:
         return None
-    return AgentStep.from_dict(dict(record))
+    normalized = {str(key): value for key, value in record.items()}
+    return AgentStep.from_dict(normalized)
 
 
 def coerce_steps(records: Iterable[Mapping[str, Any]]) -> list[AgentStep]:

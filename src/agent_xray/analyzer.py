@@ -9,69 +9,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .schema import AgentStep, AgentTask, TaskOutcome
+from .signals import SignalDetector, run_detection
 
-TERMINAL_URL_PATTERNS = [
-    r"/payment",
-    r"/checkout",
-    r"/billing",
-    r"/order/confirm",
-    r"/order/review",
-    r"/place.order",
-    r"/confirmation",
-]
-PAYMENT_FIELD_KEYWORDS = [
-    "card number",
-    "credit card",
-    "debit card",
-    "cvv",
-    "cvc",
-    "security code",
-    "expir",
-    "billing address",
-    "cardholder",
-    "payment method",
-]
-PAYMENT_FIELDS_STRONG = [
-    "card number",
-    "cvv",
-    "cvc",
-    "security code",
-    "expir",
-    "cardholder",
-    "card details",
-]
-CHECKOUT_KEYWORDS = [
-    "checkout",
-    "place order",
-    "complete order",
-    "order summary",
-    "proceed to payment",
-    "pay now",
-]
-CART_KEYWORDS = [
-    "your cart",
-    "shopping cart",
-    "cart summary",
-    "subtotal",
-    "view cart",
-    "items in cart",
-]
-REAL_FILL_PATTERNS = [
-    r"card",
-    r"cvv",
-    r"cvc",
-    r"expir",
-    r"security",
-    r"address",
-    r"zip",
-    r"postal",
-    r"city",
-    r"state",
-    r"first.?name",
-    r"last.?name",
-    r"email",
-    r"phone",
-]
 ERROR_PATTERNS = [
     (r"not approved|approval denied|blocked by approval", "approval_block"),
     (r"unknown tool", "unknown_tool"),
@@ -98,19 +37,15 @@ class TaskAnalysis:
     errors: int
     error_rate: float
     total_duration_ms: int
-    fill_count: int
-    real_fill_count: int
-    reached_payment: bool
-    payment_fields_confirmed: bool
-    reached_checkout: bool
-    reached_cart: bool
-    url_has_terminal: bool
     hallucinated_tools: int
     no_tools_steps: int
     site_name: str
     final_url: str
     timeout_like: bool
     error_kinds: dict[str, int]
+    total_cost_usd: float
+    avg_cost_per_step: float
+    signal_metrics: dict[str, dict[str, Any]]
 
     @property
     def is_spin(self) -> bool:
@@ -121,27 +56,28 @@ class TaskAnalysis:
         return len(self.task.steps)
 
     def metrics(self) -> dict[str, Any]:
-        return {
+        metrics = {
             "step_count": self.step_count,
             "unique_urls": len(self.unique_urls),
             "unique_url_paths": len(self.unique_url_paths),
             "unique_tools": len(self.unique_tools),
             "errors": self.errors,
             "error_rate": self.error_rate,
-            "fill_count": self.fill_count,
-            "real_fill_count": self.real_fill_count,
-            "reached_payment": self.reached_payment,
-            "payment_fields_confirmed": self.payment_fields_confirmed,
-            "reached_checkout": self.reached_checkout,
-            "reached_cart": self.reached_cart,
-            "url_has_terminal": self.url_has_terminal,
             "hallucinated_tools": self.hallucinated_tools,
             "no_tools_steps": self.no_tools_steps,
             "max_repeat_count": self.max_repeat_count,
             "is_spin": self.is_spin,
             "timeout_like": self.timeout_like,
             "total_duration_ms": self.total_duration_ms,
+            "site_name": self.site_name,
+            "final_url": self.final_url,
+            "total_cost_usd": self.total_cost_usd,
+            "avg_cost_per_step": self.avg_cost_per_step,
         }
+        for detector_name, detector_metrics in self.signal_metrics.items():
+            metrics[detector_name] = detector_metrics
+            metrics.update(detector_metrics)
+        return metrics
 
 
 def normalize_site_label(label: str) -> str:
@@ -190,8 +126,8 @@ def extract_site_name(task: AgentTask) -> str:
     if task.task_text:
         candidates.append(task.task_text)
     for step in task.sorted_steps:
-        if step.page_url:
-            candidates.append(step.page_url)
+        if page_url := _page_url(step):
+            candidates.append(page_url)
         for key in ("url", "service_or_url", "service_name", "title", "query"):
             value = step.tool_input.get(key)
             if value:
@@ -215,31 +151,6 @@ def classify_error(error: str | None) -> str:
     return "other"
 
 
-def detect_signals(step: AgentStep) -> dict[str, bool]:
-    result_lower = (step.tool_result or "")[:5000].lower()
-    tool_input_text = json.dumps(step.tool_input, sort_keys=True).lower()
-    signals = {
-        "payment_fields": any(keyword in result_lower for keyword in PAYMENT_FIELD_KEYWORDS),
-        "payment_fields_strong": any(keyword in result_lower for keyword in PAYMENT_FIELDS_STRONG),
-        "checkout": any(keyword in result_lower for keyword in CHECKOUT_KEYWORDS),
-        "cart": any(keyword in result_lower for keyword in CART_KEYWORDS),
-        "is_fill": "fill" in step.tool_name.lower() or "fields" in step.tool_input,
-        "fill_real": False,
-    }
-    if signals["is_fill"] and any(
-        re.search(pattern, tool_input_text) for pattern in REAL_FILL_PATTERNS
-    ):
-        signals["fill_real"] = True
-    combined = f"{step.tool_input.get('text', '')} {step.tool_input.get('fields', '')}".lower()
-    if re.search(r"\d{4}[\s-]?\d{4}[\s-]?\d{4}", combined):
-        signals["fill_real"] = True
-    if re.search(r"@[\w.-]+\.\w+", combined):
-        signals["fill_real"] = True
-    if re.search(r"\b\d{5}\b", combined) and "ref" in step.tool_input:
-        signals["fill_real"] = True
-    return signals
-
-
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
     text = (step.error or step.tool_result or "").replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= limit:
@@ -251,9 +162,10 @@ def _unique_urls(task: AgentTask) -> list[str]:
     seen: set[str] = set()
     urls: list[str] = []
     for step in task.sorted_steps:
-        if step.page_url and step.page_url not in seen:
-            seen.add(step.page_url)
-            urls.append(step.page_url)
+        url = _page_url(step)
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
     return urls
 
 
@@ -286,7 +198,25 @@ def _max_consecutive_repeat(sequence: list[str]) -> tuple[str, int]:
     return (best_tool, best_count)
 
 
-def analyze_task(task: AgentTask) -> TaskAnalysis:
+def _page_url(step: AgentStep) -> str | None:
+    if step.browser and step.browser.page_url:
+        return step.browser.page_url
+    return None
+
+
+def _tools_available(step: AgentStep) -> list[str] | None:
+    if step.tools is None or step.tools.tools_available is None:
+        return None
+    return list(step.tools.tools_available)
+
+
+def _step_cost(step: AgentStep) -> float:
+    if step.model and step.model.cost_usd is not None:
+        return float(step.model.cost_usd)
+    return 0.0
+
+
+def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
     urls = _unique_urls(task)
     url_paths = _unique_url_paths(urls)
     tool_sequence = [step.tool_name for step in task.sorted_steps]
@@ -294,66 +224,55 @@ def analyze_task(task: AgentTask) -> TaskAnalysis:
     repeat_tool, repeat_count = _max_consecutive_repeat(tool_sequence)
     errors = sum(1 for step in task.steps if step.error)
     error_kinds: Counter[str] = Counter()
-    fill_count = 0
-    real_fill_count = 0
-    reached_payment = False
-    payment_fields_confirmed = False
-    reached_checkout = False
-    reached_cart = False
     no_tools_steps = 0
     hallucinated_tools = 0
     for step in task.sorted_steps:
-        signals = detect_signals(step)
-        fill_count += int(signals["is_fill"])
-        real_fill_count += int(signals["fill_real"])
-        payment_fields_confirmed = payment_fields_confirmed or signals["payment_fields_strong"]
-        reached_payment = reached_payment or signals["payment_fields"]
-        reached_checkout = reached_checkout or signals["checkout"]
-        reached_cart = reached_cart or signals["cart"]
-        if step.tools_available == []:
+        if _tools_available(step) == []:
             no_tools_steps += 1
         error_kind = classify_error(step.error)
         if error_kind:
             error_kinds[error_kind] += 1
         if error_kind == "unknown_tool":
             hallucinated_tools += 1
-    url_has_terminal = any(
-        any(re.search(pattern, urlparse(url).path.lower()) for pattern in TERMINAL_URL_PATTERNS)
-        for url in urls
-    )
-    reached_payment = payment_fields_confirmed or (reached_payment and url_has_terminal)
-    return TaskAnalysis(
-        task=task,
-        unique_urls=urls,
-        unique_url_paths=url_paths,
-        unique_tools=unique_tools,
-        tool_sequence=tool_sequence,
-        max_repeat_tool=repeat_tool,
-        max_repeat_count=repeat_count,
-        errors=errors,
-        error_rate=errors / max(1, len(task.steps)),
-        total_duration_ms=sum(step.duration_ms or 0 for step in task.steps),
-        fill_count=fill_count,
-        real_fill_count=real_fill_count,
-        reached_payment=reached_payment,
-        payment_fields_confirmed=payment_fields_confirmed,
-        reached_checkout=reached_checkout,
-        reached_cart=reached_cart,
-        url_has_terminal=url_has_terminal,
-        hallucinated_tools=hallucinated_tools,
-        no_tools_steps=no_tools_steps,
-        site_name=extract_site_name(task),
-        final_url=urls[-1] if urls else "",
-        timeout_like=(
+    total_cost = sum(_step_cost(step) for step in task.steps)
+    return {
+        "unique_urls": urls,
+        "unique_url_paths": url_paths,
+        "unique_tools": unique_tools,
+        "tool_sequence": tool_sequence,
+        "max_repeat_tool": repeat_tool,
+        "max_repeat_count": repeat_count,
+        "errors": errors,
+        "error_rate": errors / max(1, len(task.steps)),
+        "total_duration_ms": sum(step.duration_ms or 0 for step in task.steps),
+        "hallucinated_tools": hallucinated_tools,
+        "no_tools_steps": no_tools_steps,
+        "site_name": extract_site_name(task),
+        "final_url": urls[-1] if urls else "",
+        "timeout_like": (
             task.outcome is not None and task.outcome.status in {"timeout", "max_iterations"}
         )
         or len(task.steps) >= 75,
-        error_kinds=dict(error_kinds),
-    )
+        "error_kinds": dict(error_kinds),
+        "total_cost_usd": float(total_cost),
+        "avg_cost_per_step": (float(total_cost) / len(task.steps)) if task.steps else 0.0,
+    }
 
 
-def analyze_tasks(tasks: list[AgentTask]) -> dict[str, TaskAnalysis]:
-    return {task.task_id: analyze_task(task) for task in tasks}
+def analyze_task(
+    task: AgentTask,
+    detectors: list[SignalDetector] | None = None,
+) -> TaskAnalysis:
+    core = _compute_core_metrics(task)
+    signal_metrics = run_detection(task, detectors)
+    return TaskAnalysis(task=task, signal_metrics=signal_metrics, **core)
+
+
+def analyze_tasks(
+    tasks: list[AgentTask],
+    detectors: list[SignalDetector] | None = None,
+) -> dict[str, TaskAnalysis]:
+    return {task.task_id: analyze_task(task, detectors=detectors) for task in tasks}
 
 
 def _extract_day(path: Path, payload: dict[str, Any]) -> str | None:
@@ -374,6 +293,39 @@ def _iter_jsonl_files(log_dir: Path, days: int | None = None) -> list[Path]:
     return files
 
 
+def tasks_from_steps(steps: list[AgentStep], *, source_path: Path | None = None) -> list[AgentTask]:
+    tasks: dict[str, AgentTask] = {}
+    for step in steps:
+        task_id = step.task_id or (source_path.stem if source_path else "unknown-task")
+        step.task_id = task_id
+        task = tasks.setdefault(task_id, AgentTask(task_id=task_id))
+        if task.day is None and source_path is not None:
+            task.day = _extract_day(source_path, {"timestamp": step.timestamp})
+        task.steps.append(step)
+    return [tasks[key] for key in sorted(tasks)]
+
+
+def load_adapted_tasks(
+    log_dir: str | Path,
+    *,
+    format: str = "auto",
+    days: int | None = None,
+) -> list[AgentTask]:
+    from .adapters import adapt
+
+    root = Path(log_dir)
+    if not root.exists():
+        raise FileNotFoundError(f"log path does not exist: {root}")
+    tasks: dict[str, AgentTask] = {}
+    for path in _iter_jsonl_files(root, days=days):
+        for adapted_task in tasks_from_steps(adapt(path, format=format), source_path=path):
+            task = tasks.setdefault(adapted_task.task_id, AgentTask(task_id=adapted_task.task_id))
+            if task.day is None:
+                task.day = adapted_task.day
+            task.steps.extend(adapted_task.steps)
+    return [tasks[key] for key in sorted(tasks)]
+
+
 def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
     root = Path(log_dir)
     if not root.exists():
@@ -383,9 +335,12 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
         with path.open(encoding="utf-8", errors="ignore") as handle:
             for line in handle:
                 try:
-                    payload = json.loads(line)
+                    raw_payload = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(raw_payload, dict):
+                    continue
+                payload = {str(key): value for key, value in raw_payload.items()}
                 event = payload.get("event")
                 task_id = str(payload.get("task_id") or "")
                 if not task_id:
@@ -410,7 +365,7 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
                 if payload.get("tool_name"):
                     step = AgentStep.from_dict(payload)
                     if not step.timestamp:
-                        step.timestamp = payload.get("ts")
+                        step.timestamp = None if payload.get("ts") is None else str(payload["ts"])
                     task.steps.append(step)
                     for key in (
                         "focused_set",

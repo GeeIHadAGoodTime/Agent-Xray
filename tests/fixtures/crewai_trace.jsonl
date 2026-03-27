@@ -1,0 +1,8 @@
+{"agent_role":"Researcher","task":"Find market data","tool":"web_search","tool_input":"AI chip market 2026","output":"Found 4 market reports.","timestamp":"2024-01-15T10:00:00Z"}
+{"agent_role":"Researcher","task":"Find market data","tool":"browser_open","tool_input":"https://example.com/report","output":"Opened the vendor report page.","timestamp":"2024-01-15T10:00:10Z"}
+{"agent_role":"Analyst","task":"Find market data","tool":"extract_numbers","tool_input":"table.market","output":"Extracted 12 rows from the pricing table.","timestamp":"2024-01-15T10:00:20Z"}
+{"agent_role":"Analyst","task":"Find market data","tool":"summarize","tool_input":"Summarize the pricing table.","output":"The market is growing 18% year over year.","timestamp":"2024-01-15T10:00:30Z"}
+{"agent_role":"Coordinator","task":"Find market data","tool":"send_email","tool_input":"ops@example.com","output":"Summary sent to stakeholders.","timestamp":"2024-01-15T10:00:40Z"}
+{"agent_role":"Researcher","task":"Find market data","tool":"web_search","tool_input":"competitor revenue 2025","output":"Found 3 filings.","timestamp":"2024-01-15T10:00:50Z"}
+{"agent_role":"Analyst","task":"Find market data","tool":"compare_sources","tool_input":"Compare report estimates.","output":"Two reports agree within 3%.","timestamp":"2024-01-15T10:01:00Z"}
+{"agent_role":"Coordinator","task":"Find market data","tool":"post_update","tool_input":"Team channel","output":"Posted status update to Slack.","timestamp":"2024-01-15T10:01:10Z"}

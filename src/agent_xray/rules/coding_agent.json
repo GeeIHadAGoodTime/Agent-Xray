@@ -1,0 +1,16 @@
+{
+  "name": "coding_agent",
+  "description": "Grading rules for coding/development agents",
+  "signals": [
+    {"field": "coding.test_to_edit_ratio", "op": "gte", "value": 0.3, "points": 3, "label": "tests_written"},
+    {"field": "coding.has_test_verify_cycle", "op": "equals", "value": true, "points": 2, "label": "edit_test_cycle"},
+    {"field": "coding.lint_runs", "op": "gte", "value": 1, "points": 1, "label": "ran_linter"},
+    {"field": "coding.error_count", "op": "gte", "value": 5, "points": -2, "label": "many_errors"},
+    {"field": "coding.file_operations", "op": "equals", "value": 0, "points": -3, "label": "no_files_touched"},
+    {"field": "error_rate", "op": "gte", "value": 0.5, "points": -3, "label": "high_error_rate"},
+    {"field": "unique_tools", "op": "gte", "value": 3, "points": 1, "label": "tool_diversity"},
+    {"field": "step_count", "op": "lte", "value": 2, "points": -2, "label": "too_few_steps"}
+  ],
+  "thresholds": {"GOLDEN": 7, "GOOD": 4, "OK": 1, "WEAK": -2},
+  "golden_requirements": ["tests_written", "edit_test_cycle"]
+}

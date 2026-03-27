@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import json
+from dataclasses import asdict
 from typing import Any
 
 from .adapter import PromptBuilder, ToolRegistry
@@ -28,8 +29,14 @@ def surface_for_task(
     )
     steps: list[dict[str, Any]] = []
     for step in task.sorted_steps:
-        tool_names = list(step.tools_available or [])
-        if not tool_names and tool_registry is not None:
+        model = step.model
+        tools = step.tools
+        reasoning = step.reasoning
+        browser = step.browser
+        tools_available = tools.tools_available if tools else None
+        has_tool_metadata = tools_available is not None
+        tool_names = list(tools_available) if tools_available is not None else []
+        if not has_tool_metadata and tool_registry is not None:
             tool_names = tool_registry.tool_names(task=task, step=step)
         entry = {
             "step": step.step,
@@ -37,27 +44,33 @@ def surface_for_task(
             "tool_input": step.tool_input,
             "tool_result_summary": summarize_tool_result(step),
             "error": step.error,
-            "llm_reasoning": step.llm_reasoning or "",
+            "llm_reasoning": reasoning.llm_reasoning
+            if reasoning and reasoning.llm_reasoning
+            else "",
             "timestamp": step.timestamp,
-            "model_name": step.model_name,
-            "temperature": step.temperature,
-            "tool_choice": step.tool_choice,
-            "message_count": step.message_count,
+            "duration_ms": step.duration_ms,
+            "model_name": model.model_name if model else None,
+            "temperature": model.temperature if model else None,
+            "tool_choice": model.tool_choice if model else None,
+            "model": asdict(model) if model else None,
+            "message_count": tools.message_count if tools else None,
             "tools_available_names": tool_names,
-            "page_url": step.page_url,
-            "system_prompt_hash": step.system_prompt_hash,
-            "context_usage_pct": step.context_usage_pct,
-            "context_window": step.context_window,
-            "compaction_count": step.compaction_count,
-            "snapshot_compressed": step.snapshot_compressed,
-            "had_screenshot": step.had_screenshot,
-            "correction_messages": step.correction_messages or [],
-            "spin_intervention": step.spin_intervention,
+            "page_url": browser.page_url if browser else None,
+            "system_prompt_hash": tools.system_prompt_hash if tools else None,
+            "context_usage_pct": model.context_usage_pct if model else None,
+            "context_window": model.context_window if model else None,
+            "compaction_count": model.compaction_count if model else None,
+            "snapshot_compressed": browser.snapshot_compressed if browser else None,
+            "had_screenshot": browser.had_screenshot if browser else None,
+            "correction_messages": (
+                reasoning.correction_messages if reasoning and reasoning.correction_messages else []
+            ),
+            "spin_intervention": reasoning.spin_intervention if reasoning else None,
             "conversation_history": list(history),
         }
         steps.append(entry)
-        if step.llm_reasoning:
-            history.append({"role": "assistant_reasoning", "content": step.llm_reasoning})
+        if reasoning and reasoning.llm_reasoning:
+            history.append({"role": "assistant_reasoning", "content": reasoning.llm_reasoning})
         history.append(
             {
                 "role": "tool_call",

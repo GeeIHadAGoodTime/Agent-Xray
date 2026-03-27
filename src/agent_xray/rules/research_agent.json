@@ -1,0 +1,15 @@
+{
+  "name": "research_agent",
+  "description": "Grading rules for research/information-gathering agents",
+  "signals": [
+    {"field": "research.source_diversity", "op": "gte", "value": 3, "points": 3, "label": "diverse_sources"},
+    {"field": "research.has_synthesis_step", "op": "equals", "value": true, "points": 2, "label": "synthesized"},
+    {"field": "research.search_count", "op": "gte", "value": 2, "points": 1, "label": "searched"},
+    {"field": "research.citation_count", "op": "gte", "value": 1, "points": 1, "label": "cited"},
+    {"field": "research.search_to_read_ratio", "op": "gte", "value": 3, "points": -2, "label": "search_spam"},
+    {"field": "error_rate", "op": "gte", "value": 0.3, "points": -2, "label": "high_error_rate"},
+    {"field": "step_count", "op": "lte", "value": 2, "points": -2, "label": "too_few_steps"}
+  ],
+  "thresholds": {"GOLDEN": 7, "GOOD": 4, "OK": 1, "WEAK": -2},
+  "golden_requirements": ["diverse_sources", "synthesized"]
+}

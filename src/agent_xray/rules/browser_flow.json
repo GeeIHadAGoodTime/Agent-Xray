@@ -11,28 +11,28 @@
     },
     {
       "name": "checkout_reached",
-      "metric": "reached_checkout",
+      "metric": "commerce.reached_checkout",
       "equals": true,
       "points": 3,
       "reason": "+3 checkout reached"
     },
     {
       "name": "payment_reached",
-      "metric": "reached_payment",
+      "metric": "commerce.reached_payment",
       "equals": true,
       "points": 4,
       "reason": "+4 payment reached"
     },
     {
       "name": "cart_reached",
-      "metric": "reached_cart",
+      "metric": "commerce.reached_cart",
       "equals": true,
       "points": 2,
       "reason": "+2 cart reached"
     },
     {
       "name": "real_fills",
-      "metric": "real_fill_count",
+      "metric": "commerce.real_fill_count",
       "gte": 1,
       "points": 2,
       "reason": "+2 real form fills"
@@ -102,12 +102,12 @@
   },
   "golden_requirements": [
     {
-      "metric": "payment_fields_confirmed",
+      "metric": "commerce.payment_fields_confirmed",
       "equals": true,
       "reason": "~0 capped at GOOD: payment details were not visibly confirmed"
     },
     {
-      "metric": "url_has_terminal",
+      "metric": "commerce.url_has_terminal",
       "equals": true,
       "reason": "~0 capped at GOOD: terminal payment URL was never reached"
     }

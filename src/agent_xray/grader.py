@@ -16,7 +16,7 @@ class RuleSet:
     description: str
     signals: list[dict[str, Any]]
     grade_thresholds: dict[str, int]
-    golden_requirements: list[dict[str, Any]] = field(default_factory=list)
+    golden_requirements: list[Any] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -42,52 +42,143 @@ def _default_rules_path() -> Path:
     return Path(str(files("agent_xray.rules").joinpath("default.json")))
 
 
+def _resolve_rules_path(path: str | Path | None) -> Path:
+    if path is None:
+        return _default_rules_path()
+    candidate = Path(path)
+    if candidate.exists():
+        return candidate
+    if candidate.suffix != ".json":
+        bundled = Path(str(files("agent_xray.rules").joinpath(f"{candidate.name}.json")))
+        if bundled.exists():
+            return bundled
+    bundled = Path(str(files("agent_xray.rules").joinpath(candidate.name)))
+    if bundled.exists():
+        return bundled
+    return candidate
+
+
 def load_rules(path: str | Path | None = None) -> RuleSet:
-    rule_path = Path(path) if path else _default_rules_path()
-    payload = json.loads(rule_path.read_text(encoding="utf-8"))
+    rule_path = _resolve_rules_path(path)
+    raw_payload = json.loads(rule_path.read_text(encoding="utf-8"))
+    if not isinstance(raw_payload, dict):
+        raise ValueError(f"rules file did not contain a JSON object: {rule_path}")
+    payload = {str(key): value for key, value in raw_payload.items()}
     return RuleSet(
-        name=payload["name"],
-        description=payload.get("description", ""),
-        signals=list(payload.get("signals", [])),
-        grade_thresholds=dict(payload.get("grade_thresholds", {})),
-        golden_requirements=list(payload.get("golden_requirements", [])),
+        name=str(payload["name"]),
+        description=str(payload.get("description", "")),
+        signals=[
+            {str(key): value for key, value in rule.items()}
+            for rule in payload.get("signals", [])
+            if isinstance(rule, dict)
+        ],
+        grade_thresholds=dict(payload.get("grade_thresholds", payload.get("thresholds", {}))),
+        golden_requirements=[
+            item for item in payload.get("golden_requirements", []) if isinstance(item, (str, dict))
+        ],
     )
 
 
 def _compare(actual: Any, rule: dict[str, Any]) -> bool:
-    if "gte" in rule:
-        return actual >= rule["gte"]
-    if "gt" in rule:
-        return actual > rule["gt"]
-    if "lte" in rule:
-        return actual <= rule["lte"]
-    if "lt" in rule:
-        return actual < rule["lt"]
-    if "equals" in rule:
-        return actual == rule["equals"]
-    if "in" in rule:
-        return actual in rule["in"]
-    if "contains_any" in rule:
-        values = actual if isinstance(actual, list) else [actual]
-        return any(item in values for item in rule["contains_any"])
-    raise ValueError(f"rule '{rule.get('name', '<unknown>')}' is missing a comparator")
+    try:
+        if "op" in rule:
+            op = rule["op"]
+            expected = rule.get("value")
+            if op == "gte":
+                return bool(actual >= expected)
+            if op == "gt":
+                return bool(actual > expected)
+            if op == "lte":
+                return bool(actual <= expected)
+            if op == "lt":
+                return bool(actual < expected)
+            if op == "equals":
+                return bool(actual == expected)
+            if op == "in":
+                if not isinstance(expected, (list, tuple, set)):
+                    return False
+                return bool(actual in expected)
+            if op == "contains_any":
+                if not isinstance(expected, (list, tuple, set)):
+                    return False
+                values = actual if isinstance(actual, list) else [actual]
+                return any(item in values for item in expected)
+        if "gte" in rule:
+            return bool(actual >= rule["gte"])
+        if "gt" in rule:
+            return bool(actual > rule["gt"])
+        if "lte" in rule:
+            return bool(actual <= rule["lte"])
+        if "lt" in rule:
+            return bool(actual < rule["lt"])
+        if "equals" in rule:
+            return bool(actual == rule["equals"])
+        if "in" in rule:
+            expected = rule["in"]
+            if not isinstance(expected, (list, tuple, set)):
+                return False
+            return bool(actual in expected)
+        if "contains_any" in rule:
+            expected = rule["contains_any"]
+            if not isinstance(expected, (list, tuple, set)):
+                return False
+            values = actual if isinstance(actual, list) else [actual]
+            return any(item in values for item in expected)
+    except TypeError:
+        return False
+    raise ValueError(f"rule '{_rule_name(rule)}' is missing a comparator")
+
+
+def _rule_field(rule: dict[str, Any]) -> str:
+    return str(rule.get("field") or rule.get("metric") or "")
+
+
+def _rule_name(rule: dict[str, Any]) -> str:
+    return str(rule.get("name") or rule.get("label") or _rule_field(rule) or "<unknown>")
+
+
+def _expected_value(rule: dict[str, Any]) -> Any:
+    if "value" in rule:
+        return rule["value"]
+    for key in ("gte", "gt", "lte", "lt", "equals", "in", "contains_any"):
+        if key in rule:
+            return rule[key]
+    return None
+
+
+def _resolve_metric(metrics: dict[str, Any], field_name: str) -> Any:
+    if not field_name:
+        return None
+    current: Any = metrics
+    for part in field_name.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
 
 
 def _reason(rule: dict[str, Any], passed: bool, actual: Any) -> str:
-    template = rule["reason"] if passed else rule.get("else_reason", "")
-    return template.format(actual=actual, expected=rule.get("gte") or rule.get("equals"))
+    template = str(rule.get("reason", "") if passed else rule.get("else_reason", ""))
+    if not template:
+        return ""
+    return template.format(actual=actual, expected=_expected_value(rule))
 
 
 def grade_task(
-    task: AgentTask, rules: RuleSet, analysis: TaskAnalysis | None = None
+    task: AgentTask,
+    rules: RuleSet | None = None,
+    *,
+    rules_path: str | Path | None = None,
+    analysis: TaskAnalysis | None = None,
 ) -> GradeResult:
+    rules = rules or load_rules(rules_path)
     analysis = analysis or analyze_task(task)
     metrics = analysis.metrics()
     score = 0
     reasons: list[str] = []
     signal_results: list[SignalResult] = []
     for rule in rules.signals:
-        actual = metrics.get(rule["metric"])
+        actual = _resolve_metric(metrics, _rule_field(rule))
         passed = _compare(actual, rule)
         points = int(rule["points"]) if passed else int(rule.get("else_points", 0))
         score += points
@@ -96,7 +187,7 @@ def grade_task(
             reasons.append(reason)
         signal_results.append(
             SignalResult(
-                name=rule["name"],
+                name=_rule_name(rule),
                 passed=passed,
                 points=points,
                 actual=actual,
@@ -120,11 +211,22 @@ def grade_task(
         grade = "BROKEN"
     if grade == "GOLDEN" and rules.golden_requirements:
         unmet = []
+        signal_lookup = {signal.name: signal for signal in signal_results}
         for requirement in rules.golden_requirements:
-            actual = metrics.get(requirement["metric"])
+            if isinstance(requirement, str):
+                signal = signal_lookup.get(requirement)
+                if signal is None or not signal.passed:
+                    unmet.append(f"{requirement} requirement not met")
+                continue
+            if not isinstance(requirement, dict):
+                continue
+            actual = _resolve_metric(metrics, _rule_field(requirement))
             if not _compare(actual, requirement):
                 unmet.append(
-                    requirement.get("reason") or f"{requirement['metric']} requirement not met"
+                    str(
+                        requirement.get("reason")
+                        or f"{_rule_field(requirement)} requirement not met"
+                    )
                 )
         if unmet:
             grade = "GOOD"

@@ -1,0 +1,10 @@
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"web_search","input":{"query":"AI chip market 2026"}}],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":50}}
+{"task_id":"anth-task-1","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"Found 4 market reports."}]}
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"text","text":"Checking the vendor site next."}],"model":"claude-sonnet-4-20250514"}
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"browser_open","input":{"url":"https://example.com/report"}}],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":110,"output_tokens":44}}
+{"task_id":"anth-task-1","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"Page loaded successfully."}]}]}
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"tool_use","id":"toolu_3","name":"extract_numbers","input":{"selector":"table.market"}}],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":95,"output_tokens":38}}
+{"task_id":"anth-task-1","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_3","content":"Extracted 12 rows."}]}
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"text","text":"Preparing the summary email."}],"model":"claude-sonnet-4-20250514"}
+{"task_id":"anth-task-1","role":"assistant","content":[{"type":"tool_use","id":"toolu_4","name":"send_email","input":{"to":"ops@example.com","subject":"Market summary"}}],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":88,"output_tokens":27}}
+{"task_id":"anth-task-1","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_4","content":"Queued for delivery."}]}

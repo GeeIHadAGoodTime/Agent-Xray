@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .analyzer import analyze_task, resolve_task
 from .capture import detect_milestone
@@ -13,7 +13,10 @@ MILESTONE_RANK = {name: index for index, name in enumerate(MILESTONE_ORDER)}
 
 
 def load_fixture(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("fixture must contain a JSON object")
+    return cast(dict[str, Any], payload)
 
 
 def text_similarity(left: str, right: str) -> float:
@@ -64,7 +67,7 @@ def find_best_match(fixture: dict[str, Any], tasks: list[AgentTask]) -> AgentTas
 def compare_fixture_to_task(fixture: dict[str, Any], task: AgentTask) -> dict[str, Any]:
     analysis = analyze_task(task)
     current_milestones = task_milestones(task)
-    golden_milestones = list(fixture.get("milestones_reached", []))
+    golden_milestones = [str(item) for item in fixture.get("milestones_reached", [])]
     current_rank = _max_rank(current_milestones)
     golden_rank = _max_rank(golden_milestones)
     step_delta = len(task.steps) - int(fixture.get("total_steps", 0) or 0)

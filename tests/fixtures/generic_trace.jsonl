@@ -1,0 +1,8 @@
+{"task_id":"generic-task-1","step":1,"tool_name":"web_search","tool_input":{"query":"AI chip market 2026"},"tool_result":"Found 4 reports.","timestamp":"2024-01-15T10:00:00Z"}
+{"task_id":"generic-task-1","step":2,"tool_name":"browser_open","tool_input":{"url":"https://example.com/report"},"tool_result":"Page loaded.","timestamp":"2024-01-15T10:00:05Z"}
+{"task_id":"generic-task-1","record":{"step":3,"tool_name":"extract_numbers","tool_input":{"selector":"table.market"},"tool_result":"Extracted 12 rows.","timestamp":"2024-01-15T10:00:10Z"}}
+{"payload":{"task_id":"generic-task-1","step":4,"tool_name":"send_email","tool_input":{"to":"ops@example.com"},"tool_result":"Email queued.","timestamp":"2024-01-15T10:00:15Z"}}
+{"task_id":"generic-task-2","step":1,"tool_name":"web_search","tool_input":"competitor revenue 2025","tool_result":"Found 3 filings.","timestamp":"2024-01-16T09:00:00Z"}
+{"task_id":"generic-task-2","data":{"step":2,"tool_name":"browser_open","tool_input":{"url":"https://example.com/filing"},"tool_result":"Opened filing.","timestamp":"2024-01-16T09:00:04Z"}}
+{"task_id":"generic-task-2","agent_step":{"step":3,"tool_name":"extract_text","tool_input":{"selector":"main"},"tool_result":"Captured the filing summary.","timestamp":"2024-01-16T09:00:08Z"}}
+{"record":{"task_id":"generic-task-2","step":4,"tool_name":"summarize","tool_input":{"topic":"revenue trend"},"tool_result":"Revenue grew 12%.","timestamp":"2024-01-16T09:00:12Z"}}

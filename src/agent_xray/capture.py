@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .analyzer import analyze_task, detect_signals, resolve_task
+from .analyzer import analyze_task, resolve_task
 from .schema import AgentStep, AgentTask
+from .signals.commerce import CommerceDetector
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
@@ -16,6 +17,7 @@ ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
 ADDRESS_RE = re.compile(
     r"\b\d{1,5}\s+[A-Za-z0-9.\- ]+\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln)\b", re.I
 )
+COMMERCE_DETECTOR = CommerceDetector()
 
 
 def _sanitize_text(value: str) -> str:
@@ -59,16 +61,16 @@ def _sanitize_value(value: Any) -> Any:
 
 
 def detect_milestone(step: AgentStep) -> str | None:
-    signals = detect_signals(step)
-    if signals["payment_fields_strong"]:
+    signals = COMMERCE_DETECTOR.detect_step(step)
+    if signals["has_payment_fields_strong"]:
         return "PAYMENT"
-    if signals["payment_fields"]:
+    if signals["has_payment_fields"]:
         return "PAYMENT"
-    if signals["checkout"]:
+    if signals["is_checkout_page"]:
         return "CHECKOUT"
-    if signals["cart"]:
+    if signals["is_cart_page"]:
         return "CART"
-    if signals["fill_real"]:
+    if signals["is_real_fill"]:
         return "FORM_FILL"
     return None
 
@@ -100,13 +102,12 @@ def build_fixture(task: AgentTask, *, sanitize: bool = True) -> dict[str, Any]:
         if milestone and milestone not in seen:
             seen.add(milestone)
             milestones_reached.append(milestone)
+        page_url = step.browser.page_url if step.browser else None
         step_entry = {
             "step": step.step,
             "tool_name": step.tool_name,
             "tool_input": _sanitize_value(step.tool_input) if sanitize else step.tool_input,
-            "page_url": (
-                _sanitize_url(step.page_url or "") if sanitize and step.page_url else step.page_url
-            ),
+            "page_url": (_sanitize_url(page_url) if sanitize and page_url else page_url),
             "expected_result_contains": (
                 _sanitize_value(extract_expected_content(step))
                 if sanitize

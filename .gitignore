@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+.codex_prompts/
+build/
+__pycache__/
