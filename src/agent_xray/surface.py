@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from .adapter import PromptBuilder, ToolRegistry
+from .protocols import PromptBuilder, ToolRegistry
 from .analyzer import build_task_tree, resolve_task, summarize_tool_result
 from .schema import AgentTask
 

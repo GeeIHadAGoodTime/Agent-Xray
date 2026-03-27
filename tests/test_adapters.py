@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import agent_xray.adapters.otel as otel_adapter
 from agent_xray.adapters import adapt, autodetect
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -69,3 +70,31 @@ def test_adapt_generic_round_trips() -> None:
     assert steps[0].to_dict()["tool_input"]["query"] == "AI chip market 2026"
     assert steps[4].tool_input["value"] == "competitor revenue 2025"
     assert steps[-1].tool_result == "Revenue grew 12%."
+
+
+def test_adapt_otel_produces_valid_steps(monkeypatch) -> None:
+    monkeypatch.setattr(otel_adapter, "opentelemetry", True)
+    steps = adapt(FIXTURES / "otel_trace.json", format="otel")
+    assert len(steps) == 2
+    assert steps[0].task_id == "otel-task-1"
+    assert steps[0].tool_name == "read_url"
+    assert steps[0].tool_input["url"] == "https://docs.example.test/spec"
+    assert steps[1].tool_name == "respond"
+
+
+def test_adapt_otel_extracts_model_context(monkeypatch) -> None:
+    monkeypatch.setattr(otel_adapter, "opentelemetry", True)
+    steps = adapt(FIXTURES / "otel_trace.json", format="otel")
+    assert steps[0].model is not None
+    assert steps[0].model.model_name == "gpt-4.1-mini"
+    assert steps[0].input_tokens == 120
+    assert steps[0].output_tokens == 35
+    assert steps[0].llm_reasoning == "Plan and call tools when needed."
+
+
+def test_adapt_otel_handles_missing_attributes(monkeypatch) -> None:
+    monkeypatch.setattr(otel_adapter, "opentelemetry", True)
+    steps = adapt(FIXTURES / "otel_trace.json", format="otel")
+    assert steps[1].model is None
+    assert steps[1].tool_input == {}
+    assert steps[1].tool_result == "Final answer with no extra metadata."

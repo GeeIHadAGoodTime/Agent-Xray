@@ -32,6 +32,28 @@ When a run goes sideways, most tracing tools tell you what happened. `agent-xray
 
 > Use your tracing stack to collect runs. Use `agent-xray` to understand why a specific decision failed.
 
+## How agent-xray Compares
+
+| Feature | agent-xray | LangSmith | Langfuse | Arize Phoenix | Braintrust | AgentOps |
+|---------|-----------|-----------|----------|---------------|------------|----------|
+| Local-first | Yes | No | Self-host option | Self-host option | No | No |
+| Fully offline | Yes | No | No | Partial | No | No |
+| Open source | MIT | Proprietary | MIT (server) | Apache 2.0 | Proprietary | Proprietary |
+| No account needed | Yes | No | No | No | No | No |
+| Zero dependencies | Yes | Many | Many | Many | Many | Many |
+| Framework agnostic | Yes | LangChain-first | LangChain-first | Yes | Yes | Yes |
+| Decision surface replay | Yes | No | No | No | No | No |
+| Pluggable signal detection | Yes | No | No | No | Custom evals | No |
+| Root-cause classification | Yes | No | No | No | No | No |
+| Golden fixture regression | Yes | Dataset comparison | No | No | Dataset comparison | No |
+| Interactive TUI | Yes | Web UI | Web UI | Web UI | Web UI | Web UI |
+| Model A/B comparison | Yes | Experiments | No | No | Experiments | No |
+| pytest plugin | Yes | No | No | No | No | No |
+| Cost tracking | Per-decision | Per-trace | Per-trace | Per-trace | Per-trace | Per-session |
+| Pricing | Free forever | Free tier + paid | Free tier + paid | Free tier + paid | Free tier + paid | Free tier + paid |
+
+agent-xray is complementary, not competing. Use LangSmith or Langfuse to collect production traces at scale. Use agent-xray to deeply debug why a specific agent decision went wrong -- locally, offline, with no account required. Think of it as the pytest to their Sauce Labs.
+
 ## Install
 
 ```bash

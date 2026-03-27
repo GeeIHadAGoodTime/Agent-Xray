@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .adapter import PromptBuilder, StaticPromptBuilder, StaticToolRegistry, ToolRegistry
+from .protocols import PromptBuilder, StaticPromptBuilder, StaticToolRegistry, ToolRegistry
 from .analyzer import TaskAnalysis, analyze_task, analyze_tasks, load_tasks
 from .grader import GradeResult, RuleSet, grade_task, grade_tasks, load_rules
 from .root_cause import RootCauseResult, classify_failures, classify_task

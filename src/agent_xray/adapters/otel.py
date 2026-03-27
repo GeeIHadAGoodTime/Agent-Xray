@@ -192,6 +192,8 @@ def _tool_input(attributes: dict[str, Any]) -> dict[str, Any]:
         "input",
         "gen_ai.input.messages",
     )
+    if arguments is None:
+        return {}
     parsed = _parse_jsonish(arguments)
     if isinstance(parsed, dict):
         return parsed
@@ -270,6 +272,7 @@ def load(path: Path) -> list[AgentStep]:
             (span, attributes)
             for span, attributes in entries
             if _is_genai_span(attributes, str(span.get("name") or ""))
+            and not _is_tool_span(attributes, str(span.get("name") or ""))
         ]
         if not llm_entries:
             llm_entries = entries
