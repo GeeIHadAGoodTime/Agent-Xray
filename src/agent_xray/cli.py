@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable
@@ -848,6 +850,96 @@ def cmd_report(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_record(args: argparse.Namespace) -> int:
+    """Run a subprocess and capture tool calls from its stdout.
+
+    The subprocess is expected to print JSON lines to stdout following a simple
+    protocol.  Each line must be a JSON object with at least ``tool_name`` and
+    ``tool_input`` fields.  Optional fields: ``tool_result``, ``error``,
+    ``duration_ms``, ``model_name``, ``task_id``.
+
+    Lines that are not valid JSON or do not contain ``tool_name`` are passed
+    through to the terminal unchanged.
+    """
+
+    def _action() -> int:
+        command = args.command
+        if not command:
+            _emit(
+                "No command specified. Usage: agent-xray record -- python my_agent.py",
+                args,
+                final=True,
+            )
+            return 1
+        # Strip leading -- if present
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            _emit("No command specified after --", args, final=True)
+            return 1
+
+        from .instrument.base import StepRecorder
+
+        task_id = args.task_id or f"record-{os.getpid()}"
+        recorder = StepRecorder(args.output_dir, task_id=task_id)
+        recorder.start_task(task_id)
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=sys.stderr,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            _emit(f"Command not found: {command[0]}", args, final=True)
+            recorder.close()
+            return 1
+
+        step_count = 0
+        try:
+            for raw_line in proc.stdout or []:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    print(raw_line, end="")
+                    continue
+                if not isinstance(payload, dict) or "tool_name" not in payload:
+                    print(raw_line, end="")
+                    continue
+                step_count += 1
+                tool_input = payload.get("tool_input")
+                if not isinstance(tool_input, dict):
+                    tool_input = {"value": tool_input} if tool_input is not None else {}
+                recorder.record_step(
+                    task_id=str(payload.get("task_id", task_id)),
+                    tool_name=str(payload["tool_name"]),
+                    tool_input=tool_input,
+                    tool_result=payload.get("tool_result"),
+                    error=payload.get("error"),
+                    duration_ms=payload.get("duration_ms"),
+                    model_name=payload.get("model_name"),
+                )
+        finally:
+            proc.wait()
+
+        recorder.end_task(task_id, "success" if proc.returncode == 0 else "failed")
+        recorder.close()
+
+        _emit(
+            f"Recorded {step_count} step(s) to {recorder.output_dir}",
+            args,
+            final=True,
+        )
+        return proc.returncode or 0
+
+    return _run_command(args, _action)
+
+
 def _add_format_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -1067,6 +1159,29 @@ def build_parser() -> argparse.ArgumentParser:
         example="agent-xray quickstart",
     )
     p_quickstart.set_defaults(func=cmd_quickstart)
+
+    p_record = _add_subparser(
+        sub,
+        "record",
+        help_text="Run a subprocess and capture tool calls from its stdout as JSONL steps",
+        example="agent-xray record --output-dir ./traces -- python my_agent.py",
+    )
+    p_record.add_argument(
+        "--output-dir",
+        default="./traces",
+        help="Directory for JSONL output (default: ./traces)",
+    )
+    p_record.add_argument(
+        "--task-id",
+        default=None,
+        help="Task identifier (default: auto-generated)",
+    )
+    p_record.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="Command to run (everything after --)",
+    )
+    p_record.set_defaults(func=cmd_record)
 
     return parser
 

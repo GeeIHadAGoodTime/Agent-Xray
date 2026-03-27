@@ -70,7 +70,8 @@ pip install "agent-xray[all]"
 
 ## Documentation
 
-- [5-minute tutorial](docs/tutorial.md)
+- [Integration guide](docs/integration.md) -- connect your agent in 5 minutes
+- [Tutorial](docs/tutorial.md) -- instrument a simple agent and analyze the output
 - [Architecture overview](docs/architecture.md)
 - [Custom rules guide](docs/custom-rules.md)
 - [Contribution guide](CONTRIBUTING.md)
@@ -175,6 +176,47 @@ At each step, an agent acts with a specific view of the world:
 | CrewAI traces | `--format crewai` | Stable |
 | OpenTelemetry GenAI spans | `--format otel` | Experimental |
 | Auto-detect | `--format auto` | Stable |
+
+## Integration
+
+The fastest way to start tracing your agent is to write one JSON line per tool call into a `traces/` directory:
+
+```python
+import json, time
+from pathlib import Path
+
+trace = Path("traces/run.jsonl")
+trace.parent.mkdir(exist_ok=True)
+
+# In your agent loop, after each tool call:
+with trace.open("a") as f:
+    f.write(json.dumps({
+        "task_id": "my-task",
+        "step": step,
+        "tool_name": tool_name,
+        "tool_input": tool_args,
+        "tool_result": result_text,
+        "model_name": "gpt-4.1-mini",
+    }) + "\n")
+```
+
+Then analyze:
+
+```bash
+agent-xray analyze ./traces
+agent-xray surface my-task --log-dir ./traces
+```
+
+Working examples for each framework are in [`examples/`](examples/):
+
+| Framework | Example |
+| --- | --- |
+| Anthropic SDK | [`instrument_anthropic.py`](examples/instrument_anthropic.py) |
+| OpenAI SDK | [`instrument_openai.py`](examples/instrument_openai.py) |
+| MCP (Playwright, etc.) | [`instrument_mcp.py`](examples/instrument_mcp.py) |
+| LangChain | [`instrument_langchain.py`](examples/instrument_langchain.py) |
+
+See the full [integration guide](docs/integration.md) for the JSONL format reference, field descriptions, and common pitfalls.
 
 ## Grading System
 

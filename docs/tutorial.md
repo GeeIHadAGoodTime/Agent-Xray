@@ -1,6 +1,6 @@
 # agent-xray Tutorial
 
-This tutorial takes about five minutes and uses one tiny JSONL trace so you can see the full `agent-xray` loop end to end.
+This tutorial takes about five minutes. You will instrument a simple agent loop, produce a real trace, and analyze it with `agent-xray`.
 
 ## Step 1: Install `agent-xray`
 
@@ -8,17 +8,61 @@ This tutorial takes about five minutes and uses one tiny JSONL trace so you can 
 pip install agent-xray
 ```
 
-Expected output:
+## Step 2: Instrument your agent
 
-```text
-Successfully installed agent-xray-0.1.0
+Add JSONL logging to your agent loop. Here is the minimal pattern (works with any framework):
+
+```python
+import json
+import time
+from pathlib import Path
+
+trace = Path("traces/my_run.jsonl")
+trace.parent.mkdir(exist_ok=True)
+step = 0
+
+def log_step(task_id, tool_name, tool_input, tool_result, **extra):
+    global step
+    step += 1
+    with trace.open("a") as f:
+        f.write(json.dumps({
+            "task_id": task_id,
+            "step": step,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "tool_result": tool_result,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            **extra,
+        }) + "\n")
+
+def log_complete(task_id, status="success"):
+    with trace.open("a") as f:
+        f.write(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "status": status,
+            "total_steps": step,
+        }) + "\n")
 ```
 
-Your exact version may differ.
+Call `log_step` after each tool call in your agent loop, and `log_complete` when the task finishes.
 
-## Step 2: Create a sample trace file
+For framework-specific examples, see:
 
-Create a directory named `traces`, then save the following content as `traces/demo.jsonl`:
+- [`examples/instrument_anthropic.py`](../examples/instrument_anthropic.py) -- Anthropic SDK
+- [`examples/instrument_openai.py`](../examples/instrument_openai.py) -- OpenAI SDK
+- [`examples/instrument_mcp.py`](../examples/instrument_mcp.py) -- MCP tool tracing
+- [`examples/instrument_langchain.py`](../examples/instrument_langchain.py) -- LangChain callback
+
+## Step 3: Generate a trace (or use the demo)
+
+If you do not have an API key handy, use the built-in quickstart:
+
+```bash
+agent-xray quickstart
+```
+
+Or create a sample trace manually:
 
 ```bash
 mkdir -p traces
@@ -31,13 +75,7 @@ cat > traces/demo.jsonl <<'JSONL'
 JSONL
 ```
 
-Expected output:
-
-```text
-(no terminal output)
-```
-
-## Step 3: Analyze the trace directory
+## Step 4: Analyze the trace
 
 ```bash
 agent-xray analyze ./traces
@@ -50,7 +88,7 @@ Analyzed 1 task(s) with rules=default
 {'GOLDEN': 0, 'GOOD': 1, 'OK': 0, 'WEAK': 0, 'BROKEN': 0}
 ```
 
-## Step 4: Inspect the decision surface
+## Step 5: Inspect the decision surface
 
 ```bash
 agent-xray surface demo-checkout --log-dir ./traces
@@ -105,7 +143,7 @@ reasoning: Verify that checkout is now visible.
 result: Checkout page is visible with the order summary.
 ```
 
-## Step 5: Grade the run
+## Step 6: Grade the run
 
 ```bash
 agent-xray grade ./traces
@@ -125,7 +163,7 @@ Rules: default
   BROKEN: 0
 ```
 
-## Step 6: Interpret the output
+## Step 7: Interpret the output
 
 This run grades as `GOOD` under the bundled `default` rules because it:
 
@@ -141,3 +179,10 @@ The surface output shows the exact decision context at each step:
 - how much optional instrumentation is still missing from the trace
 
 The `missing_surfaces` line is useful when a trace feels thin. In this example, the run is still debuggable, but it does not include prompt variants, compaction metadata, correction messages, or memory/RAG context yet.
+
+## Next Steps
+
+- Add more fields to your traces to improve surface completeness. See the [integration guide](integration.md) for the full field reference.
+- Write [custom rules](custom-rules.md) to score your agent against your own criteria.
+- Use `agent-xray flywheel` to run the full quality loop with baseline comparison.
+- Use `agent-xray tui` for interactive trace inspection.
