@@ -124,6 +124,8 @@ class CommerceDetector:
         reached_payment = payment_fields_confirmed or (
             any(signals["has_payment_fields"] for signals in step_signals) and url_has_terminal
         )
+        step_count = len(step_signals)
+        suspiciously_short = step_count <= 2 and reached_payment
         return {
             "reached_payment": reached_payment,
             "reached_checkout": any(signals["is_checkout_page"] for signals in step_signals),
@@ -134,6 +136,7 @@ class CommerceDetector:
             "real_fill_count": real_fill_count,
             "payment_fields_confirmed": payment_fields_confirmed,
             "url_has_terminal": url_has_terminal,
+            "suspiciously_short": suspiciously_short,
         }
 
     def _is_payment_url(self, url: str | None) -> bool:

@@ -4,4 +4,6 @@ __pycache__/
 dist/
 .codex_prompts/
 build/
-__pycache__/
+.coverage
+.pytest_cache/
+*.egg

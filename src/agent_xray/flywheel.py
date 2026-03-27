@@ -12,15 +12,9 @@ from .diagnose import build_fix_plan
 from .grader import GradeResult, grade_task, load_rules
 from .replay import replay_fixture
 from .root_cause import RootCauseResult, classify_task
+from .schema import GRADE_ORDER
 from .signals import SignalDetector
 
-GRADE_ORDER = {
-    "BROKEN": 0,
-    "WEAK": 1,
-    "OK": 2,
-    "GOOD": 3,
-    "GOLDEN": 4,
-}
 PASSING_GRADES = {"GOLDEN", "GOOD"}
 FAILING_GRADES = {"WEAK", "BROKEN"}
 DetectorHook = Callable[..., RootCauseResult | None]
@@ -159,6 +153,8 @@ def _classify_failures_with_hooks(
         if grade.grade not in FAILING_GRADES:
             continue
         default = classify_task(task, grade, analyses[task.task_id])
+        if default is None:
+            continue
         chosen = default
         for hook in hooks:
             try:

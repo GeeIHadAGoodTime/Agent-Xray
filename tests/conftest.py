@@ -385,6 +385,43 @@ def write_trace_dir(tmp_path):
 
 
 @pytest.fixture
+def clone_task():
+    def _clone(
+        task: AgentTask,
+        task_id: str,
+        *,
+        model_name: str | None = None,
+        cost_usd: float | None = None,
+    ) -> AgentTask:
+        steps: list[AgentStep] = []
+        for step in task.sorted_steps:
+            payload = step.to_dict()
+            payload["task_id"] = task_id
+            model_payload = dict(payload.get("model") or {})
+            if model_name is not None:
+                model_payload["model_name"] = model_name
+            if cost_usd is not None:
+                model_payload["cost_usd"] = cost_usd
+            if model_payload:
+                payload["model"] = model_payload
+            steps.append(AgentStep.from_dict(payload))
+        outcome = TaskOutcome.from_dict(task.outcome.to_dict()) if task.outcome else None
+        if outcome is not None:
+            outcome.task_id = task_id
+        return AgentTask(
+            task_id=task_id,
+            steps=steps,
+            task_text=task.task_text,
+            task_category=task.task_category,
+            day=task.day,
+            metadata=dict(task.metadata),
+            outcome=outcome,
+        )
+
+    return _clone
+
+
+@pytest.fixture
 def tmp_trace_dir(
     write_trace_dir,
     golden_task: AgentTask,

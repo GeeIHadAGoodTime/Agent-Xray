@@ -187,8 +187,9 @@ def autodetect(path: Path) -> str:
     return "generic"
 
 
-def adapt(path: Path, format: str = "auto") -> list[AgentStep]:
+def adapt(path: str | Path, format: str = "auto") -> list[AgentStep]:
     """Load a trace file and convert all entries to AgentStep records."""
+    path = Path(path) if not isinstance(path, Path) else path
     if format not in FORMATS:
         raise ValueError(f"unsupported trace format: {format}")
     if format == "auto":

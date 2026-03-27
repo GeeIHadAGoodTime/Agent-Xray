@@ -17,6 +17,13 @@
       "reason": "+1 made a non-trivial attempt ({actual} steps)"
     },
     {
+      "field": "step_count",
+      "op": "lte",
+      "value": 0,
+      "points": -5,
+      "label": "empty_task"
+    },
+    {
       "name": "zero_errors",
       "metric": "errors",
       "equals": 0,

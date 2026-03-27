@@ -3,6 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+GRADE_ORDER = {
+    "BROKEN": 0,
+    "WEAK": 1,
+    "OK": 2,
+    "GOOD": 3,
+    "GOLDEN": 4,
+}
+
 CORE_STEP_FIELDS = {
     "task_id",
     "step",
@@ -24,23 +32,43 @@ MODEL_FIELD_NAMES = {
     "input_tokens",
     "output_tokens",
     "cost_usd",
+    "compaction_method",
+    "compaction_messages_before",
+    "compaction_messages_after",
+    "compaction_summary_preview",
+    "trimmed_messages",
+    "fifo_evicted_messages",
+    "screenshots_evicted",
+    "prompt_variant",
+    "prompt_variant_full",
 }
 TOOLS_FIELD_NAMES = {
     "tools_available",
     "tools_available_names",
     "system_prompt_hash",
     "message_count",
+    "rejected_tools",
+    "focused_set",
+    "tools_available_count",
+    "conversation_turn_count",
 }
 REASONING_FIELD_NAMES = {
     "llm_reasoning",
     "correction_messages",
     "spin_intervention",
+    "error_registry_context",
+    "continuation_nudge",
+    "force_termination",
+    "hard_loop_breaker",
+    "consecutive_failure_warning",
+    "approval_path",
 }
 BROWSER_FIELD_NAMES = {
     "page_url",
     "had_screenshot",
     "had_screenshot_image",
     "snapshot_compressed",
+    "snapshot_pre_compress_len",
 }
 RESERVED_STEP_FIELDS = (
     CORE_STEP_FIELDS
@@ -122,7 +150,7 @@ def _merge_extensions(
 
 @dataclass(slots=True)
 class ModelContext:
-    """LLM call metadata."""
+    """LLM call metadata including compaction and prompt details."""
 
     model_name: str | None = None
     temperature: float | None = None
@@ -133,24 +161,43 @@ class ModelContext:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    compaction_method: str | None = None
+    compaction_messages_before: int | None = None
+    compaction_messages_after: int | None = None
+    compaction_summary_preview: str | None = None
+    trimmed_messages: int | None = None
+    fifo_evicted_messages: int | None = None
+    screenshots_evicted: int | None = None
+    prompt_variant: str | None = None
+    prompt_variant_full: str | None = None
 
 
 @dataclass(slots=True)
 class ToolContext:
-    """Tool availability metadata."""
+    """Tool availability and filtering metadata."""
 
     tools_available: list[str] | None = None
     system_prompt_hash: str | None = None
     message_count: int | None = None
+    rejected_tools: list[str] | None = None
+    focused_set: str | None = None
+    tools_available_count: int | None = None
+    conversation_turn_count: int | None = None
 
 
 @dataclass(slots=True)
 class ReasoningContext:
-    """LLM reasoning and correction metadata."""
+    """LLM reasoning, corrections, and dynamic injections."""
 
     llm_reasoning: str | None = None
     correction_messages: list[str] | None = None
     spin_intervention: str | None = None
+    error_registry_context: str | None = None
+    continuation_nudge: str | None = None
+    force_termination: str | None = None
+    hard_loop_breaker: str | None = None
+    consecutive_failure_warning: str | None = None
+    approval_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -160,6 +207,8 @@ class BrowserContext:
     page_url: str | None = None
     had_screenshot: bool | None = None
     snapshot_compressed: bool | None = None
+    had_screenshot_image: bool | None = None
+    snapshot_pre_compress_len: int | None = None
 
 
 @dataclass(slots=True, init=False)
@@ -301,6 +350,15 @@ class AgentStep:
             input_tokens=_coerce_optional_int(values.get("input_tokens")),
             output_tokens=_coerce_optional_int(values.get("output_tokens")),
             cost_usd=_coerce_optional_float(values.get("cost_usd")),
+            compaction_method=_coerce_optional_str(values.get("compaction_method")),
+            compaction_messages_before=_coerce_optional_int(values.get("compaction_messages_before")),
+            compaction_messages_after=_coerce_optional_int(values.get("compaction_messages_after")),
+            compaction_summary_preview=_coerce_optional_str(values.get("compaction_summary_preview")),
+            trimmed_messages=_coerce_optional_int(values.get("trimmed_messages")),
+            fifo_evicted_messages=_coerce_optional_int(values.get("fifo_evicted_messages")),
+            screenshots_evicted=_coerce_optional_int(values.get("screenshots_evicted")),
+            prompt_variant=_coerce_optional_str(values.get("prompt_variant")),
+            prompt_variant_full=_coerce_optional_str(values.get("prompt_variant_full")),
         )
 
     @staticmethod
@@ -326,6 +384,10 @@ class AgentStep:
             tools_available=_coerce_list_of_str(values.get("tools_available")),
             system_prompt_hash=_coerce_optional_str(values.get("system_prompt_hash")),
             message_count=_coerce_optional_int(values.get("message_count")),
+            rejected_tools=_coerce_list_of_str(values.get("rejected_tools")),
+            focused_set=_coerce_optional_str(values.get("focused_set")),
+            tools_available_count=_coerce_optional_int(values.get("tools_available_count")),
+            conversation_turn_count=_coerce_optional_int(values.get("conversation_turn_count")),
         )
 
     @staticmethod
@@ -351,6 +413,12 @@ class AgentStep:
             llm_reasoning=_coerce_optional_str(values.get("llm_reasoning")),
             correction_messages=_coerce_list_of_str(values.get("correction_messages")),
             spin_intervention=_coerce_optional_str(values.get("spin_intervention")),
+            error_registry_context=_coerce_optional_str(values.get("error_registry_context")),
+            continuation_nudge=_coerce_optional_str(values.get("continuation_nudge")),
+            force_termination=_coerce_optional_str(values.get("force_termination")),
+            hard_loop_breaker=_coerce_optional_str(values.get("hard_loop_breaker")),
+            consecutive_failure_warning=_coerce_optional_str(values.get("consecutive_failure_warning")),
+            approval_path=_coerce_optional_str(values.get("approval_path")),
         )
 
     @staticmethod
@@ -376,6 +444,8 @@ class AgentStep:
             page_url=_coerce_optional_str(values.get("page_url")),
             had_screenshot=_coerce_optional_bool(values.get("had_screenshot")),
             snapshot_compressed=_coerce_optional_bool(values.get("snapshot_compressed")),
+            had_screenshot_image=_coerce_optional_bool(values.get("had_screenshot_image")),
+            snapshot_pre_compress_len=_coerce_optional_int(values.get("snapshot_pre_compress_len")),
         )
 
     @classmethod
@@ -403,6 +473,13 @@ class AgentStep:
             model_payload["output_tokens"] = payload.get("output_tokens")
         if "cost_usd" in payload and "cost_usd" not in model_payload:
             model_payload["cost_usd"] = payload.get("cost_usd")
+        for _mf in (
+            "compaction_method", "compaction_messages_before", "compaction_messages_after",
+            "compaction_summary_preview", "trimmed_messages", "fifo_evicted_messages",
+            "screenshots_evicted", "prompt_variant", "prompt_variant_full",
+        ):
+            if _mf in payload and _mf not in model_payload:
+                model_payload[_mf] = payload.get(_mf)
 
         tools_available = payload.get("tools_available")
         if tools_available is None:
@@ -413,6 +490,9 @@ class AgentStep:
             tools_payload["system_prompt_hash"] = payload.get("system_prompt_hash")
         if "message_count" in payload and "message_count" not in tools_payload:
             tools_payload["message_count"] = payload.get("message_count")
+        for _tf in ("rejected_tools", "focused_set", "tools_available_count", "conversation_turn_count"):
+            if _tf in payload and _tf not in tools_payload:
+                tools_payload[_tf] = payload.get(_tf)
 
         if "llm_reasoning" in payload and "llm_reasoning" not in reasoning_payload:
             reasoning_payload["llm_reasoning"] = payload.get("llm_reasoning")
@@ -420,6 +500,12 @@ class AgentStep:
             reasoning_payload["correction_messages"] = payload.get("correction_messages")
         if "spin_intervention" in payload and "spin_intervention" not in reasoning_payload:
             reasoning_payload["spin_intervention"] = payload.get("spin_intervention")
+        for _rf in (
+            "error_registry_context", "continuation_nudge", "force_termination",
+            "hard_loop_breaker", "consecutive_failure_warning", "approval_path",
+        ):
+            if _rf in payload and _rf not in reasoning_payload:
+                reasoning_payload[_rf] = payload.get(_rf)
 
         if "page_url" in payload and "page_url" not in browser_payload:
             browser_payload["page_url"] = payload.get("page_url")
@@ -431,8 +517,12 @@ class AgentStep:
             and "had_screenshot" not in payload
         ):
             browser_payload["had_screenshot"] = payload.get("had_screenshot_image")
+        if "had_screenshot_image" in payload and "had_screenshot_image" not in browser_payload:
+            browser_payload["had_screenshot_image"] = payload.get("had_screenshot_image")
         if "snapshot_compressed" in payload and "snapshot_compressed" not in browser_payload:
             browser_payload["snapshot_compressed"] = payload.get("snapshot_compressed")
+        if "snapshot_pre_compress_len" in payload and "snapshot_pre_compress_len" not in browser_payload:
+            browser_payload["snapshot_pre_compress_len"] = payload.get("snapshot_pre_compress_len")
 
         step_value = _coerce_optional_int(payload.get("step", 0))
         timestamp_value = payload.get("timestamp") or payload.get("ts")
@@ -460,6 +550,15 @@ class AgentStep:
                     input_tokens=_coerce_optional_int(model_payload.get("input_tokens")),
                     output_tokens=_coerce_optional_int(model_payload.get("output_tokens")),
                     cost_usd=_coerce_optional_float(model_payload.get("cost_usd")),
+                    compaction_method=_coerce_optional_str(model_payload.get("compaction_method")),
+                    compaction_messages_before=_coerce_optional_int(model_payload.get("compaction_messages_before")),
+                    compaction_messages_after=_coerce_optional_int(model_payload.get("compaction_messages_after")),
+                    compaction_summary_preview=_coerce_optional_str(model_payload.get("compaction_summary_preview")),
+                    trimmed_messages=_coerce_optional_int(model_payload.get("trimmed_messages")),
+                    fifo_evicted_messages=_coerce_optional_int(model_payload.get("fifo_evicted_messages")),
+                    screenshots_evicted=_coerce_optional_int(model_payload.get("screenshots_evicted")),
+                    prompt_variant=_coerce_optional_str(model_payload.get("prompt_variant")),
+                    prompt_variant_full=_coerce_optional_str(model_payload.get("prompt_variant_full")),
                 )
             ),
             tools=(
@@ -471,6 +570,10 @@ class AgentStep:
                         tools_payload.get("system_prompt_hash")
                     ),
                     message_count=_coerce_optional_int(tools_payload.get("message_count")),
+                    rejected_tools=_coerce_list_of_str(tools_payload.get("rejected_tools")),
+                    focused_set=_coerce_optional_str(tools_payload.get("focused_set")),
+                    tools_available_count=_coerce_optional_int(tools_payload.get("tools_available_count")),
+                    conversation_turn_count=_coerce_optional_int(tools_payload.get("conversation_turn_count")),
                 )
             ),
             reasoning=(
@@ -484,6 +587,12 @@ class AgentStep:
                     spin_intervention=_coerce_optional_str(
                         reasoning_payload.get("spin_intervention")
                     ),
+                    error_registry_context=_coerce_optional_str(reasoning_payload.get("error_registry_context")),
+                    continuation_nudge=_coerce_optional_str(reasoning_payload.get("continuation_nudge")),
+                    force_termination=_coerce_optional_str(reasoning_payload.get("force_termination")),
+                    hard_loop_breaker=_coerce_optional_str(reasoning_payload.get("hard_loop_breaker")),
+                    consecutive_failure_warning=_coerce_optional_str(reasoning_payload.get("consecutive_failure_warning")),
+                    approval_path=_coerce_optional_str(reasoning_payload.get("approval_path")),
                 )
             ),
             browser=(
@@ -495,6 +604,8 @@ class AgentStep:
                     snapshot_compressed=_coerce_optional_bool(
                         browser_payload.get("snapshot_compressed")
                     ),
+                    had_screenshot_image=_coerce_optional_bool(browser_payload.get("had_screenshot_image")),
+                    snapshot_pre_compress_len=_coerce_optional_int(browser_payload.get("snapshot_pre_compress_len")),
                 )
             ),
             extensions=_merge_extensions(payload, _coerce_dict(payload.get("extensions"))),
@@ -514,6 +625,10 @@ class AgentStep:
 
     @property
     def tools_available(self) -> list[str] | None:
+        return self.tools.tools_available if self.tools else None
+
+    @property
+    def tools_available_names(self) -> list[str] | None:
         return self.tools.tools_available if self.tools else None
 
     @property
@@ -571,6 +686,26 @@ class AgentStep:
     @property
     def cost_usd(self) -> float | None:
         return self.model.cost_usd if self.model else None
+
+    @property
+    def rejected_tools(self) -> list[str] | None:
+        return self.tools.rejected_tools if self.tools else None
+
+    @property
+    def focused_set(self) -> str | None:
+        return self.tools.focused_set if self.tools else None
+
+    @property
+    def approval_path(self) -> str | None:
+        return self.reasoning.approval_path if self.reasoning else None
+
+    @property
+    def compaction_method(self) -> str | None:
+        return self.model.compaction_method if self.model else None
+
+    @property
+    def prompt_variant(self) -> str | None:
+        return self.model.prompt_variant if self.model else None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -677,6 +812,15 @@ MODEL_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
         "input_tokens": {"type": ["integer", "null"], "minimum": 0},
         "output_tokens": {"type": ["integer", "null"], "minimum": 0},
         "cost_usd": {"type": ["number", "null"]},
+        "compaction_method": {"type": ["string", "null"]},
+        "compaction_messages_before": {"type": ["integer", "null"], "minimum": 0},
+        "compaction_messages_after": {"type": ["integer", "null"], "minimum": 0},
+        "compaction_summary_preview": {"type": ["string", "null"]},
+        "trimmed_messages": {"type": ["integer", "null"], "minimum": 0},
+        "fifo_evicted_messages": {"type": ["integer", "null"], "minimum": 0},
+        "screenshots_evicted": {"type": ["integer", "null"], "minimum": 0},
+        "prompt_variant": {"type": ["string", "null"]},
+        "prompt_variant_full": {"type": ["string", "null"]},
     },
     "additionalProperties": False,
 }
@@ -687,6 +831,10 @@ TOOL_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
         "tools_available": {"type": ["array", "null"], "items": {"type": "string"}},
         "system_prompt_hash": {"type": ["string", "null"]},
         "message_count": {"type": ["integer", "null"], "minimum": 0},
+        "rejected_tools": {"type": ["array", "null"], "items": {"type": "string"}},
+        "focused_set": {"type": ["string", "null"]},
+        "tools_available_count": {"type": ["integer", "null"], "minimum": 0},
+        "conversation_turn_count": {"type": ["integer", "null"], "minimum": 0},
     },
     "additionalProperties": False,
 }
@@ -697,6 +845,12 @@ REASONING_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
         "llm_reasoning": {"type": ["string", "null"]},
         "correction_messages": {"type": ["array", "null"], "items": {"type": "string"}},
         "spin_intervention": {"type": ["string", "null"]},
+        "error_registry_context": {"type": ["string", "null"]},
+        "continuation_nudge": {"type": ["string", "null"]},
+        "force_termination": {"type": ["string", "null"]},
+        "hard_loop_breaker": {"type": ["string", "null"]},
+        "consecutive_failure_warning": {"type": ["string", "null"]},
+        "approval_path": {"type": ["string", "null"]},
     },
     "additionalProperties": False,
 }
@@ -707,6 +861,8 @@ BROWSER_CONTEXT_JSON_SCHEMA: dict[str, Any] = {
         "page_url": {"type": ["string", "null"]},
         "had_screenshot": {"type": ["boolean", "null"]},
         "snapshot_compressed": {"type": ["boolean", "null"]},
+        "had_screenshot_image": {"type": ["boolean", "null"]},
+        "snapshot_pre_compress_len": {"type": ["integer", "null"], "minimum": 0},
     },
     "additionalProperties": False,
 }

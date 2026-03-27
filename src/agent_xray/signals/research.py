@@ -21,7 +21,7 @@ class ResearchDetector:
         result = step.tool_result or ""
         return {
             "is_search": tool in self.SEARCH_TOOLS or "search" in tool,
-            "is_read": tool in self.READ_TOOLS or "read" in tool or "fetch" in tool,
+            "is_read": self._is_read_tool(tool),
             "is_synthesis": tool in {"respond", "answer", "summarize", "write"},
             "has_citation": any(
                 re.search(pattern, result, re.IGNORECASE) for pattern in self.CITE_PATTERNS
@@ -55,6 +55,14 @@ class ResearchDetector:
                     if host:
                         domains.add(host)
         return len(domains)
+
+    def _is_read_tool(self, tool: str) -> bool:
+        return (
+            tool in self.READ_TOOLS
+            or tool.startswith("read_url")
+            or "fetch" in tool
+            or "scrape" in tool
+        )
 
     def _iter_sources(self, step: AgentStep) -> Iterable[str]:
         if page_url := self._page_url(step):

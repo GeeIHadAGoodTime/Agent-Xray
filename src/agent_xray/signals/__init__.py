@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import warnings
 from typing import Any, Protocol, runtime_checkable
 
 from ..schema import AgentStep, AgentTask
@@ -26,7 +27,8 @@ class SignalDetector(Protocol):
 def _iter_entry_points() -> list[importlib.metadata.EntryPoint]:
     try:
         entry_points = importlib.metadata.entry_points()
-    except Exception:
+    except Exception as exc:
+        warnings.warn(f"Failed to enumerate signal plugins: {exc}", stacklevel=2)
         return []
     if hasattr(entry_points, "select"):
         return list(entry_points.select(group="agent_xray.signals"))
@@ -52,8 +54,8 @@ def discover_detectors() -> list[SignalDetector]:
             instance = loaded() if isinstance(loaded, type) else loaded
             if isinstance(instance, SignalDetector):
                 detectors.append(instance)
-        except Exception:
-            continue
+        except Exception as exc:
+            warnings.warn(f"Failed to load plugin {entry_point.name}: {exc}", stacklevel=2)
     return detectors
 
 

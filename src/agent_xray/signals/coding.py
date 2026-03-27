@@ -10,6 +10,19 @@ from ..schema import AgentStep, AgentTask
 class CodingDetector:
     name = "coding"
 
+    COMMON_TLDS = {
+        "ai",
+        "app",
+        "com",
+        "dev",
+        "edu",
+        "gov",
+        "io",
+        "net",
+        "org",
+        "test",
+        "us",
+    }
     FILE_TOOLS = {"write_file", "read_file", "edit_file", "create_file", "delete_file", "patch"}
     TEST_TOOLS = {"run_tests", "pytest", "test", "run_test"}
     BUILD_TOOLS = {"build", "compile", "make", "cargo_build", "npm_run"}
@@ -58,15 +71,33 @@ class CodingDetector:
         }
 
     def _has_file_path(self, value: Any) -> bool:
-        return any(self.FILE_PATH_RE.search(text) for text in self._iter_strings(value))
+        return any(True for text in self._iter_strings(value) for _ in self._iter_file_matches(text))
 
     def _count_unique_files(self, task: AgentTask) -> int:
         files: set[str] = set()
         for step in task.sorted_steps:
             for text in self._iter_strings(step.tool_input):
-                for match in self.FILE_PATH_RE.findall(text):
-                    files.add(match.rstrip(".,:;"))
+                files.update(self._iter_file_matches(text))
         return len(files)
+
+    def _iter_file_matches(self, text: str) -> Iterable[str]:
+        for match in self.FILE_PATH_RE.finditer(text):
+            candidate = match.group(0).rstrip(".,:;")
+            if candidate and not self._is_likely_url(candidate):
+                yield candidate
+
+    def _is_likely_url(self, value: str) -> bool:
+        text = value.strip().rstrip(".,:;")
+        lowered = text.lower()
+        if lowered.startswith(("http://", "https://")) or "://" in lowered:
+            return True
+        if re.fullmatch(r"\d{1,2}/\d{1,2}(?:/\d{2,4})?", text):
+            return True
+        head = lowered.lstrip("/").split("/", 1)[0]
+        if head.count(".") != 1:
+            return False
+        name, suffix = head.rsplit(".", 1)
+        return bool(name) and suffix in self.COMMON_TLDS and re.fullmatch(r"[a-z0-9_-]+", name)
 
     def _iter_strings(self, value: Any) -> Iterable[str]:
         if isinstance(value, str):

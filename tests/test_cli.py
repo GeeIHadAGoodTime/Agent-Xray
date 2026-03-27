@@ -16,27 +16,9 @@ from agent_xray.cli import (
     cmd_surface,
     cmd_tree,
 )
-from agent_xray.schema import AgentStep, AgentTask
+from agent_xray.schema import AgentTask
 
 RULES_DIR = Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules"
-
-
-def _clone_task(task: AgentTask, task_id: str) -> AgentTask:
-    steps = []
-    for step in task.sorted_steps:
-        payload = step.to_dict()
-        payload["task_id"] = task_id
-        steps.append(AgentStep.from_dict(payload))
-    cloned = AgentTask(
-        task_id=task_id,
-        steps=steps,
-        task_text=task.task_text,
-        task_category=task.task_category,
-        outcome=task.outcome,
-    )
-    if cloned.outcome is not None:
-        cloned.outcome.task_id = task_id
-    return cloned
 
 
 def test_cmd_analyze_returns_output(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
@@ -212,10 +194,11 @@ def test_cmd_compare_two_dirs(
     write_trace_dir,
     golden_task: AgentTask,
     broken_task: AgentTask,
+    clone_task,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    left_dir = write_trace_dir("compare-left", [_clone_task(broken_task, "checkout-task")])
-    right_dir = write_trace_dir("compare-right", [_clone_task(golden_task, "checkout-task")])
+    left_dir = write_trace_dir("compare-left", [clone_task(broken_task, "checkout-task")])
+    right_dir = write_trace_dir("compare-right", [clone_task(golden_task, "checkout-task")])
     result = cmd_compare(
         Namespace(left_log_dir=left_dir, right_log_dir=right_dir, rules=None, json=True)
     )

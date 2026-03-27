@@ -182,7 +182,7 @@ When a task grades poorly, `agent-xray` classifies the most likely failure mode:
 ## Library Usage
 
 ```python
-from agent_xray import AgentStep, AgentTask, build_surface, classify_task, grade_task, load_rules
+from agent_xray import AgentStep, AgentTask, surface_for_task, classify_task, grade_task, load_rules
 
 records = [
     {"task_id": "task-1", "step": 1, "tool_name": "browser_navigate", "tool_input": {"url": "https://example.test"}},
@@ -193,7 +193,7 @@ steps = [AgentStep.from_dict(record) for record in records]
 task = AgentTask.from_steps(steps, task_text="Inspect the checkout flow")
 
 grade = grade_task(task, load_rules("browser_flow"))
-surface = build_surface(task)
+surface = surface_for_task(task)
 
 print(grade.grade, grade.score)
 print(surface["steps"][0]["tools_available_names"])

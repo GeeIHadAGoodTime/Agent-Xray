@@ -12,13 +12,21 @@ from .schema import AgentStep, AgentTask, TaskOutcome
 from .signals import SignalDetector, run_detection
 
 ERROR_PATTERNS = [
-    (r"not approved|approval denied|blocked by approval", "approval_block"),
+    (r"not approved|approval denied|blocked by approval|needs the user's ok first", "approval_block"),
     (r"unknown tool", "unknown_tool"),
+    (r"not available in your capability tier|permission denied|forbidden", "tier_block"),
     (r"timed out|timeout", "timeout"),
-    (r"rate limit", "rate_limit"),
+    (r"rate limit|maximum \d+ calls per|too many requests|429", "rate_limit"),
+    (r"no accessibility snapshot available", "snapshot_missing"),
+    (r"fill .*failed: locator", "fill_fail"),
+    (r"form incomplete", "fill_incomplete"),
+    (r"navigation failed|execution context was destroyed", "navigation_fail"),
+    (r"failed to focus window", "window_not_found"),
     (r"validation error|field required", "validation"),
     (r"not found|404", "not_found"),
     (r"click.*failed|click.*timeout|failed to click", "click_fail"),
+    (r"expecting value|invalid json|json.?decode", "parse_error"),
+    (r"connection refused|connection reset|ECONNREFUSED", "connection_error"),
 ]
 GENERIC_HOST_PREFIXES = {"www", "m", "mobile", "app"}
 NO_NAVIGATION_MARKERS = ("about:blank", "new-tab-page")
@@ -55,6 +63,48 @@ class TaskAnalysis:
     def step_count(self) -> int:
         return len(self.task.steps)
 
+    @property
+    def spin_is_severe(self) -> bool:
+        return self.max_repeat_count >= 10
+
+    @property
+    def spin_is_moderate(self) -> bool:
+        return 5 <= self.max_repeat_count < 10
+
+    @property
+    def spin_is_mild(self) -> bool:
+        return 3 <= self.max_repeat_count < 5
+
+    @property
+    def error_rate_is_high(self) -> bool:
+        return self.error_rate > 0.5
+
+    @property
+    def error_rate_is_medium(self) -> bool:
+        return 0.2 < self.error_rate <= 0.5
+
+    @property
+    def healthy_step_range(self) -> bool:
+        return 8 <= self.step_count <= 25
+
+    @property
+    def too_many_steps(self) -> bool:
+        return self.step_count > 25
+
+    @property
+    def tokens_in(self) -> int:
+        return sum(
+            (step.model.input_tokens or 0) if step.model else 0
+            for step in self.task.steps
+        )
+
+    @property
+    def tokens_out(self) -> int:
+        return sum(
+            (step.model.output_tokens or 0) if step.model else 0
+            for step in self.task.steps
+        )
+
     def metrics(self) -> dict[str, Any]:
         metrics = {
             "step_count": self.step_count,
@@ -66,6 +116,7 @@ class TaskAnalysis:
             "hallucinated_tools": self.hallucinated_tools,
             "no_tools_steps": self.no_tools_steps,
             "max_repeat_count": self.max_repeat_count,
+            "max_repeat_tool": self.max_repeat_tool,
             "is_spin": self.is_spin,
             "timeout_like": self.timeout_like,
             "total_duration_ms": self.total_duration_ms,
@@ -73,6 +124,19 @@ class TaskAnalysis:
             "final_url": self.final_url,
             "total_cost_usd": self.total_cost_usd,
             "avg_cost_per_step": self.avg_cost_per_step,
+            # Exclusive spin tiers (only one is True)
+            "spin_is_severe": self.spin_is_severe,
+            "spin_is_moderate": self.spin_is_moderate,
+            "spin_is_mild": self.spin_is_mild,
+            # Exclusive error rate tiers
+            "error_rate_is_high": self.error_rate_is_high,
+            "error_rate_is_medium": self.error_rate_is_medium,
+            # Step range
+            "healthy_step_range": self.healthy_step_range,
+            "too_many_steps": self.too_many_steps,
+            # Tokens
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics
@@ -392,7 +456,11 @@ def resolve_task(tasks: list[AgentTask], query: str) -> AgentTask:
     matches = [task for task in tasks if query in task.task_id]
     if len(matches) == 1:
         return matches[0]
-    raise KeyError(f"task id '{query}' was not uniquely found")
+    available = sorted(t.task_id for t in tasks)
+    hint = ", ".join(available[:10])
+    if len(available) > 10:
+        hint += f" ... ({len(available)} total)"
+    raise KeyError(f"task id '{query}' not found. Available: {hint}")
 
 
 def build_task_tree(tasks: list[AgentTask]) -> dict[str, dict[str, list[str]]]:

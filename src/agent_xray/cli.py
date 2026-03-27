@@ -8,12 +8,30 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
-from .analyzer import analyze_task, load_adapted_tasks, load_tasks, resolve_task
+from .analyzer import analyze_task, analyze_tasks, load_adapted_tasks, load_tasks, resolve_task
 from .capture import capture_task
 from .comparison import compare_model_runs, format_model_comparison
 from .flywheel import run_flywheel
 from .grader import grade_tasks, load_rules
 from .replay import format_replay_text, replay_fixture
+from .reports import (
+    report_actions,
+    report_actions_data,
+    report_broken,
+    report_broken_data,
+    report_compare_days,
+    report_compare_days_data,
+    report_flows,
+    report_flows_data,
+    report_golden,
+    report_golden_data,
+    report_health,
+    report_health_data,
+    report_outcomes,
+    report_outcomes_data,
+    report_tools,
+    report_tools_data,
+)
 from .root_cause import classify_failures
 from .schema import AgentTask
 from .surface import (
@@ -109,7 +127,16 @@ def cmd_reasoning(args: argparse.Namespace) -> int:
 def cmd_diff(args: argparse.Namespace) -> int:
     tasks = _load(args)
     data = diff_tasks(resolve_task(tasks, args.task_id_1), resolve_task(tasks, args.task_id_2))
-    _dump(data) if args.json else print(json.dumps(data, indent=2))
+    if args.json:
+        _dump(data)
+    else:
+        for key, section in data.items():
+            print(f"\n{key}:")
+            if isinstance(section, dict):
+                for sub_key, value in section.items():
+                    print(f"  {sub_key}: {value}")
+            else:
+                print(f"  {section}")
     return 0
 
 
@@ -199,6 +226,63 @@ def cmd_tui(args: argparse.Namespace) -> int:
 
     app = AgentXrayApp(log_dir=args.log_dir, task_id=args.task_id)
     app.run()
+    return 0
+
+
+def _grade_and_analyze(args: argparse.Namespace) -> tuple[
+    list[AgentTask],
+    list[Any],
+    dict[str, Any],
+]:
+    tasks = _load_tasks_with_format(args.log_dir, days=args.days, format_name=args.format)
+    rules = load_rules(args.rules) if args.rules else load_rules()
+    grades = grade_tasks(tasks, rules)
+    analyses = analyze_tasks(tasks)
+    return tasks, grades, analyses
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    tasks, grades, analyses = _grade_and_analyze(args)
+    report_type = args.report_type
+    use_json = getattr(args, "json", False)
+
+    if report_type == "compare":
+        if not args.day1 or not args.day2:
+            print("--day1 and --day2 are required for the compare report")
+            return 1
+        if use_json:
+            _dump(report_compare_days_data(tasks, grades, analyses, args.day1, args.day2))
+        else:
+            print(report_compare_days(tasks, grades, analyses, args.day1, args.day2))
+        return 0
+
+    text_funcs = {
+        "health": lambda: report_health(tasks, grades, analyses),
+        "golden": lambda: report_golden(tasks, grades, analyses),
+        "broken": lambda: report_broken(tasks, grades, analyses),
+        "tools": lambda: report_tools(tasks, analyses),
+        "flows": lambda: report_flows(tasks, analyses),
+        "outcomes": lambda: report_outcomes(tasks, grades, analyses),
+        "actions": lambda: report_actions(tasks, grades, analyses),
+    }
+    data_funcs: dict[str, Any] = {
+        "health": lambda: report_health_data(tasks, grades, analyses),
+        "golden": lambda: report_golden_data(tasks, grades, analyses),
+        "broken": lambda: report_broken_data(tasks, grades, analyses),
+        "tools": lambda: report_tools_data(tasks, analyses),
+        "flows": lambda: report_flows_data(tasks, analyses),
+        "outcomes": lambda: report_outcomes_data(tasks, grades, analyses),
+        "actions": lambda: report_actions_data(tasks, grades, analyses),
+    }
+
+    if report_type not in text_funcs:
+        print(f"Unknown report type: {report_type}")
+        return 1
+
+    if use_json:
+        _dump(data_funcs[report_type]())
+    else:
+        print(text_funcs[report_type]())
     return 0
 
 
@@ -301,6 +385,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--rules")
     p_compare.add_argument("--json", action="store_true")
     p_compare.set_defaults(func=cmd_compare)
+
+    p_report = sub.add_parser(
+        "report",
+        help="Generate a report (health, golden, broken, tools, flows, outcomes, actions, compare)",
+    )
+    p_report.add_argument("log_dir")
+    p_report.add_argument(
+        "report_type",
+        choices=["health", "golden", "broken", "tools", "flows", "outcomes", "actions", "compare"],
+    )
+    p_report.add_argument("--rules")
+    p_report.add_argument("--days", type=int)
+    _add_format_option(p_report)
+    p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
+    p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
+    p_report.add_argument("--json", action="store_true")
+    p_report.set_defaults(func=cmd_report)
 
     p_tui = sub.add_parser("tui", help="Open the interactive decision-surface inspector")
     p_tui.add_argument("log_dir", help="Trace log directory or jsonl file to inspect")

@@ -1,6 +1,6 @@
 {
   "name": "browser_flow",
-  "description": "Commerce and navigation-oriented grading rules. Rewards real URL progression, milestone reach, and meaningful fills.",
+  "description": "Commerce and navigation-oriented grading rules with full Viola parity. Rewards URL progression, milestone reach, and meaningful fills. Uses exclusive spin and error-rate tiers.",
   "signals": [
     {
       "name": "url_progression",
@@ -8,6 +8,15 @@
       "gte": 3,
       "points": 2,
       "reason": "+2 URL progression ({actual} pages)"
+    },
+    {
+      "name": "navigation_progress",
+      "metric": "unique_url_paths",
+      "gte": 2,
+      "points": 1,
+      "else_points": -1,
+      "reason": "+1 navigated multiple pages",
+      "else_reason": "-1 stuck on single page or no navigation"
     },
     {
       "name": "checkout_reached",
@@ -38,6 +47,13 @@
       "reason": "+2 real form fills"
     },
     {
+      "name": "any_fills",
+      "metric": "commerce.fill_count",
+      "gte": 1,
+      "points": 1,
+      "reason": "+1 form fill attempted"
+    },
+    {
       "name": "tool_diversity",
       "metric": "unique_tools",
       "gte": 3,
@@ -45,11 +61,11 @@
       "reason": "+1 tool diversity"
     },
     {
-      "name": "healthy_step_count",
-      "metric": "step_count",
-      "gte": 8,
+      "name": "healthy_step_range",
+      "metric": "healthy_step_range",
+      "equals": true,
       "points": 1,
-      "reason": "+1 healthy step count"
+      "reason": "+1 healthy step count (8-25)"
     },
     {
       "name": "zero_errors",
@@ -66,21 +82,49 @@
       "reason": "-4 timeout"
     },
     {
-      "name": "spin_penalty",
-      "metric": "max_repeat_count",
-      "gte": 5,
-      "points": -2,
-      "reason": "-2 moderate or worse spin"
+      "name": "severe_spin",
+      "metric": "spin_is_severe",
+      "equals": true,
+      "points": -4,
+      "reason": "-4 severe spin (10+ repeats)"
     },
     {
-      "name": "error_rate_penalty",
-      "metric": "error_rate",
-      "gt": 0.5,
+      "name": "moderate_spin",
+      "metric": "spin_is_moderate",
+      "equals": true,
+      "points": -2,
+      "reason": "-2 moderate spin (5-9 repeats)"
+    },
+    {
+      "name": "mild_spin",
+      "metric": "spin_is_mild",
+      "equals": true,
+      "points": -1,
+      "reason": "-1 mild spin (3-4 repeats)"
+    },
+    {
+      "name": "high_error_rate",
+      "metric": "error_rate_is_high",
+      "equals": true,
       "points": -3,
       "reason": "-3 error rate above 50%"
     },
     {
-      "name": "stuck_on_page_penalty",
+      "name": "medium_error_rate",
+      "metric": "error_rate_is_medium",
+      "equals": true,
+      "points": -1,
+      "reason": "-1 error rate above 20%"
+    },
+    {
+      "name": "suspiciously_short",
+      "metric": "commerce.suspiciously_short",
+      "equals": true,
+      "points": -3,
+      "reason": "-3 suspiciously short (1-2 steps to payment)"
+    },
+    {
+      "name": "stuck_on_page",
       "metric": "unique_urls",
       "lte": 1,
       "points": -2,
@@ -92,6 +136,13 @@
       "gte": 2,
       "points": -2,
       "reason": "-2 hallucinated tools"
+    },
+    {
+      "name": "routing_penalty",
+      "metric": "no_tools_steps",
+      "gte": 1,
+      "points": -1,
+      "reason": "-1 step(s) with zero tools available"
     }
   ],
   "grade_thresholds": {

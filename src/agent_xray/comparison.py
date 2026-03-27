@@ -7,16 +7,8 @@ from typing import Any
 
 from .analyzer import analyze_task, load_tasks
 from .grader import grade_task, load_rules
-from .schema import AgentTask
+from .schema import GRADE_ORDER, AgentTask
 from .surface import surface_for_task
-
-GRADE_ORDER = {
-    "BROKEN": 0,
-    "WEAK": 1,
-    "OK": 2,
-    "GOOD": 3,
-    "GOLDEN": 4,
-}
 
 
 @dataclass(slots=True)

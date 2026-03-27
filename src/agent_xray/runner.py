@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 _httpx: Any
 try:
@@ -12,10 +12,23 @@ except ImportError:  # pragma: no cover - exercised in dependency-missing enviro
 httpx: Any = _httpx
 
 
+@runtime_checkable
 class TaskRunner(Protocol):
     async def send(self, task_text: str) -> str: ...
 
     async def get_status(self, task_id: str) -> str: ...
+
+
+@dataclass(slots=True)
+class StaticRunner:
+    task_id: str = "task-1"
+    status: str = "completed"
+
+    async def send(self, task_text: str) -> str:
+        return self.task_id
+
+    async def get_status(self, task_id: str) -> str:
+        return self.status
 
 
 @dataclass(slots=True)

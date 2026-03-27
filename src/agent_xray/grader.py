@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -103,6 +104,12 @@ def _compare(actual: Any, rule: dict[str, Any]) -> bool:
                     return False
                 values = actual if isinstance(actual, list) else [actual]
                 return any(item in values for item in expected)
+            if op == "ne":
+                return bool(actual != expected)
+            if op == "not_in":
+                if not isinstance(expected, (list, tuple, set)):
+                    return False
+                return bool(actual not in expected)
         if "gte" in rule:
             return bool(actual >= rule["gte"])
         if "gt" in rule:
@@ -124,7 +131,18 @@ def _compare(actual: Any, rule: dict[str, Any]) -> bool:
                 return False
             values = actual if isinstance(actual, list) else [actual]
             return any(item in values for item in expected)
-    except TypeError:
+        if "ne" in rule:
+            return bool(actual != rule["ne"])
+        if "not_in" in rule:
+            expected = rule["not_in"]
+            if not isinstance(expected, (list, tuple, set)):
+                return False
+            return bool(actual not in expected)
+    except TypeError as exc:
+        warnings.warn(
+            f"rule comparison raised TypeError for {_rule_name(rule)}: {exc}",
+            stacklevel=2,
+        )
         return False
     raise ValueError(f"rule '{_rule_name(rule)}' is missing a comparator")
 

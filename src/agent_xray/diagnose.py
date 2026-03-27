@@ -7,17 +7,69 @@ from typing import Any
 from .root_cause import ROOT_CAUSES, RootCauseResult
 
 FIX_TARGETS = {
-    "routing_bug": ["tool registry", "task-to-tool routing rules"],
-    "approval_block": ["approval policy", "tool risk map"],
-    "spin": ["loop detector", "recovery instructions"],
-    "environment_drift": ["runner retries", "selector strategy", "timeouts"],
-    "tool_bug": ["tool implementation", "tool result formatting"],
-    "tool_selection_bug": ["tool descriptions", "tool-choice examples"],
-    "early_abort": ["stop conditions", "success criteria"],
-    "stuck_loop": ["progress checks", "navigation guidance"],
-    "reasoning_bug": ["prompt examples", "decision heuristics"],
-    "prompt_bug": ["prompt builder", "task-specific examples"],
-    "model_limit": ["task decomposition", "model choice"],
+    "routing_bug": [
+        "tool registry / tool-routing rules",
+        "approval or permission policy (ensure tool is authorized)",
+        "tool server registration (ensure tool handler is wired)",
+    ],
+    "approval_block": [
+        "approval policy / tool permission configuration",
+        "tool risk level or trust classification",
+        "auto-approval rules for common low-risk tools",
+    ],
+    "spin": [
+        "loop/spin detector thresholds (max_retries, max_consecutive)",
+        "recovery instructions in system prompt",
+        "intervention message content after spin detected",
+    ],
+    "environment_drift": [
+        "browser runner timeouts and retry logic",
+        "CSS/ARIA selector strategy (selectors may have changed)",
+        "page load wait conditions",
+    ],
+    "tool_bug": [
+        "tool handler implementation (the tool itself is broken)",
+        "tool result formatting (result may be unparseable by LLM)",
+        "tool input validation (bad inputs not caught early)",
+    ],
+    "tool_selection_bug": [
+        "tool descriptions (make the right tools more prominent)",
+        "tool-choice examples in prompt",
+        "tool set scoping (wrong tool set exposed for this task type)",
+    ],
+    "early_abort": [
+        "stop conditions / success criteria",
+        "minimum step count before allowing completion",
+        "continuation_nudge logic",
+    ],
+    "stuck_loop": [
+        "progress detection in browser prompt section",
+        "reassessment prompts after N steps on same page",
+        "navigation guidance (when to try a different approach)",
+    ],
+    "reasoning_bug": [
+        "prompt examples for this task type",
+        "decision heuristics and strategy guidance",
+        "few-shot examples corpus",
+    ],
+    "prompt_bug": [
+        "prompt builder / task-specific prompt sections",
+        "see prompt_section field for which section to edit",
+    ],
+    "model_limit": [
+        "task decomposition into subtasks",
+        "model choice (try a more capable model)",
+        "context window management",
+    ],
+}
+
+# Maps prompt_section values to specific file/component targets
+PROMPT_SECTION_TARGETS = {
+    "research": ["research prompt section", "search vs browse tool priority"],
+    "tools": ["tool descriptions and autonomy guardrails", "TOOL_PRIORITY ordering"],
+    "browser": ["browser navigation prompt section", "progress detection instructions"],
+    "payment": ["payment fill instructions", "form field identification guidance"],
+    "planning": ["task planning prompt section", "multi-step strategy guidance"],
 }
 
 
@@ -53,6 +105,12 @@ def build_fix_plan(results: list[RootCauseResult]) -> list[FixPlanEntry]:
     for cause, items in sorted(grouped.items(), key=lambda item: -len(item[1])):
         worst = min(items, key=lambda item: item.score)
         impact = len(items) * max(1, abs(worst.score))
+        targets = list(FIX_TARGETS.get(cause, ["prompt builder"]))
+        # Enrich prompt_bug with section-specific targets
+        if cause == "prompt_bug" and worst.prompt_section:
+            section_targets = PROMPT_SECTION_TARGETS.get(worst.prompt_section, [])
+            if section_targets:
+                targets = section_targets + targets
         plan.append(
             FixPlanEntry(
                 priority=0,
@@ -60,8 +118,8 @@ def build_fix_plan(results: list[RootCauseResult]) -> list[FixPlanEntry]:
                 count=len(items),
                 impact=impact,
                 investigate_task=worst.task_id,
-                targets=FIX_TARGETS.get(cause, ["prompt builder"]),
-                fix_hint=ROOT_CAUSES[cause]["fix_hint"],
+                targets=targets,
+                fix_hint=worst.prompt_fix_hint or ROOT_CAUSES[cause]["fix_hint"],
                 evidence=worst.evidence[:3],
             )
         )
