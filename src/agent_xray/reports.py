@@ -728,3 +728,154 @@ def report_compare_days_data(
         }
 
     return {"day1": {day1: _day_stats(day1)}, "day2": {day2: _day_stats(day2)}}
+
+
+# ── Coding Report ───────────────────────────────────────────────────
+
+
+def report_coding(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    coding_tasks = [
+        (t, analyses[t.task_id])
+        for t in tasks
+        if analyses[t.task_id].signal_metrics.get("coding", {}).get("file_operations", 0) > 0
+    ]
+    lines = [f"CODING REPORT ({len(coding_tasks)} tasks)", "=" * 60, ""]
+    if not coding_tasks:
+        lines.append("  No coding tasks found.")
+        return "\n".join(lines)
+
+    total_files = 0
+    total_tests = 0
+    total_lints = 0
+    total_git = 0
+    verify_cycle = 0
+    for _, analysis in coding_tasks:
+        cm = analysis.signal_metrics.get("coding", {})
+        total_files += cm.get("file_operations", 0)
+        total_tests += cm.get("test_runs", 0)
+        total_lints += cm.get("lint_runs", 0)
+        total_git += cm.get("git_operations", 0)
+        if cm.get("has_test_verify_cycle"):
+            verify_cycle += 1
+
+    n = len(coding_tasks)
+    lines.extend([
+        f"  File operations: {total_files} (avg {total_files / n:.1f}/task)",
+        f"  Test runs:       {total_tests} (avg {total_tests / n:.1f}/task)",
+        f"  Lint runs:       {total_lints}",
+        f"  Git operations:  {total_git}",
+        f"  Edit+test cycle: {verify_cycle}/{n} tasks ({round(verify_cycle * 100 / n)}%)",
+        "",
+        "Tasks:",
+    ])
+    for task, analysis in sorted(coding_tasks, key=lambda x: -x[1].step_count):
+        cm = analysis.signal_metrics.get("coding", {})
+        lines.append(
+            f"  {task.task_id[:24]:24s} files={cm.get('unique_files_touched', 0)} "
+            f"tests={cm.get('test_runs', 0)} errs={analysis.errors} "
+            f"steps={analysis.step_count}"
+        )
+    return "\n".join(lines)
+
+
+def report_coding_data(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    coding_tasks = [
+        (t, analyses[t.task_id])
+        for t in tasks
+        if analyses[t.task_id].signal_metrics.get("coding", {}).get("file_operations", 0) > 0
+    ]
+    items = []
+    for task, analysis in coding_tasks:
+        cm = analysis.signal_metrics.get("coding", {})
+        items.append({
+            "task_id": task.task_id,
+            "file_operations": cm.get("file_operations", 0),
+            "test_runs": cm.get("test_runs", 0),
+            "lint_runs": cm.get("lint_runs", 0),
+            "git_operations": cm.get("git_operations", 0),
+            "unique_files": cm.get("unique_files_touched", 0),
+            "has_verify_cycle": cm.get("has_test_verify_cycle", False),
+            "errors": analysis.errors,
+            "steps": analysis.step_count,
+        })
+    return {"count": len(items), "tasks": items}
+
+
+# ── Research Report ─────────────────────────────────────────────────
+
+
+def report_research(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    research_tasks = [
+        (t, analyses[t.task_id])
+        for t in tasks
+        if analyses[t.task_id].signal_metrics.get("research", {}).get("search_count", 0) > 0
+    ]
+    lines = [f"RESEARCH REPORT ({len(research_tasks)} tasks)", "=" * 60, ""]
+    if not research_tasks:
+        lines.append("  No research tasks found.")
+        return "\n".join(lines)
+
+    total_searches = 0
+    total_reads = 0
+    total_citations = 0
+    total_domains = 0
+    has_synthesis = 0
+    for _, analysis in research_tasks:
+        rm = analysis.signal_metrics.get("research", {})
+        total_searches += rm.get("search_count", 0)
+        total_reads += rm.get("read_count", 0)
+        total_citations += rm.get("citation_count", 0)
+        total_domains += rm.get("source_diversity", 0)
+        if rm.get("has_synthesis_step"):
+            has_synthesis += 1
+
+    n = len(research_tasks)
+    lines.extend([
+        f"  Searches:         {total_searches} (avg {total_searches / n:.1f}/task)",
+        f"  Reads:            {total_reads} (avg {total_reads / n:.1f}/task)",
+        f"  Citations:        {total_citations}",
+        f"  Unique domains:   {total_domains} (avg {total_domains / n:.1f}/task)",
+        f"  Has synthesis:    {has_synthesis}/{n} ({round(has_synthesis * 100 / n)}%)",
+        "",
+        "Tasks:",
+    ])
+    for task, analysis in sorted(research_tasks, key=lambda x: -x[1].step_count):
+        rm = analysis.signal_metrics.get("research", {})
+        lines.append(
+            f"  {task.task_id[:24]:24s} searches={rm.get('search_count', 0)} "
+            f"reads={rm.get('read_count', 0)} domains={rm.get('source_diversity', 0)} "
+            f"citations={rm.get('citation_count', 0)}"
+        )
+    return "\n".join(lines)
+
+
+def report_research_data(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    research_tasks = [
+        (t, analyses[t.task_id])
+        for t in tasks
+        if analyses[t.task_id].signal_metrics.get("research", {}).get("search_count", 0) > 0
+    ]
+    items = []
+    for task, analysis in research_tasks:
+        rm = analysis.signal_metrics.get("research", {})
+        items.append({
+            "task_id": task.task_id,
+            "search_count": rm.get("search_count", 0),
+            "read_count": rm.get("read_count", 0),
+            "source_diversity": rm.get("source_diversity", 0),
+            "citation_count": rm.get("citation_count", 0),
+            "has_synthesis": rm.get("has_synthesis_step", False),
+        })
+    return {"count": len(items), "tasks": items}

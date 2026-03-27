@@ -22,7 +22,6 @@ from agent_xray.reports import (
     report_tools,
     report_tools_data,
 )
-from agent_xray.schema import AgentTask
 
 
 def _prepare(tasks):

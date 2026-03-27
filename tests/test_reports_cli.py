@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
-import pytest
-
 from agent_xray.cli import cmd_report
 
 

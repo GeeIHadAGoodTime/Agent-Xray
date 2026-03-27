@@ -19,6 +19,8 @@ from .reports import (
     report_actions_data,
     report_broken,
     report_broken_data,
+    report_coding,
+    report_coding_data,
     report_compare_days,
     report_compare_days_data,
     report_flows,
@@ -29,6 +31,8 @@ from .reports import (
     report_health_data,
     report_outcomes,
     report_outcomes_data,
+    report_research,
+    report_research_data,
     report_tools,
     report_tools_data,
 )
@@ -264,6 +268,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         "flows": lambda: report_flows(tasks, analyses),
         "outcomes": lambda: report_outcomes(tasks, grades, analyses),
         "actions": lambda: report_actions(tasks, grades, analyses),
+        "coding": lambda: report_coding(tasks, analyses),
+        "research": lambda: report_research(tasks, analyses),
     }
     data_funcs: dict[str, Any] = {
         "health": lambda: report_health_data(tasks, grades, analyses),
@@ -273,6 +279,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         "flows": lambda: report_flows_data(tasks, analyses),
         "outcomes": lambda: report_outcomes_data(tasks, grades, analyses),
         "actions": lambda: report_actions_data(tasks, grades, analyses),
+        "coding": lambda: report_coding_data(tasks, analyses),
+        "research": lambda: report_research_data(tasks, analyses),
     }
 
     if report_type not in text_funcs:
@@ -393,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("log_dir")
     p_report.add_argument(
         "report_type",
-        choices=["health", "golden", "broken", "tools", "flows", "outcomes", "actions", "compare"],
+        choices=["health", "golden", "broken", "tools", "flows", "outcomes", "actions", "coding", "research", "compare"],
     )
     p_report.add_argument("--rules")
     p_report.add_argument("--days", type=int)

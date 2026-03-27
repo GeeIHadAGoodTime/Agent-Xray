@@ -2,7 +2,7 @@
 
 **See what your agent saw.**
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-181717?logo=github)](https://github.com/agent-xray/agent-xray/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-181717?logo=github)](https://github.com/GeeIHadAGoodTime/Agent-Xray/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/agent-xray)](https://pypi.org/project/agent-xray/)
 [![Python](https://img.shields.io/pypi/pyversions/agent-xray)](https://pypi.org/project/agent-xray/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
