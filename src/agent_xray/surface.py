@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from .analyzer import build_task_tree, resolve_task, summarize_tool_result
+from .analyzer import build_task_tree, summarize_tool_result
 from .protocols import PromptBuilder, ToolRegistry
 from .schema import AgentTask
 
@@ -734,7 +734,3 @@ def format_tree_text(tree: dict[str, dict[str, list[str]]]) -> str:
             for task_id in task_ids:
                 lines.append(f"    {task_id}")
     return "\n".join(lines)
-
-
-def resolve_surface_task(tasks: list[AgentTask], query: str) -> AgentTask:
-    return resolve_task(tasks, query)

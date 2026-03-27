@@ -208,7 +208,7 @@ Rule files support both legacy metric syntax and the newer field/operator form:
       "reason": "used multiple tools"
     }
   ],
-  "thresholds": {
+  "grade_thresholds": {
     "GOLDEN": 8,
     "GOOD": 5,
     "OK": 2,

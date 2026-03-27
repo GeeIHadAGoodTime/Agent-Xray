@@ -12,10 +12,15 @@ from .signals.commerce import CommerceDetector
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
-CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+# Card numbers: require separator groups (4-4-4-4 or similar) to avoid matching
+# plain digit sequences like timestamps, IDs, and counters.
+CARD_RE = re.compile(r"\b\d{4}[- ]\d{4}[- ]\d{4}[- ]\d{1,7}\b")
+# ZIP codes: only match when preceded by common address context words to avoid
+# false positives on port numbers, status codes, and numeric IDs.
+ZIP_RE = re.compile(r"(?:zip|postal|zip\s*code|state)\s*[:=]?\s*(\d{5}(?:-\d{4})?)\b", re.I)
 ADDRESS_RE = re.compile(
-    r"\b\d{1,5}\s+[A-Za-z0-9.\- ]+\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln)\b", re.I
+    r"\b\d{1,5}\s+[A-Za-z0-9.\- ]+\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln)\b",
+    re.I,
 )
 COMMERCE_DETECTOR = CommerceDetector()
 
@@ -30,15 +35,26 @@ def _sanitize_text(value: str) -> str:
 
 
 def _sanitize_url(value: str) -> str:
+    """Replace host, sanitize path segments for PII, and strip query/fragment."""
     if not value:
         return value
     parsed = urlparse(value)
     if not parsed.scheme and not parsed.netloc:
         parsed = urlparse(f"https://{value}")
     host = "shop.example.test"
-    path = parsed.path or "/"
-    if parsed.fragment:
-        path = f"{path}#{parsed.fragment}"
+    # Sanitize path segments that look like PII (emails, phone-like, long digits)
+    parts = (parsed.path or "/").split("/")
+    sanitized_parts: list[str] = []
+    for part in parts:
+        if EMAIL_RE.fullmatch(part):
+            sanitized_parts.append("*email*")
+        elif PHONE_RE.fullmatch(part):
+            sanitized_parts.append("*phone*")
+        elif re.fullmatch(r"\d{8,}", part):
+            sanitized_parts.append("*id*")
+        else:
+            sanitized_parts.append(part)
+    path = "/".join(sanitized_parts) or "/"
     return f"https://{host}{path}"
 
 

@@ -333,11 +333,5 @@ __all__ = [
     "FORMATS",
     "adapt",
     "autodetect",
-    "_coerce_text",
-    "_duration_ms",
-    "_iter_json_objects",
-    "_normalize_tool_input",
-    "_safe_json_dict",
-    "_usage_metadata",
     "format_info",
 ]
