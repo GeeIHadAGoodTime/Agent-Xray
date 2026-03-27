@@ -1,3 +1,5 @@
+"""Signals for search-heavy research and source synthesis tasks."""
+
 from __future__ import annotations
 
 import re
@@ -9,6 +11,8 @@ from ..schema import AgentStep, AgentTask
 
 
 class ResearchDetector:
+    """Detect searching, reading, and citation-backed synthesis behavior."""
+
     name = "research"
 
     SEARCH_TOOLS = {"web_search", "search", "google", "bing", "duckduckgo", "arxiv_search"}

@@ -9,6 +9,32 @@ from .analyzer import build_task_tree, resolve_task, summarize_tool_result
 from .protocols import PromptBuilder, ToolRegistry
 from .schema import AgentTask
 
+_SURFACE_COMPLETENESS_FIELDS = (
+    "llm_reasoning",
+    "model_name",
+    "temperature",
+    "tool_choice",
+    "prompt_variant",
+    "tools_available_names",
+    "tools_available_count",
+    "rejected_tools",
+    "focused_set",
+    "message_count",
+    "conversation_turn_count",
+    "system_prompt_hash",
+    "context_usage_pct",
+    "context_window",
+    "compaction",
+    "correction_messages",
+    "intervention_signals",
+    "approval_path",
+    "page_url",
+    "screenshot_state",
+    "snapshot_compression",
+    "memory",
+    "rag",
+)
+
 
 def _prompt_text(task: AgentTask, prompt_builder: PromptBuilder | None) -> str | None:
     if isinstance(task.metadata.get("system_prompt_text"), str):
@@ -34,12 +60,290 @@ def _system_components(task: AgentTask) -> dict[str, Any] | None:
     return None
 
 
+def _window_history(
+    history: list[dict[str, str]],
+    *,
+    max_history_steps: int,
+) -> list[dict[str, str]]:
+    if max_history_steps <= 0:
+        return []
+    if len(history) <= max_history_steps:
+        return list(history)
+    if max_history_steps < 4:
+        return list(history[-max_history_steps:])
+    omitted = len(history) - max_history_steps
+    marker = {"role": "history_window", "content": f"[...{omitted} steps omitted...]"}
+    return [
+        *history[:3],
+        marker,
+        *history[-(max_history_steps - 3):],
+    ]
+
+
+def _step_extension_value(
+    step: Any,
+    field_name: str,
+    *,
+    nested_container: str | None = None,
+    nested_aliases: tuple[str, ...] = (),
+) -> Any:
+    value = getattr(step, field_name, None)
+    if value is not None:
+        return value
+    if field_name in step.extensions:
+        return step.extensions[field_name]
+    if nested_container is None:
+        return None
+    container = step.extensions.get(nested_container)
+    if not isinstance(container, dict):
+        return None
+    if field_name in container:
+        return container[field_name]
+    for alias in nested_aliases:
+        if alias in container:
+            return container[alias]
+    return None
+
+
+def _memory_rag_fields(step: Any) -> dict[str, Any]:
+    return {
+        "memory_query": _step_extension_value(
+            step,
+            "memory_query",
+            nested_container="memory",
+            nested_aliases=("query",),
+        ),
+        "memory_results": _step_extension_value(
+            step,
+            "memory_results",
+            nested_container="memory",
+            nested_aliases=("results",),
+        ),
+        "memory_store_key": _step_extension_value(
+            step,
+            "memory_store_key",
+            nested_container="memory",
+            nested_aliases=("store_key", "key"),
+        ),
+        "rag_query": _step_extension_value(
+            step,
+            "rag_query",
+            nested_container="rag",
+            nested_aliases=("query",),
+        ),
+        "rag_documents_count": _step_extension_value(
+            step,
+            "rag_documents_count",
+            nested_container="rag",
+            nested_aliases=("documents_count", "document_count"),
+        ),
+        "rag_relevance_scores": _step_extension_value(
+            step,
+            "rag_relevance_scores",
+            nested_container="rag",
+            nested_aliases=("relevance_scores", "scores"),
+        ),
+    }
+
+
+def _surface_presence(
+    *,
+    reasoning: Any,
+    model: Any,
+    tools: Any,
+    browser: Any,
+    has_tool_surface: bool,
+    memory_rag: dict[str, Any],
+) -> dict[str, bool]:
+    compaction_present = bool(
+        model
+        and (
+            model.compaction_count is not None
+            or model.compaction_method is not None
+            or model.compaction_messages_before is not None
+            or model.compaction_messages_after is not None
+            or model.compaction_summary_preview is not None
+            or model.trimmed_messages is not None
+            or model.fifo_evicted_messages is not None
+            or model.screenshots_evicted is not None
+        )
+    )
+    interventions_present = bool(
+        reasoning
+        and (
+            reasoning.spin_intervention is not None
+            or reasoning.error_registry_context is not None
+            or reasoning.continuation_nudge is not None
+            or reasoning.force_termination is not None
+            or reasoning.hard_loop_breaker is not None
+            or reasoning.consecutive_failure_warning is not None
+        )
+    )
+    screenshot_state_present = bool(
+        browser
+        and (browser.had_screenshot is not None or browser.had_screenshot_image is not None)
+    )
+    snapshot_compression_present = bool(
+        browser
+        and (
+            browser.snapshot_compressed is not None
+            or browser.snapshot_pre_compress_len is not None
+        )
+    )
+    memory_present = any(
+        value is not None for key, value in memory_rag.items() if key.startswith("memory_")
+    )
+    rag_present = any(value is not None for key, value in memory_rag.items() if key.startswith("rag_"))
+    return {
+        "llm_reasoning": bool(reasoning and reasoning.llm_reasoning),
+        "model_name": bool(model and model.model_name is not None),
+        "temperature": bool(model and model.temperature is not None),
+        "tool_choice": bool(model and model.tool_choice is not None),
+        "prompt_variant": bool(model and model.prompt_variant is not None),
+        "tools_available_names": has_tool_surface,
+        "tools_available_count": has_tool_surface,
+        "rejected_tools": bool(tools and tools.rejected_tools is not None),
+        "focused_set": bool(tools and tools.focused_set is not None),
+        "message_count": bool(tools and tools.message_count is not None),
+        "conversation_turn_count": bool(tools and tools.conversation_turn_count is not None),
+        "system_prompt_hash": bool(tools and tools.system_prompt_hash is not None),
+        "context_usage_pct": bool(model and model.context_usage_pct is not None),
+        "context_window": bool(model and model.context_window is not None),
+        "compaction": compaction_present,
+        "correction_messages": bool(reasoning and reasoning.correction_messages is not None),
+        "intervention_signals": interventions_present,
+        "approval_path": bool(reasoning and reasoning.approval_path is not None),
+        "page_url": bool(browser and browser.page_url is not None),
+        "screenshot_state": screenshot_state_present,
+        "snapshot_compression": snapshot_compression_present,
+        "memory": memory_present,
+        "rag": rag_present,
+    }
+
+
+def _completeness_metadata(
+    *,
+    reasoning: Any,
+    model: Any,
+    tools: Any,
+    browser: Any,
+    has_tool_surface: bool,
+    memory_rag: dict[str, Any],
+) -> tuple[float, list[str]]:
+    present = _surface_presence(
+        reasoning=reasoning,
+        model=model,
+        tools=tools,
+        browser=browser,
+        has_tool_surface=has_tool_surface,
+        memory_rag=memory_rag,
+    )
+    missing_surfaces = [
+        field_name for field_name in _SURFACE_COMPLETENESS_FIELDS if not present[field_name]
+    ]
+    completeness = 0.5 + 0.5 * (
+        (len(_SURFACE_COMPLETENESS_FIELDS) - len(missing_surfaces))
+        / len(_SURFACE_COMPLETENESS_FIELDS)
+    )
+    return round(completeness, 3), missing_surfaces
+
+
+def _step_signature(step: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+    return (
+        step.get("tool_name"),
+        step.get("tool_input"),
+        step.get("page_url"),
+        step.get("error"),
+    )
+
+
+def _alignment_entry(
+    status: str,
+    left_step: dict[str, Any] | None,
+    right_step: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "left_step": left_step.get("step") if left_step else None,
+        "right_step": right_step.get("step") if right_step else None,
+        "left_tool_name": left_step.get("tool_name") if left_step else None,
+        "right_tool_name": right_step.get("tool_name") if right_step else None,
+        "left_tool_input": left_step.get("tool_input") if left_step else None,
+        "right_tool_input": right_step.get("tool_input") if right_step else None,
+    }
+
+
+def _aligned_steps(
+    left_steps: list[dict[str, Any]],
+    right_steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, float]:
+    left_tool_names = [str(step.get("tool_name") or "") for step in left_steps]
+    right_tool_names = [str(step.get("tool_name") or "") for step in right_steps]
+    matcher = difflib.SequenceMatcher(a=left_tool_names, b=right_tool_names, autojunk=False)
+    alignment: list[dict[str, Any]] = []
+    divergence_point: dict[str, Any] | None = None
+    exact_signature_matches = 0
+
+    for tag, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if tag == "equal":
+            for left_step, right_step in zip(
+                left_steps[left_start:left_end],
+                right_steps[right_start:right_end],
+                strict=True,
+            ):
+                status = "match"
+                if _step_signature(left_step) != _step_signature(right_step):
+                    status = "changed"
+                    if divergence_point is None:
+                        divergence_point = _alignment_entry(status, left_step, right_step)
+                else:
+                    exact_signature_matches += 1
+                alignment.append(_alignment_entry(status, left_step, right_step))
+            continue
+
+        left_block = left_steps[left_start:left_end]
+        right_block = right_steps[right_start:right_end]
+        block_size = max(len(left_block), len(right_block))
+        for index in range(block_size):
+            left_step = left_block[index] if index < len(left_block) else None
+            right_step = right_block[index] if index < len(right_block) else None
+            status = "replace"
+            if left_step is None:
+                status = "insert"
+            elif right_step is None:
+                status = "delete"
+            entry = _alignment_entry(status, left_step, right_step)
+            if divergence_point is None:
+                divergence_point = entry
+            alignment.append(entry)
+
+    max_steps = max(len(left_steps), len(right_steps))
+    exact_similarity = (exact_signature_matches / max_steps) if max_steps else 1.0
+    similarity_score = round((matcher.ratio() + exact_similarity) / 2, 3)
+    return alignment, divergence_point, similarity_score
+
+
 def surface_for_task(
     task: AgentTask,
     *,
     prompt_builder: PromptBuilder | None = None,
     tool_registry: ToolRegistry | None = None,
+    max_history_steps: int = 20,
 ) -> dict[str, Any]:
+    """Reconstruct the per-step decision surface for a single task.
+
+    Args:
+        task: Task to inspect.
+        prompt_builder: Optional fallback prompt builder when the trace did not
+            capture system prompt text.
+        tool_registry: Optional fallback registry used when steps do not record
+            their tool surface explicitly.
+        max_history_steps: Maximum history entries retained per step.
+
+    Returns:
+        dict[str, Any]: JSON-friendly surface data including prompt context,
+        per-step tool visibility, browser state, and rolling history.
+    """
     history: list[dict[str, str]] = (
         [{"role": "user", "content": task.task_text}] if task.task_text else []
     )
@@ -54,6 +358,16 @@ def surface_for_task(
         tool_names = list(tools_available) if tools_available is not None else []
         if not has_tool_metadata and tool_registry is not None:
             tool_names = tool_registry.tool_names(task=task, step=step)
+        memory_rag = _memory_rag_fields(step)
+        has_tool_surface = has_tool_metadata or tool_registry is not None
+        completeness, missing_surfaces = _completeness_metadata(
+            reasoning=reasoning,
+            model=model,
+            tools=tools,
+            browser=browser,
+            has_tool_surface=has_tool_surface,
+            memory_rag=memory_rag,
+        )
         entry = {
             # Core
             "step": step.step,
@@ -112,8 +426,21 @@ def surface_for_task(
             "had_screenshot": browser.had_screenshot if browser else None,
             "had_screenshot_image": browser.had_screenshot_image if browser else None,
             "snapshot_pre_compress_len": browser.snapshot_pre_compress_len if browser else None,
+            # Memory & retrieval
+            "memory_query": memory_rag["memory_query"],
+            "memory_results": memory_rag["memory_results"],
+            "memory_store_key": memory_rag["memory_store_key"],
+            "rag_query": memory_rag["rag_query"],
+            "rag_documents_count": memory_rag["rag_documents_count"],
+            "rag_relevance_scores": memory_rag["rag_relevance_scores"],
+            # Instrumentation quality
+            "completeness": completeness,
+            "missing_surfaces": missing_surfaces,
             # Accumulated conversation
-            "conversation_history": list(history),
+            "conversation_history": _window_history(
+                history,
+                max_history_steps=max_history_steps,
+            ),
         }
         steps.append(entry)
         if reasoning and reasoning.llm_reasoning:
@@ -152,6 +479,17 @@ def reasoning_for_task(
     prompt_builder: PromptBuilder | None = None,
     tool_registry: ToolRegistry | None = None,
 ) -> dict[str, Any]:
+    """Extract a reasoning-centric view from a task surface.
+
+    Args:
+        task: Task to inspect.
+        prompt_builder: Optional fallback prompt builder.
+        tool_registry: Optional fallback tool registry.
+
+    Returns:
+        dict[str, Any]: Simplified reasoning chain with decisions, results, and
+        interventions for each step.
+    """
     surface = surface_for_task(task, prompt_builder=prompt_builder, tool_registry=tool_registry)
     return {
         "task_id": surface["task_id"],
@@ -182,31 +520,31 @@ def diff_tasks(
     prompt_builder: PromptBuilder | None = None,
     tool_registry: ToolRegistry | None = None,
 ) -> dict[str, Any]:
+    """Compare two tasks step by step and identify their divergence.
+
+    Args:
+        left: Baseline or left-hand task.
+        right: Comparison or right-hand task.
+        prompt_builder: Optional fallback prompt builder.
+        tool_registry: Optional fallback tool registry.
+
+    Returns:
+        dict[str, Any]: Surface snapshots for both tasks plus divergence,
+        alignment, and prompt-diff metadata.
+    """
     left_surface = surface_for_task(
         left, prompt_builder=prompt_builder, tool_registry=tool_registry
     )
     right_surface = surface_for_task(
         right, prompt_builder=prompt_builder, tool_registry=tool_registry
     )
-    diverged_at = None
-    for index, pair in enumerate(
-        zip(left_surface["steps"], right_surface["steps"], strict=False),
-        start=1,
-    ):
-        left_step, right_step = pair
-        if (
-            left_step["tool_name"],
-            left_step["tool_input"],
-            left_step["page_url"],
-            left_step["error"],
-        ) != (
-            right_step["tool_name"],
-            right_step["tool_input"],
-            right_step["page_url"],
-            right_step["error"],
-        ):
-            diverged_at = index
-            break
+    step_alignment, divergence_point, similarity_score = _aligned_steps(
+        left_surface["steps"],
+        right_surface["steps"],
+    )
+    diverged_at = None if divergence_point is None else (
+        divergence_point["left_step"] or divergence_point["right_step"]
+    )
     prompt_diff = list(
         difflib.unified_diff(
             (left_surface.get("prompt_text") or "").splitlines(),
@@ -220,15 +558,28 @@ def diff_tasks(
         "left": left_surface,
         "right": right_surface,
         "diverged_at_step": diverged_at,
+        "step_alignment": step_alignment,
+        "similarity_score": similarity_score,
+        "divergence_point": divergence_point,
         "prompt_diff": prompt_diff,
     }
 
 
 def tree_for_tasks(tasks: list[AgentTask]) -> dict[str, dict[str, list[str]]]:
+    """Group tasks into a ``day -> site -> task_ids`` tree.
+
+    Args:
+        tasks: Tasks to group.
+
+    Returns:
+        dict[str, dict[str, list[str]]]: Nested mapping grouped by day and then
+        inferred site name.
+    """
     return build_task_tree(tasks)
 
 
 def format_surface_text(surface: dict[str, Any]) -> str:
+    """Render a human-readable task surface view."""
     lines = [
         "=" * 72,
         f"AGENT XRAY SURFACE: {surface['task_id']}",
@@ -286,6 +637,12 @@ def format_surface_text(surface: dict[str, Any]) -> str:
             )
         if step.get("trimmed_messages"):
             lines.append(f"  trimmed: {step['trimmed_messages']} messages")
+        lines.append(
+            f"surface: completeness={step.get('completeness', 0.0):.3f} "
+            f"missing={len(step.get('missing_surfaces') or [])}"
+        )
+        if step.get("missing_surfaces"):
+            lines.append(f"  missing_surfaces: {', '.join(step['missing_surfaces'])}")
         injections: list[str] = []
         if step.get("spin_intervention"):
             injections.append(f"SPIN: {step['spin_intervention']}")
@@ -306,6 +663,26 @@ def format_surface_text(surface: dict[str, Any]) -> str:
             lines.append("injections:")
             for inj in injections:
                 lines.append(f"  {inj}")
+        if (
+            step.get("memory_query") is not None
+            or step.get("memory_results") is not None
+            or step.get("memory_store_key") is not None
+        ):
+            lines.append(
+                f"memory: query={step.get('memory_query')!r} "
+                f"results={step.get('memory_results')!r} "
+                f"store_key={step.get('memory_store_key')!r}"
+            )
+        if (
+            step.get("rag_query") is not None
+            or step.get("rag_documents_count") is not None
+            or step.get("rag_relevance_scores") is not None
+        ):
+            lines.append(
+                f"rag: query={step.get('rag_query')!r} "
+                f"documents={step.get('rag_documents_count')!r} "
+                f"scores={step.get('rag_relevance_scores')!r}"
+            )
         lines.extend(
             [
                 f"decision: {step['tool_name']} "
@@ -320,6 +697,7 @@ def format_surface_text(surface: dict[str, Any]) -> str:
 
 
 def format_reasoning_text(reasoning: dict[str, Any]) -> str:
+    """Render a compact text view of a task reasoning chain."""
     lines = [f"REASONING CHAIN: {reasoning['task_id']}"]
     if reasoning.get("task_text"):
         lines.append(f"user: {reasoning['task_text']}")
@@ -338,6 +716,7 @@ def format_reasoning_text(reasoning: dict[str, Any]) -> str:
 
 
 def format_tree_text(tree: dict[str, dict[str, list[str]]]) -> str:
+    """Render a day/site/task tree as plain text."""
     lines = ["TASK TREE"]
     for day, sites in tree.items():
         lines.append(day)

@@ -35,6 +35,30 @@ DATE_RE = re.compile(r"(20\d{6})")
 
 @dataclass(slots=True)
 class TaskAnalysis:
+    """Computed metrics and derived signals for a single task.
+
+    Attributes:
+        task: Source task used to compute the analysis.
+        unique_urls: Ordered unique URLs visited by the task.
+        unique_url_paths: Deduplicated URLs collapsed by host and path.
+        unique_tools: Sorted unique tool names used by the task.
+        tool_sequence: Ordered tool call sequence.
+        max_repeat_tool: Tool with the longest consecutive repetition streak.
+        max_repeat_count: Length of the longest repetition streak.
+        errors: Number of steps with a recorded error.
+        error_rate: Fraction of steps that recorded an error.
+        total_duration_ms: Sum of step durations in milliseconds.
+        hallucinated_tools: Count of unknown-tool errors.
+        no_tools_steps: Count of steps that exposed zero tools.
+        site_name: Best-effort site or target label inferred from the task.
+        final_url: Last visited URL, if any.
+        timeout_like: Whether the run ended like a timeout or max-iteration stop.
+        error_kinds: Error counts bucketed by classifier label.
+        total_cost_usd: Sum of per-step costs in US dollars.
+        avg_cost_per_step: Average step cost in US dollars.
+        signal_metrics: Per-detector metrics returned by signal detectors.
+    """
+
     task: AgentTask
     unique_urls: list[str]
     unique_url_paths: list[str]
@@ -178,6 +202,15 @@ def extract_site_from_urlish(raw: str) -> str | None:
     lower = text.lower()
     if any(marker in lower for marker in NO_NAVIGATION_MARKERS):
         return "no-navigation"
+    if "://" not in text:
+        looks_like_host = (
+            "." in text
+            or "/" in text
+            or text.lower() == "localhost"
+            or is_ip_address(text.split("/", 1)[0].split(":", 1)[0])
+        )
+        if not looks_like_host:
+            return None
     parsed = urlparse(text if "://" in text else f"http://{text}")
     host = parsed.netloc or parsed.path.split("/")[0]
     if not host:
@@ -327,6 +360,21 @@ def analyze_task(
     task: AgentTask,
     detectors: list[SignalDetector] | None = None,
 ) -> TaskAnalysis:
+    """Analyze one task and compute core plus detector-derived metrics.
+
+    Args:
+        task: Task to analyze.
+        detectors: Optional detector instances. When omitted, built-in and
+            installed detectors are discovered automatically.
+
+    Returns:
+        TaskAnalysis: Computed metrics and summaries for the task.
+
+    Example:
+        >>> analysis = analyze_task(task)
+        >>> analysis.metrics()["step_count"]
+        4
+    """
     core = _compute_core_metrics(task)
     signal_metrics = run_detection(task, detectors)
     return TaskAnalysis(task=task, signal_metrics=signal_metrics, **core)
@@ -336,6 +384,15 @@ def analyze_tasks(
     tasks: list[AgentTask],
     detectors: list[SignalDetector] | None = None,
 ) -> dict[str, TaskAnalysis]:
+    """Analyze multiple tasks and index results by task id.
+
+    Args:
+        tasks: Tasks to analyze.
+        detectors: Optional shared detector instances.
+
+    Returns:
+        dict[str, TaskAnalysis]: Per-task analyses keyed by ``task_id``.
+    """
     return {task.task_id: analyze_task(task, detectors=detectors) for task in tasks}
 
 
@@ -375,6 +432,16 @@ def load_adapted_tasks(
     format: str = "auto",
     days: int | None = None,
 ) -> list[AgentTask]:
+    """Load tasks through a framework adapter.
+
+    Args:
+        log_dir: Directory or single ``.jsonl`` trace file to load.
+        format: Explicit adapter format or ``"auto"`` for auto-detection.
+        days: Optional number of most recent ``.jsonl`` files to include.
+
+    Returns:
+        list[AgentTask]: Normalized tasks reconstructed from adapted steps.
+    """
     from .adapters import adapt
 
     root = Path(log_dir)
@@ -391,6 +458,20 @@ def load_adapted_tasks(
 
 
 def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
+    """Load native agent-xray JSONL traces into normalized tasks.
+
+    Args:
+        log_dir: Directory or single ``.jsonl`` trace file to load.
+        days: Optional number of most recent ``.jsonl`` files to include.
+
+    Returns:
+        list[AgentTask]: Parsed tasks ordered by ``task_id``.
+
+    Example:
+        >>> tasks = load_tasks("./traces")
+        >>> isinstance(tasks, list)
+        True
+    """
     root = Path(log_dir)
     if not root.exists():
         raise FileNotFoundError(f"log path does not exist: {root}")
@@ -447,6 +528,18 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
 
 
 def resolve_task(tasks: list[AgentTask], query: str) -> AgentTask:
+    """Resolve a task by exact id, prefix, or unique substring.
+
+    Args:
+        tasks: Candidate tasks to search.
+        query: Exact id, unique prefix, or unique substring match.
+
+    Returns:
+        AgentTask: The uniquely matched task.
+
+    Raises:
+        KeyError: If the query does not resolve to exactly one task.
+    """
     by_id = {task.task_id: task for task in tasks}
     if query in by_id:
         return by_id[query]

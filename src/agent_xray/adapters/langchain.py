@@ -1,3 +1,9 @@
+"""Adapter for LangChain callback event traces.
+
+This module handles JSONL traces containing ``agent_action`` and
+``on_tool_start``/``on_tool_end`` callback events.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,6 +44,15 @@ def _tool_output(payload: dict[str, Any]) -> str | None:
 
 
 def load(path: Path) -> list[AgentStep]:
+    """Load a LangChain callback trace file.
+
+    Args:
+        path: JSONL file containing LangChain callback events.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
+
     steps: list[AgentStep] = []
     starts_by_run: dict[str, dict[str, Any]] = {}
     ends_by_run: dict[str, dict[str, Any]] = {}

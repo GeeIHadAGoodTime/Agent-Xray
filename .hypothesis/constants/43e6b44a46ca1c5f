@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\__init__.py
+# hypothesis_version: 6.142.4
+
+[0.0, 1.0, 1000, 8192, '"resourceSpans"', '"scopeSpans"', '#', '+00:00', '//', 'FORMATS', 'Z', '_coerce_text', '_duration_ms', '_iter_json_objects', '_safe_json_dict', '_usage_metadata', 'adapt', 'agent_action', 'agent_role', 'anthropic', 'arguments', 'assistant', 'auto', 'autodetect', 'completion_tokens', 'content', 'crew_', 'crewai', 'duration_ms', 'event', 'format_info', 'function', 'generic', 'ignore', 'input_tokens', 'langchain', 'latency_ms', 'load', 'name', 'object', 'on_llm_end', 'on_llm_start', 'on_tool_end', 'on_tool_start', 'openai', 'openai_chat', 'otel', 'output_tokens', 'prompt_tokens', 'role', 'run', 'run_step', 'task_id', 'text', 'tool', 'tool_call_id', 'tool_calls', 'tool_name', 'tool_result', 'tool_use', 'total_duration_ms', 'type', 'utf-8', 'value']

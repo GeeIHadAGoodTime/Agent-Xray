@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\signals\multi_agent.py
+# hypothesis_version: 6.142.4
+
+['accepted', 'agent', 'agent_depth', 'agent_id', 'agent_name', 'agent_role', 'assign_agent', 'assigned', 'completed', 'delegate', 'delegate_task', 'delegate_to', 'delegation_count', 'delegation_depth', 'delegation_target', 'depth', 'done', 'finished', 'handoff', 'handoff_to', 'handoff_to_agent', 'is_delegation', 'is_handoff', 'is_sub_agent_call', 'level', 'max_delegation_depth', 'multi_agent', 'nesting_level', 'queued', 'recipient', 'resolved', 'role', 'route_task', 'run_sub_agent', 'send_input', 'spawn', 'spawn_agent', 'sub_agent', 'success', 'target', 'target_agent', 'transfer_to_agent', 'unique_agents', 'worker']

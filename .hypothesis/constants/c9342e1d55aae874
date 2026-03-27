@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\diagnose.py
+# hypothesis_version: 6.142.4
+
+[':', '=', 'Custom root cause.', 'FIX PLAN', 'Unknown', 'approval_block', 'browser', 'count', 'default', 'description', 'early_abort', 'environment_drift', 'evidence', 'fix_hint', 'impact', 'investigate_task', 'label', 'model_limit', 'payment', 'planning', 'priority', 'prompt builder', 'prompt_bug', 'prompt_section=', 'reasoning_bug', 'research', 'root_cause', 'routing_bug', 'severity', 'spin', 'stuck_loop', 'targets', 'tool_bug', 'tool_selection_bug', 'tools', 'verify_command']

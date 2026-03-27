@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
+from agent_xray import __version__
 from agent_xray.cli import (
     build_parser,
     cmd_analyze,
@@ -13,6 +15,7 @@ from agent_xray.cli import (
     cmd_diff,
     cmd_flywheel,
     cmd_grade,
+    cmd_quickstart,
     cmd_surface,
     cmd_tree,
 )
@@ -214,3 +217,66 @@ def test_cli_help_exits_zero() -> None:
     with pytest.raises(SystemExit) as excinfo:
         parser.parse_args(["--help"])
     assert excinfo.value.code == 0
+
+
+def test_cli_version_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["--version"])
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 0
+    assert captured.out.strip() == f"agent-xray {__version__}"
+
+
+def test_cli_parser_accepts_top_level_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--verbose", "--no-color", "quickstart"])
+    assert args.command == "quickstart"
+    assert args.verbose is True
+    assert args.no_color is True
+
+
+def test_analyze_help_includes_example(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["analyze", "--help"])
+    assert "Example: agent-xray analyze ./traces --rules browser_flow --json" in capsys.readouterr().out
+
+
+def test_cmd_analyze_missing_dir_shows_quickstart_hint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = cmd_analyze(
+        Namespace(
+            log_dir=tmp_path / "missing-traces",
+            days=None,
+            rules=None,
+            format="auto",
+            json=False,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Directory not found:" in captured.out
+    assert "Run agent-xray quickstart for a demo." in captured.out
+
+
+def test_cmd_quickstart_runs_and_creates_demo(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    result = cmd_quickstart(Namespace(verbose=False, quiet=False, no_color=True))
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "QUICKSTART" in captured.out
+    assert "Workflow: grade -> surface broken-task -> report health" in captured.out
+    match = re.search(r"Quickstart traces: (.+)", captured.out)
+    assert match is not None
+    demo_dir = Path(match.group(1).strip())
+    assert demo_dir.exists()
+    assert any(demo_dir.glob("*.jsonl"))

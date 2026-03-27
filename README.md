@@ -68,9 +68,19 @@ pip install "agent-xray[all]"
 
 `[all]` pulls in the optional runner, TUI, OTel adapter, lint, typecheck, and test dependencies.
 
+## Documentation
+
+- [5-minute tutorial](docs/tutorial.md)
+- [Architecture overview](docs/architecture.md)
+- [Custom rules guide](docs/custom-rules.md)
+- [Contribution guide](CONTRIBUTING.md)
+
 ## Quick Start
 
 ```bash
+# Create a demo trace directory with bundled sample data
+agent-xray quickstart
+
 # Analyze a directory of traces
 agent-xray analyze ./traces
 
@@ -94,6 +104,52 @@ agent-xray tui ./traces
 ```
 
 Set `AGENT_XRAY_LOG_DIR` if you want task-centric commands like `surface`, `reasoning`, `tree`, `capture`, and `replay` to default to one shared trace directory.
+
+## Bundled Example
+
+If you want a zero-setup demo, run:
+
+```bash
+agent-xray quickstart
+```
+
+If you want to see the native trace format directly, paste this inline example into `./traces/demo.jsonl`:
+
+```bash
+mkdir -p traces
+cat > traces/demo.jsonl <<'JSONL'
+{"task_id":"demo-checkout","step":1,"tool_name":"browser_navigate","tool_input":{"url":"https://demo-shop.example.test"},"tool_result":"Homepage loaded.","timestamp":"2026-03-27T12:00:00Z","duration_ms":900,"user_text":"Buy the blue mug on demo-shop.example.test and stop once checkout is visible.","task_category":"commerce","model_name":"gpt-5-mini","temperature":0.0,"tool_choice":"auto","tools_available":["browser_navigate","browser_click","browser_fill_ref","browser_snapshot"],"message_count":1,"llm_reasoning":"Open the storefront first.","page_url":"https://demo-shop.example.test/"}
+{"task_id":"demo-checkout","step":2,"tool_name":"browser_click","tool_input":{"ref":"product-blue-mug"},"tool_result":"Product page opened.","timestamp":"2026-03-27T12:00:04Z","duration_ms":420,"model_name":"gpt-5-mini","temperature":0.0,"tool_choice":"auto","tools_available":["browser_click","browser_fill_ref","browser_snapshot"],"message_count":2,"llm_reasoning":"Open the mug detail page.","page_url":"https://demo-shop.example.test/products/blue-mug"}
+{"task_id":"demo-checkout","step":3,"tool_name":"browser_fill_ref","tool_input":{"ref":"shipping-form","fields":["email","zip"],"text":"alex@example.test 60601"},"tool_result":"Shipping details accepted.","timestamp":"2026-03-27T12:00:09Z","duration_ms":610,"model_name":"gpt-5-mini","temperature":0.0,"tool_choice":"auto","tools_available":["browser_click","browser_fill_ref","browser_snapshot"],"message_count":3,"llm_reasoning":"Provide the minimum details required to continue.","page_url":"https://demo-shop.example.test/checkout"}
+{"task_id":"demo-checkout","step":4,"tool_name":"browser_snapshot","tool_input":{},"tool_result":"Checkout page is visible with the order summary.","timestamp":"2026-03-27T12:00:12Z","duration_ms":250,"model_name":"gpt-5-mini","temperature":0.0,"tool_choice":"auto","tools_available":["browser_click","browser_snapshot"],"message_count":4,"llm_reasoning":"Verify that checkout is now visible.","page_url":"https://demo-shop.example.test/checkout"}
+{"event":"task_complete","task_id":"demo-checkout","status":"success","final_answer":"Checkout page is open for the blue mug.","total_steps":4,"total_duration_s":2.18,"timestamp":"2026-03-27T12:00:12Z"}
+JSONL
+
+agent-xray analyze ./traces
+agent-xray surface demo-checkout --log-dir ./traces
+agent-xray grade ./traces
+```
+
+Expected summaries:
+
+```text
+Analyzed 1 task(s) with rules=default
+{'GOLDEN': 0, 'GOOD': 1, 'OK': 0, 'WEAK': 0, 'BROKEN': 0}
+```
+
+```text
+GRADE SUMMARY
+Tasks: 1
+Rules: default
+
+  GOLDEN: 0
+  GOOD: 1
+  OK: 0
+  WEAK: 0
+  BROKEN: 0
+```
+
+The [tutorial](docs/tutorial.md) includes the full expected `surface` output and explains how to read it.
 
 ## What Is A Decision Surface?
 
@@ -218,6 +274,16 @@ JSONL / framework trace files
   -> replay.py         fixture-vs-run comparison
   -> flywheel.py       end-to-end quality loop and baseline comparison
   -> comparison.py     model-vs-model divergence analysis
+```
+
+## Badge Placeholders
+
+If you are forking `agent-xray` or copying the README structure into another project, replace `<owner>` and `<repo>` in the following badge templates:
+
+```md
+[![PyPI](https://img.shields.io/pypi/v/agent-xray)](https://pypi.org/project/agent-xray/)
+[![CI](https://img.shields.io/github/actions/workflow/status/<owner>/<repo>/ci.yml?branch=main)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/<owner>/<repo>)](https://codecov.io/gh/<owner>/<repo>)
 ```
 
 ## Contributing

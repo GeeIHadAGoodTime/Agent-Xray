@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\replay.py
+# hypothesis_version: 6.142.4
+
+[0.0, 0.4, 'CART', 'CHECKOUT', 'FORM_FILL', 'IMPROVED', 'PAYMENT', 'REGRESSION', 'STABLE', 'UNMATCHED', 'current_milestones', 'current_steps', 'current_task_id', 'detail', 'fixture_task_id', 'golden_milestones', 'golden_steps', 'milestones_reached', 'site', 'step_delta', 'task_id', 'total_steps', 'user_text', 'utf-8', 'verdict']

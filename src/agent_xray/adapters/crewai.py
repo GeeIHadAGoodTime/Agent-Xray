@@ -1,3 +1,9 @@
+"""Adapter for CrewAI task and tool execution traces.
+
+This module handles CrewAI-flavored JSONL logs that expose agent role metadata
+alongside tool execution inputs and outputs.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +13,15 @@ from . import _coerce_text, _iter_json_objects, _normalize_tool_input
 
 
 def load(path: Path) -> list[AgentStep]:
+    """Load a CrewAI trace file.
+
+    Args:
+        path: JSONL file containing CrewAI task and tool records.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
+
     steps: list[AgentStep] = []
     for _, payload in _iter_json_objects(path):
         tool_name = payload.get("tool") or payload.get("tool_name")

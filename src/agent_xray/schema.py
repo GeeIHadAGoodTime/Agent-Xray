@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+SCHEMA_VERSION = "1.0"
 
 GRADE_ORDER = {
     "BROKEN": 0,
@@ -21,6 +25,7 @@ CORE_STEP_FIELDS = {
     "duration_ms",
     "timestamp",
     "ts",
+    "schema_version",
 }
 MODEL_FIELD_NAMES = {
     "model_name",
@@ -150,7 +155,28 @@ def _merge_extensions(
 
 @dataclass(slots=True)
 class ModelContext:
-    """LLM call metadata including compaction and prompt details."""
+    """Structured metadata captured for one model call.
+
+    Attributes:
+        model_name: Model identifier recorded for the step.
+        temperature: Sampling temperature used by the model call.
+        tool_choice: Tool-choice mode or explicit tool override.
+        context_window: Maximum context window exposed to the model.
+        context_usage_pct: Fraction of the context window consumed.
+        compaction_count: Number of prompt compactions applied.
+        input_tokens: Input token count attributed to the step.
+        output_tokens: Output token count attributed to the step.
+        cost_usd: Estimated per-step cost in US dollars.
+        compaction_method: Name of the compaction strategy, if any.
+        compaction_messages_before: Message count before compaction.
+        compaction_messages_after: Message count after compaction.
+        compaction_summary_preview: Short preview of the compaction summary.
+        trimmed_messages: Number of messages trimmed from the prompt.
+        fifo_evicted_messages: Number of FIFO-evicted messages.
+        screenshots_evicted: Number of screenshots evicted from context.
+        prompt_variant: Short label for the active prompt variant.
+        prompt_variant_full: Fully qualified prompt variant identifier.
+    """
 
     model_name: str | None = None
     temperature: float | None = None
@@ -174,7 +200,17 @@ class ModelContext:
 
 @dataclass(slots=True)
 class ToolContext:
-    """Tool availability and filtering metadata."""
+    """Metadata describing the tools visible to the agent at a step.
+
+    Attributes:
+        tools_available: Tool names exposed to the model.
+        system_prompt_hash: Stable hash of the effective system prompt.
+        message_count: Number of messages currently in the prompt history.
+        rejected_tools: Tools removed by routing or policy logic.
+        focused_set: Name of the focused tool subset, if any.
+        tools_available_count: Explicit tool count from the source trace.
+        conversation_turn_count: Number of conversational turns represented.
+    """
 
     tools_available: list[str] | None = None
     system_prompt_hash: str | None = None
@@ -187,7 +223,19 @@ class ToolContext:
 
 @dataclass(slots=True)
 class ReasoningContext:
-    """LLM reasoning, corrections, and dynamic injections."""
+    """Reasoning metadata and runtime interventions for a step.
+
+    Attributes:
+        llm_reasoning: Captured reasoning or scratchpad text.
+        correction_messages: Corrective messages injected before the decision.
+        spin_intervention: Loop-breaking intervention text, if any.
+        error_registry_context: Recent error context surfaced to the model.
+        continuation_nudge: Prompt fragment nudging the model to continue.
+        force_termination: Forced-stop instruction injected into context.
+        hard_loop_breaker: Strong loop-breaker message from the runner.
+        consecutive_failure_warning: Warning about repeated recent failures.
+        approval_path: Approval-policy path relevant to the step.
+    """
 
     llm_reasoning: str | None = None
     correction_messages: list[str] | None = None
@@ -202,7 +250,15 @@ class ReasoningContext:
 
 @dataclass(slots=True)
 class BrowserContext:
-    """Browser/UI agent metadata."""
+    """Browser-specific state captured alongside a step.
+
+    Attributes:
+        page_url: Current page URL seen by the browser agent.
+        had_screenshot: Whether a screenshot was available.
+        snapshot_compressed: Whether the snapshot was compressed.
+        had_screenshot_image: Whether an image screenshot was attached.
+        snapshot_pre_compress_len: Snapshot size before compression.
+    """
 
     page_url: str | None = None
     had_screenshot: bool | None = None
@@ -211,13 +267,162 @@ class BrowserContext:
     snapshot_pre_compress_len: int | None = None
 
 
+MODEL_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
+    "model_name": _coerce_optional_str,
+    "temperature": _coerce_optional_float,
+    "tool_choice": _coerce_optional_str,
+    "context_window": _coerce_optional_int,
+    "context_usage_pct": _coerce_optional_float,
+    "compaction_count": _coerce_optional_int,
+    "input_tokens": _coerce_optional_int,
+    "output_tokens": _coerce_optional_int,
+    "cost_usd": _coerce_optional_float,
+    "compaction_method": _coerce_optional_str,
+    "compaction_messages_before": _coerce_optional_int,
+    "compaction_messages_after": _coerce_optional_int,
+    "compaction_summary_preview": _coerce_optional_str,
+    "trimmed_messages": _coerce_optional_int,
+    "fifo_evicted_messages": _coerce_optional_int,
+    "screenshots_evicted": _coerce_optional_int,
+    "prompt_variant": _coerce_optional_str,
+    "prompt_variant_full": _coerce_optional_str,
+}
+TOOL_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
+    "tools_available": _coerce_list_of_str,
+    "system_prompt_hash": _coerce_optional_str,
+    "message_count": _coerce_optional_int,
+    "rejected_tools": _coerce_list_of_str,
+    "focused_set": _coerce_optional_str,
+    "tools_available_count": _coerce_optional_int,
+    "conversation_turn_count": _coerce_optional_int,
+}
+REASONING_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
+    "llm_reasoning": _coerce_optional_str,
+    "correction_messages": _coerce_list_of_str,
+    "spin_intervention": _coerce_optional_str,
+    "error_registry_context": _coerce_optional_str,
+    "continuation_nudge": _coerce_optional_str,
+    "force_termination": _coerce_optional_str,
+    "hard_loop_breaker": _coerce_optional_str,
+    "consecutive_failure_warning": _coerce_optional_str,
+    "approval_path": _coerce_optional_str,
+}
+BROWSER_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
+    "page_url": _coerce_optional_str,
+    "had_screenshot": _coerce_optional_bool,
+    "snapshot_compressed": _coerce_optional_bool,
+    "had_screenshot_image": _coerce_optional_bool,
+    "snapshot_pre_compress_len": _coerce_optional_int,
+}
+CONTEXT_FACTORIES = {
+    "model": ModelContext,
+    "tools": ToolContext,
+    "reasoning": ReasoningContext,
+    "browser": BrowserContext,
+}
+CONTEXT_FIELD_COERCIONS = {
+    "model": MODEL_CONTEXT_COERCIONS,
+    "tools": TOOL_CONTEXT_COERCIONS,
+    "reasoning": REASONING_CONTEXT_COERCIONS,
+    "browser": BROWSER_CONTEXT_COERCIONS,
+}
+FIELD_MAP: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    **{
+        field_name: ("model", coercion_fn)
+        for field_name, coercion_fn in MODEL_CONTEXT_COERCIONS.items()
+    },
+    **{
+        field_name: ("tools", coercion_fn)
+        for field_name, coercion_fn in TOOL_CONTEXT_COERCIONS.items()
+    },
+    "tools_available_names": ("tools", _coerce_list_of_str),
+    **{
+        field_name: ("reasoning", coercion_fn)
+        for field_name, coercion_fn in REASONING_CONTEXT_COERCIONS.items()
+    },
+    **{
+        field_name: ("browser", coercion_fn)
+        for field_name, coercion_fn in BROWSER_CONTEXT_COERCIONS.items()
+    },
+}
+FIELD_ALIASES = {
+    "tools_available_names": "tools_available",
+}
+
+
+def _build_context(
+    context_name: str, payload: dict[str, Any]
+) -> ModelContext | ToolContext | ReasoningContext | BrowserContext | None:
+    if not _has_context_values(payload):
+        return None
+    coerced_payload = {
+        field_name: coercion_fn(payload.get(field_name))
+        for field_name, coercion_fn in CONTEXT_FIELD_COERCIONS[context_name].items()
+    }
+    return CONTEXT_FACTORIES[context_name](**coerced_payload)
+
+
+def _resolve_schema_version(payload: dict[str, Any], *, scope: str) -> str:
+    schema_version = _coerce_optional_str(payload.get("schema_version")) or SCHEMA_VERSION
+    if schema_version != SCHEMA_VERSION:
+        warnings.warn(
+            (
+                f"{scope} schema_version '{schema_version}' does not match "
+                f"current schema version '{SCHEMA_VERSION}'."
+            ),
+            stacklevel=2,
+        )
+    return schema_version
+
+
+def _validate_task_id(payload: dict[str, Any]) -> str:
+    if "task_id" not in payload:
+        return str(payload.get("task_id", ""))
+    task_id = _coerce_optional_str(payload.get("task_id"))
+    if task_id is None or not task_id.strip():
+        raise ValueError("task_id must be a non-empty string when provided")
+    return task_id
+
+
+def _validate_step(payload: dict[str, Any]) -> int:
+    if "step" not in payload:
+        return 0
+    step = _coerce_optional_int(payload.get("step"))
+    if step is None or step < 0:
+        raise ValueError("step must be a non-negative integer when provided")
+    return step
+
+
 @dataclass(slots=True, init=False)
 class AgentStep:
-    """Universal agent step record.
+    """Normalized record for a single agent step and its typed sub-contexts.
 
-    Core fields (8): task_id, step, tool_name, tool_input plus 4 optional.
-    Extensions: typed contexts for model, tools, reasoning, browser.
-    Catch-all: extensions dict for anything else.
+    Args:
+        task_id: Stable task identifier used to group related steps.
+        step: Step index within the task.
+        tool_name: Tool invoked by the agent.
+        tool_input: Structured tool input payload.
+        tool_result: Optional textual tool output.
+        error: Optional error message for the step.
+        duration_ms: Step duration in milliseconds.
+        timestamp: Step timestamp as a string.
+        schema_version: Schema version for serialized compatibility.
+        model: Pre-built model metadata for the step.
+        tools: Pre-built tool metadata for the step.
+        reasoning: Pre-built reasoning metadata for the step.
+        browser: Pre-built browser metadata for the step.
+        extensions: Additional non-schema fields preserved from the trace.
+
+    Example:
+        >>> step = AgentStep(
+        ...     task_id="checkout-1",
+        ...     step=1,
+        ...     tool_name="browser_navigate",
+        ...     tool_input={"url": "https://shop.example.test"},
+        ...     page_url="https://shop.example.test",
+        ... )
+        >>> step.page_url
+        'https://shop.example.test'
     """
 
     task_id: str
@@ -228,6 +433,7 @@ class AgentStep:
     error: str | None = None
     duration_ms: int | None = None
     timestamp: str | None = None
+    schema_version: str = SCHEMA_VERSION
     model: ModelContext | None = None
     tools: ToolContext | None = None
     reasoning: ReasoningContext | None = None
@@ -244,6 +450,7 @@ class AgentStep:
         error: str | None = None,
         duration_ms: int | None = None,
         timestamp: str | None = None,
+        schema_version: str = SCHEMA_VERSION,
         model: ModelContext | None = None,
         tools: ToolContext | None = None,
         reasoning: ReasoningContext | None = None,
@@ -277,6 +484,7 @@ class AgentStep:
         self.error = _coerce_optional_str(error)
         self.duration_ms = _coerce_optional_int(duration_ms)
         self.timestamp = _coerce_optional_str(timestamp)
+        self.schema_version = _coerce_optional_str(schema_version) or SCHEMA_VERSION
         self.model = self._merge_model_context(
             model=model,
             model_name=model_name,
@@ -338,28 +546,7 @@ class AgentStep:
         for key, value in overrides.items():
             if value is not None:
                 values[key] = value
-        if not _has_context_values(values):
-            return None
-        return ModelContext(
-            model_name=_coerce_optional_str(values.get("model_name")),
-            temperature=_coerce_optional_float(values.get("temperature")),
-            tool_choice=_coerce_optional_str(values.get("tool_choice")),
-            context_window=_coerce_optional_int(values.get("context_window")),
-            context_usage_pct=_coerce_optional_float(values.get("context_usage_pct")),
-            compaction_count=_coerce_optional_int(values.get("compaction_count")),
-            input_tokens=_coerce_optional_int(values.get("input_tokens")),
-            output_tokens=_coerce_optional_int(values.get("output_tokens")),
-            cost_usd=_coerce_optional_float(values.get("cost_usd")),
-            compaction_method=_coerce_optional_str(values.get("compaction_method")),
-            compaction_messages_before=_coerce_optional_int(values.get("compaction_messages_before")),
-            compaction_messages_after=_coerce_optional_int(values.get("compaction_messages_after")),
-            compaction_summary_preview=_coerce_optional_str(values.get("compaction_summary_preview")),
-            trimmed_messages=_coerce_optional_int(values.get("trimmed_messages")),
-            fifo_evicted_messages=_coerce_optional_int(values.get("fifo_evicted_messages")),
-            screenshots_evicted=_coerce_optional_int(values.get("screenshots_evicted")),
-            prompt_variant=_coerce_optional_str(values.get("prompt_variant")),
-            prompt_variant_full=_coerce_optional_str(values.get("prompt_variant_full")),
-        )
+        return _build_context("model", values)
 
     @staticmethod
     def _merge_tool_context(
@@ -378,17 +565,7 @@ class AgentStep:
         for key, value in overrides.items():
             if value is not None:
                 values[key] = value
-        if not _has_context_values(values):
-            return None
-        return ToolContext(
-            tools_available=_coerce_list_of_str(values.get("tools_available")),
-            system_prompt_hash=_coerce_optional_str(values.get("system_prompt_hash")),
-            message_count=_coerce_optional_int(values.get("message_count")),
-            rejected_tools=_coerce_list_of_str(values.get("rejected_tools")),
-            focused_set=_coerce_optional_str(values.get("focused_set")),
-            tools_available_count=_coerce_optional_int(values.get("tools_available_count")),
-            conversation_turn_count=_coerce_optional_int(values.get("conversation_turn_count")),
-        )
+        return _build_context("tools", values)
 
     @staticmethod
     def _merge_reasoning_context(
@@ -407,19 +584,7 @@ class AgentStep:
         for key, value in overrides.items():
             if value is not None:
                 values[key] = value
-        if not _has_context_values(values):
-            return None
-        return ReasoningContext(
-            llm_reasoning=_coerce_optional_str(values.get("llm_reasoning")),
-            correction_messages=_coerce_list_of_str(values.get("correction_messages")),
-            spin_intervention=_coerce_optional_str(values.get("spin_intervention")),
-            error_registry_context=_coerce_optional_str(values.get("error_registry_context")),
-            continuation_nudge=_coerce_optional_str(values.get("continuation_nudge")),
-            force_termination=_coerce_optional_str(values.get("force_termination")),
-            hard_loop_breaker=_coerce_optional_str(values.get("hard_loop_breaker")),
-            consecutive_failure_warning=_coerce_optional_str(values.get("consecutive_failure_warning")),
-            approval_path=_coerce_optional_str(values.get("approval_path")),
-        )
+        return _build_context("reasoning", values)
 
     @staticmethod
     def _merge_browser_context(
@@ -438,176 +603,63 @@ class AgentStep:
         for key, value in overrides.items():
             if value is not None:
                 values[key] = value
-        if not _has_context_values(values):
-            return None
-        return BrowserContext(
-            page_url=_coerce_optional_str(values.get("page_url")),
-            had_screenshot=_coerce_optional_bool(values.get("had_screenshot")),
-            snapshot_compressed=_coerce_optional_bool(values.get("snapshot_compressed")),
-            had_screenshot_image=_coerce_optional_bool(values.get("had_screenshot_image")),
-            snapshot_pre_compress_len=_coerce_optional_int(values.get("snapshot_pre_compress_len")),
-        )
+        return _build_context("browser", values)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> AgentStep:
-        model_payload = _coerce_dict(payload.get("model"))
-        tools_payload = _coerce_dict(payload.get("tools"))
-        reasoning_payload = _coerce_dict(payload.get("reasoning"))
-        browser_payload = _coerce_dict(payload.get("browser"))
+        """Build an :class:`AgentStep` from flat or nested serialized data.
 
-        if "model_name" in payload and "model_name" not in model_payload:
-            model_payload["model_name"] = payload.get("model_name")
-        if "temperature" in payload and "temperature" not in model_payload:
-            model_payload["temperature"] = payload.get("temperature")
-        if "tool_choice" in payload and "tool_choice" not in model_payload:
-            model_payload["tool_choice"] = payload.get("tool_choice")
-        if "context_window" in payload and "context_window" not in model_payload:
-            model_payload["context_window"] = payload.get("context_window")
-        if "context_usage_pct" in payload and "context_usage_pct" not in model_payload:
-            model_payload["context_usage_pct"] = payload.get("context_usage_pct")
-        if "compaction_count" in payload and "compaction_count" not in model_payload:
-            model_payload["compaction_count"] = payload.get("compaction_count")
-        if "input_tokens" in payload and "input_tokens" not in model_payload:
-            model_payload["input_tokens"] = payload.get("input_tokens")
-        if "output_tokens" in payload and "output_tokens" not in model_payload:
-            model_payload["output_tokens"] = payload.get("output_tokens")
-        if "cost_usd" in payload and "cost_usd" not in model_payload:
-            model_payload["cost_usd"] = payload.get("cost_usd")
-        for _mf in (
-            "compaction_method", "compaction_messages_before", "compaction_messages_after",
-            "compaction_summary_preview", "trimmed_messages", "fifo_evicted_messages",
-            "screenshots_evicted", "prompt_variant", "prompt_variant_full",
-        ):
-            if _mf in payload and _mf not in model_payload:
-                model_payload[_mf] = payload.get(_mf)
+        Args:
+            payload: Raw step payload. Nested context objects are accepted under
+                ``model``, ``tools``, ``reasoning``, and ``browser``. Legacy flat
+                fields are hoisted into those contexts automatically.
 
-        tools_available = payload.get("tools_available")
-        if tools_available is None:
-            tools_available = payload.get("tools_available_names")
-        if tools_available is not None and "tools_available" not in tools_payload:
-            tools_payload["tools_available"] = tools_available
-        if "system_prompt_hash" in payload and "system_prompt_hash" not in tools_payload:
-            tools_payload["system_prompt_hash"] = payload.get("system_prompt_hash")
-        if "message_count" in payload and "message_count" not in tools_payload:
-            tools_payload["message_count"] = payload.get("message_count")
-        for _tf in ("rejected_tools", "focused_set", "tools_available_count", "conversation_turn_count"):
-            if _tf in payload and _tf not in tools_payload:
-                tools_payload[_tf] = payload.get(_tf)
+        Returns:
+            A normalized ``AgentStep`` instance.
 
-        if "llm_reasoning" in payload and "llm_reasoning" not in reasoning_payload:
-            reasoning_payload["llm_reasoning"] = payload.get("llm_reasoning")
-        if "correction_messages" in payload and "correction_messages" not in reasoning_payload:
-            reasoning_payload["correction_messages"] = payload.get("correction_messages")
-        if "spin_intervention" in payload and "spin_intervention" not in reasoning_payload:
-            reasoning_payload["spin_intervention"] = payload.get("spin_intervention")
-        for _rf in (
-            "error_registry_context", "continuation_nudge", "force_termination",
-            "hard_loop_breaker", "consecutive_failure_warning", "approval_path",
-        ):
-            if _rf in payload and _rf not in reasoning_payload:
-                reasoning_payload[_rf] = payload.get(_rf)
+        Example:
+            >>> step = AgentStep.from_dict(
+            ...     {"task_id": "task-1", "step": "2", "tool_name": "respond", "tool_input": {}}
+            ... )
+            >>> step.step
+            2
+        """
+        context_payloads = {
+            context_name: _coerce_dict(payload.get(context_name))
+            for context_name in CONTEXT_FACTORIES
+        }
+        for field_name, (target_context, coercion_fn) in FIELD_MAP.items():
+            if field_name not in payload:
+                continue
+            target_payload = context_payloads[target_context]
+            target_field = FIELD_ALIASES.get(field_name, field_name)
+            if target_field not in target_payload:
+                target_payload[target_field] = coercion_fn(payload.get(field_name))
 
-        if "page_url" in payload and "page_url" not in browser_payload:
-            browser_payload["page_url"] = payload.get("page_url")
-        if "had_screenshot" in payload and "had_screenshot" not in browser_payload:
-            browser_payload["had_screenshot"] = payload.get("had_screenshot")
         if (
             "had_screenshot_image" in payload
-            and "had_screenshot" not in browser_payload
+            and "had_screenshot" not in context_payloads["browser"]
             and "had_screenshot" not in payload
         ):
-            browser_payload["had_screenshot"] = payload.get("had_screenshot_image")
-        if "had_screenshot_image" in payload and "had_screenshot_image" not in browser_payload:
-            browser_payload["had_screenshot_image"] = payload.get("had_screenshot_image")
-        if "snapshot_compressed" in payload and "snapshot_compressed" not in browser_payload:
-            browser_payload["snapshot_compressed"] = payload.get("snapshot_compressed")
-        if "snapshot_pre_compress_len" in payload and "snapshot_pre_compress_len" not in browser_payload:
-            browser_payload["snapshot_pre_compress_len"] = payload.get("snapshot_pre_compress_len")
+            context_payloads["browser"]["had_screenshot"] = _coerce_optional_bool(
+                payload.get("had_screenshot_image")
+            )
 
-        step_value = _coerce_optional_int(payload.get("step", 0))
         timestamp_value = payload.get("timestamp") or payload.get("ts")
         return cls(
-            task_id=str(payload.get("task_id", "")),
-            step=step_value if step_value is not None else 0,
+            task_id=_validate_task_id(payload),
+            step=_validate_step(payload),
             tool_name=str(payload.get("tool_name", "")),
             tool_input=_coerce_dict(payload.get("tool_input")),
             tool_result=_coerce_optional_str(payload.get("tool_result")),
             error=_coerce_optional_str(payload.get("error")),
             duration_ms=_coerce_optional_int(payload.get("duration_ms")),
             timestamp=_coerce_optional_str(timestamp_value),
-            model=(
-                None
-                if not _has_context_values(model_payload)
-                else ModelContext(
-                    model_name=_coerce_optional_str(model_payload.get("model_name")),
-                    temperature=_coerce_optional_float(model_payload.get("temperature")),
-                    tool_choice=_coerce_optional_str(model_payload.get("tool_choice")),
-                    context_window=_coerce_optional_int(model_payload.get("context_window")),
-                    context_usage_pct=_coerce_optional_float(
-                        model_payload.get("context_usage_pct")
-                    ),
-                    compaction_count=_coerce_optional_int(model_payload.get("compaction_count")),
-                    input_tokens=_coerce_optional_int(model_payload.get("input_tokens")),
-                    output_tokens=_coerce_optional_int(model_payload.get("output_tokens")),
-                    cost_usd=_coerce_optional_float(model_payload.get("cost_usd")),
-                    compaction_method=_coerce_optional_str(model_payload.get("compaction_method")),
-                    compaction_messages_before=_coerce_optional_int(model_payload.get("compaction_messages_before")),
-                    compaction_messages_after=_coerce_optional_int(model_payload.get("compaction_messages_after")),
-                    compaction_summary_preview=_coerce_optional_str(model_payload.get("compaction_summary_preview")),
-                    trimmed_messages=_coerce_optional_int(model_payload.get("trimmed_messages")),
-                    fifo_evicted_messages=_coerce_optional_int(model_payload.get("fifo_evicted_messages")),
-                    screenshots_evicted=_coerce_optional_int(model_payload.get("screenshots_evicted")),
-                    prompt_variant=_coerce_optional_str(model_payload.get("prompt_variant")),
-                    prompt_variant_full=_coerce_optional_str(model_payload.get("prompt_variant_full")),
-                )
-            ),
-            tools=(
-                None
-                if not _has_context_values(tools_payload)
-                else ToolContext(
-                    tools_available=_coerce_list_of_str(tools_payload.get("tools_available")),
-                    system_prompt_hash=_coerce_optional_str(
-                        tools_payload.get("system_prompt_hash")
-                    ),
-                    message_count=_coerce_optional_int(tools_payload.get("message_count")),
-                    rejected_tools=_coerce_list_of_str(tools_payload.get("rejected_tools")),
-                    focused_set=_coerce_optional_str(tools_payload.get("focused_set")),
-                    tools_available_count=_coerce_optional_int(tools_payload.get("tools_available_count")),
-                    conversation_turn_count=_coerce_optional_int(tools_payload.get("conversation_turn_count")),
-                )
-            ),
-            reasoning=(
-                None
-                if not _has_context_values(reasoning_payload)
-                else ReasoningContext(
-                    llm_reasoning=_coerce_optional_str(reasoning_payload.get("llm_reasoning")),
-                    correction_messages=_coerce_list_of_str(
-                        reasoning_payload.get("correction_messages")
-                    ),
-                    spin_intervention=_coerce_optional_str(
-                        reasoning_payload.get("spin_intervention")
-                    ),
-                    error_registry_context=_coerce_optional_str(reasoning_payload.get("error_registry_context")),
-                    continuation_nudge=_coerce_optional_str(reasoning_payload.get("continuation_nudge")),
-                    force_termination=_coerce_optional_str(reasoning_payload.get("force_termination")),
-                    hard_loop_breaker=_coerce_optional_str(reasoning_payload.get("hard_loop_breaker")),
-                    consecutive_failure_warning=_coerce_optional_str(reasoning_payload.get("consecutive_failure_warning")),
-                    approval_path=_coerce_optional_str(reasoning_payload.get("approval_path")),
-                )
-            ),
-            browser=(
-                None
-                if not _has_context_values(browser_payload)
-                else BrowserContext(
-                    page_url=_coerce_optional_str(browser_payload.get("page_url")),
-                    had_screenshot=_coerce_optional_bool(browser_payload.get("had_screenshot")),
-                    snapshot_compressed=_coerce_optional_bool(
-                        browser_payload.get("snapshot_compressed")
-                    ),
-                    had_screenshot_image=_coerce_optional_bool(browser_payload.get("had_screenshot_image")),
-                    snapshot_pre_compress_len=_coerce_optional_int(browser_payload.get("snapshot_pre_compress_len")),
-                )
-            ),
+            schema_version=_resolve_schema_version(payload, scope="AgentStep"),
+            model=_build_context("model", context_payloads["model"]),
+            tools=_build_context("tools", context_payloads["tools"]),
+            reasoning=_build_context("reasoning", context_payloads["reasoning"]),
+            browser=_build_context("browser", context_payloads["browser"]),
             extensions=_merge_extensions(payload, _coerce_dict(payload.get("extensions"))),
         )
 
@@ -708,11 +760,29 @@ class AgentStep:
         return self.model.prompt_variant if self.model else None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the step to a plain dictionary.
+
+        Returns:
+            dict[str, Any]: JSON-friendly data suitable for ``json.dumps()``
+            or round-tripping through :meth:`from_dict`.
+        """
         return asdict(self)
 
 
 @dataclass(slots=True)
 class TaskOutcome:
+    """Outcome metadata emitted once a task finishes.
+
+    Attributes:
+        task_id: Identifier of the completed task.
+        status: Outcome label such as ``success`` or ``failed``.
+        final_answer: Final answer text, if captured.
+        total_steps: Total step count for the task.
+        total_duration_s: Total task runtime in seconds.
+        timestamp: Completion timestamp.
+        metadata: Additional completion fields preserved from the trace.
+    """
+
     task_id: str
     status: str
     final_answer: str | None = None
@@ -723,6 +793,15 @@ class TaskOutcome:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> TaskOutcome:
+        """Build a ``TaskOutcome`` from a serialized payload.
+
+        Args:
+            payload: Raw outcome payload loaded from JSON.
+
+        Returns:
+            TaskOutcome: Parsed outcome data with unknown keys stored in
+            ``metadata``.
+        """
         metadata = {
             key: value
             for key, value in payload.items()
@@ -750,12 +829,36 @@ class TaskOutcome:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the outcome to a plain dictionary.
+
+        Returns:
+            dict[str, Any]: JSON-friendly outcome data.
+        """
         return asdict(self)
 
 
 @dataclass(slots=True)
 class AgentTask:
+    """Task-level container for ordered steps, metadata, and final outcome.
+
+    Attributes:
+        task_id: Stable task identifier.
+        schema_version: Schema version for the serialized task payload.
+        steps: Raw step records associated with the task.
+        task_text: Original user instruction, when available.
+        task_category: Optional task category label.
+        day: Day bucket derived from the source log path or timestamps.
+        metadata: Additional task-level metadata recovered while loading.
+        outcome: Terminal outcome metadata, if present.
+
+    Example:
+        >>> task = AgentTask.from_dict({"task_id": "task-1", "steps": []})
+        >>> task.task_id
+        'task-1'
+    """
+
     task_id: str
+    schema_version: str = SCHEMA_VERSION
     steps: list[AgentStep] = field(default_factory=list)
     task_text: str | None = None
     task_category: str | None = None
@@ -765,6 +868,7 @@ class AgentTask:
 
     @property
     def sorted_steps(self) -> list[AgentStep]:
+        """Return steps ordered by their ``step`` index."""
         return sorted(self.steps, key=lambda step: step.step)
 
     @classmethod
@@ -777,10 +881,26 @@ class AgentTask:
         task_category: str | None = None,
         metadata: dict[str, Any] | None = None,
         outcome: TaskOutcome | None = None,
+        schema_version: str = SCHEMA_VERSION,
     ) -> AgentTask:
+        """Build an ``AgentTask`` from an existing list of ``AgentStep`` objects.
+
+        Args:
+            steps: Step objects to associate with the task.
+            task_id: Optional explicit task identifier.
+            task_text: Optional user-facing task description.
+            task_category: Optional task category label.
+            metadata: Optional task-level metadata.
+            outcome: Optional terminal outcome for the task.
+            schema_version: Schema version for the resulting task.
+
+        Returns:
+            AgentTask: A normalized task containing the provided steps.
+        """
         resolved_task_id = task_id or (steps[0].task_id if steps else "task")
         return cls(
             task_id=resolved_task_id,
+            schema_version=_coerce_optional_str(schema_version) or SCHEMA_VERSION,
             steps=list(steps),
             task_text=task_text,
             task_category=task_category,
@@ -788,9 +908,56 @@ class AgentTask:
             outcome=outcome,
         )
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> AgentTask:
+        """Build an :class:`AgentTask` from serialized task data.
+
+        Args:
+            payload: Raw task payload including optional ``steps`` and ``outcome`` data.
+
+        Returns:
+            A normalized ``AgentTask`` instance.
+
+        Example:
+            >>> task = AgentTask.from_dict({"task_id": "task-1", "steps": []})
+            >>> task.schema_version
+            '1.0'
+        """
+        steps_payload = payload.get("steps")
+        steps = [
+            step if isinstance(step, AgentStep) else AgentStep.from_dict(_coerce_dict(step))
+            for step in steps_payload
+        ] if isinstance(steps_payload, list) else []
+
+        outcome_payload = payload.get("outcome")
+        if isinstance(outcome_payload, TaskOutcome):
+            outcome = outcome_payload
+        elif isinstance(outcome_payload, dict):
+            outcome = TaskOutcome.from_dict(outcome_payload)
+        else:
+            outcome = None
+
+        return cls(
+            task_id=_validate_task_id(payload),
+            schema_version=_resolve_schema_version(payload, scope="AgentTask"),
+            steps=steps,
+            task_text=_coerce_optional_str(payload.get("task_text")),
+            task_category=_coerce_optional_str(payload.get("task_category")),
+            day=_coerce_optional_str(payload.get("day")),
+            metadata=_coerce_dict(payload.get("metadata")),
+            outcome=outcome,
+        )
+
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the task with steps sorted by ``step``.
+
+        Returns:
+            dict[str, Any]: JSON-friendly task data including nested outcome
+            and step payloads.
+        """
         return {
             "task_id": self.task_id,
+            "schema_version": self.schema_version,
             "task_text": self.task_text,
             "task_category": self.task_category,
             "day": self.day,
@@ -873,6 +1040,7 @@ AGENT_STEP_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["task_id", "step", "tool_name", "tool_input"],
     "properties": {
+        "schema_version": {"type": "string"},
         "task_id": {"type": "string"},
         "step": {"type": "integer", "minimum": 0},
         "tool_name": {"type": "string"},
@@ -946,6 +1114,7 @@ AGENT_TASK_JSON_SCHEMA: dict[str, Any] = {
     "required": ["task_id", "steps"],
     "properties": {
         "task_id": {"type": "string"},
+        "schema_version": {"type": "string"},
         "task_text": {"type": ["string", "null"]},
         "task_category": {"type": ["string", "null"]},
         "day": {"type": ["string", "null"]},

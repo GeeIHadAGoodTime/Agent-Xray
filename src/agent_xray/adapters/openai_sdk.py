@@ -1,3 +1,9 @@
+"""Adapter for OpenAI SDK run/run_step trace payloads.
+
+This module handles OpenAI Responses or Agents-style JSONL traces that contain
+``run`` and ``run_step`` records, plus compatible assistant/tool call payloads.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,6 +26,15 @@ def _tool_result_from_call(tool_call: dict[str, Any]) -> str | None:
 
 
 def load(path: Path) -> list[AgentStep]:
+    """Load an OpenAI SDK trace file.
+
+    Args:
+        path: JSONL trace file emitted by OpenAI SDK instrumentation.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
+
     steps: list[AgentStep] = []
     pending_by_call_id: dict[str, AgentStep] = {}
     task_id = path.stem

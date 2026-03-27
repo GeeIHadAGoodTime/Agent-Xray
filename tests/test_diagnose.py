@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from agent_xray.diagnose import build_fix_plan, format_fix_plan_text
+from agent_xray.diagnose import (
+    build_fix_plan,
+    format_fix_plan_text,
+    get_target_resolver,
+    register_target_resolver,
+)
 from agent_xray.root_cause import RootCauseResult
 
 
@@ -48,6 +53,20 @@ def test_fix_plan_targets_exist():
     assert "tool handler" in plan[0].targets[0].lower()
 
 
+def test_custom_target_resolver_registration():
+    class CustomResolver:
+        def resolve(self, root_cause: str, evidence: list[str]) -> list[str]:
+            return [f"{root_cause}:{len(evidence)}"]
+
+    register_target_resolver("test-custom", CustomResolver())
+
+    resolver = get_target_resolver("test-custom")
+    assert resolver.resolve("spin", ["a", "b"]) == ["spin:2"]
+
+    plan = build_fix_plan([_result("t1", "spin", -3)], target_resolver="test-custom")
+    assert plan[0].targets == ["spin:1"]
+
+
 def test_fix_plan_prompt_bug_enrichment():
     result = _result("t1", "prompt_bug", -2, prompt_section="research")
     plan = build_fix_plan([result])
@@ -69,6 +88,7 @@ def test_format_fix_plan_text_has_entries():
     assert "FIX PLAN" in text
     assert "spin" in text
     assert "Priority #1" in text
+    assert "severity=3/5" in text
 
 
 def test_fix_plan_investigate_worst_task():
@@ -81,9 +101,35 @@ def test_fix_plan_investigate_worst_task():
     assert spin_entry.investigate_task == "t2"  # worst score
 
 
+def test_fix_plan_severity_scoring():
+    results = [
+        _result("t1", "approval_block", -1),
+        _result("t2", "routing_bug", -1),
+        _result("t3", "spin", -1),
+        _result("t4", "prompt_bug", -1),
+        _result("t5", "reasoning_bug", -1),
+    ]
+    plan = build_fix_plan(results)
+    severity_by_cause = {entry.root_cause: entry.severity for entry in plan}
+    assert severity_by_cause == {
+        "approval_block": 5,
+        "routing_bug": 4,
+        "spin": 3,
+        "prompt_bug": 2,
+        "reasoning_bug": 1,
+    }
+
+
+def test_fix_plan_verify_command_generation():
+    plan = build_fix_plan([_result("t1", "tool_bug", -3)])
+    assert plan[0].verify_command == "agent-xray surface t1 | grep tools_available"
+
+
 def test_fix_plan_to_dict():
     plan = build_fix_plan([_result("t1", "early_abort", -1)])
     d = plan[0].to_dict()
     assert d["root_cause"] == "early_abort"
     assert "priority" in d
+    assert d["severity"] == 2
     assert "targets" in d
+    assert d["verify_command"] == "agent-xray reasoning t1 | grep -i success"

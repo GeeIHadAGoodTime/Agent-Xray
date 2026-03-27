@@ -1,3 +1,9 @@
+"""Adapter for Anthropic message traces with tool_use and tool_result blocks.
+
+This module handles Claude-style assistant content arrays that emit
+``tool_use`` blocks and user messages that carry matching ``tool_result`` blocks.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +13,15 @@ from . import _coerce_text, _iter_json_objects, _normalize_tool_input, _usage_me
 
 
 def load(path: Path) -> list[AgentStep]:
+    """Load an Anthropic message trace file.
+
+    Args:
+        path: JSONL transcript containing Anthropic tool-use message blocks.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
+
     steps: list[AgentStep] = []
     pending_by_id: dict[str, AgentStep] = {}
     task_id = path.stem

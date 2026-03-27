@@ -1,3 +1,5 @@
+"""Signals for code-oriented agent behavior."""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +10,8 @@ from ..schema import AgentStep, AgentTask
 
 
 class CodingDetector:
+    """Detect code-editing, verification, and shell-driven development behavior."""
+
     name = "coding"
 
     COMMON_TLDS = {
@@ -30,7 +34,11 @@ class CodingDetector:
     GIT_TOOLS = {"git_commit", "git_push", "git_diff", "git_status"}
     SHELL_TOOLS = {"bash", "shell", "terminal", "execute", "run_command"}
     FILE_PATH_RE = re.compile(
-        r"(?:[A-Za-z]:)?[\\/][^\s'\"`]+|[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}"
+        r"(?<![\w.-])"
+        r"(?!v?\d+(?:\.\d+){1,4}\b)"
+        r"(?:(?:[A-Za-z]:)?[\\/][^\s'\"`]+"
+        r"|[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+"
+        r"|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[A-Za-z][A-Za-z0-9]{0,7})"
     )
 
     def detect_step(self, step: AgentStep) -> dict[str, bool]:
@@ -83,8 +91,14 @@ class CodingDetector:
     def _iter_file_matches(self, text: str) -> Iterable[str]:
         for match in self.FILE_PATH_RE.finditer(text):
             candidate = match.group(0).rstrip(".,:;")
-            if candidate and not self._is_likely_url(candidate):
+            if candidate and not self._is_likely_url(candidate) and not self._is_likely_non_path(candidate):
                 yield candidate
+
+    def _is_likely_non_path(self, value: str) -> bool:
+        text = value.strip().rstrip(".,:;")
+        if re.fullmatch(r"\d+(?:[\\/]\d+)+", text):
+            return True
+        return bool(re.fullmatch(r"v?\d+(?:\.\d+){1,4}", text))
 
     def _is_likely_url(self, value: str) -> bool:
         text = value.strip().rstrip(".,:;")
@@ -94,10 +108,14 @@ class CodingDetector:
         if re.fullmatch(r"\d{1,2}/\d{1,2}(?:/\d{2,4})?", text):
             return True
         head = lowered.lstrip("/").split("/", 1)[0]
-        if head.count(".") != 1:
+        parts = [part for part in head.split(".") if part]
+        if len(parts) < 2:
             return False
-        name, suffix = head.rsplit(".", 1)
-        return bool(name) and suffix in self.COMMON_TLDS and re.fullmatch(r"[a-z0-9_-]+", name)
+        suffix = parts[-1]
+        labels = parts[:-1]
+        return suffix in self.COMMON_TLDS and all(
+            re.fullmatch(r"[a-z0-9_-]+", label) for label in labels
+        )
 
     def _iter_strings(self, value: Any) -> Iterable[str]:
         if isinstance(value, str):

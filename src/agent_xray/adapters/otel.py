@@ -1,9 +1,7 @@
-"""OpenTelemetry span adapter.
+"""Adapter for OpenTelemetry GenAI semantic convention span exports.
 
-Converts OTel GenAI semantic convention spans into AgentStep records.
-Follows: https://opentelemetry.io/docs/specs/semconv/gen-ai/
-
-Requires: pip install agent-xray[otel]
+This module converts OTel JSON exports into ``AgentStep`` records by extracting
+LLM spans, child tool spans, and associated GenAI attributes.
 """
 
 from __future__ import annotations
@@ -251,7 +249,14 @@ def _iter_spans(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any], dict
 
 
 def load(path: Path) -> list[AgentStep]:
-    """Load OTel JSON export and convert to AgentSteps."""
+    """Load an OpenTelemetry JSON export.
+
+    Args:
+        path: JSON file containing OTel span export data.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
 
     _require_otel()
     payload = json.loads(Path(path).read_text(encoding="utf-8"))

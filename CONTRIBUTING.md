@@ -1,15 +1,15 @@
 # Contributing
 
-## Getting Started
+## Development Setup
 
 ```bash
 git clone https://github.com/agent-xray/agent-xray.git
 cd agent-xray
 python -m pip install -e ".[all]"
-python -m pytest
+python -m pytest tests -q
 ```
 
-Useful local checks:
+Common local checks:
 
 ```bash
 python -m ruff check src tests
@@ -18,162 +18,216 @@ python -m mypy src/agent_xray --strict
 python -m build --no-isolation
 ```
 
-## Write Your First Signal Detector
+Useful habits while developing:
 
-Signal detectors live under [`src/agent_xray/signals`](src/agent_xray/signals/__init__.py). Each detector:
+- keep fixtures tiny and purpose-built
+- prefer `agent-xray quickstart` or small JSONL files over large production traces while iterating
+- update docs when the public CLI, schema, or extension surface changes
 
-- inspects one step at a time with `detect_step()`
-- summarizes those booleans into task-level metrics with `summarize()`
-- returns flat metrics that a JSON ruleset can score
+## Project Shape
 
-Minimal detector:
+Core directories:
 
-```python
-from __future__ import annotations
+- `src/agent_xray/schema.py`: canonical types used everywhere else
+- `src/agent_xray/adapters/`: framework-specific trace loaders
+- `src/agent_xray/signals/`: detector packs that emit domain metrics
+- `src/agent_xray/grader.py`: JSON rules evaluation
+- `src/agent_xray/root_cause.py`: failure classification
+- `src/agent_xray/reports.py`: text and JSON report builders
+- `src/agent_xray/cli.py`: CLI wiring
+- `tests/`: focused unit and integration coverage
 
-from typing import Any
+Design rule: new framework- or domain-specific behavior should stay at the edges. Normalize first, then reuse the shared schema, analyzer, grader, and reporting pipeline.
 
-from agent_xray.schema import AgentStep, AgentTask
+## How To Add A New Adapter
 
+Adapters convert a foreign trace format into `AgentStep` objects.
 
-class ScreenshotRecoveryDetector:
-    name = "screenshot_recovery"
+1. Create a new module under `src/agent_xray/adapters/`.
 
-    def detect_step(self, step: AgentStep) -> dict[str, bool]:
-        browser = step.browser
-        return {
-            "used_screenshot": bool(browser and browser.had_screenshot),
-            "succeeded": step.error is None and bool(step.tool_result),
-        }
+   Typical shape:
 
-    def summarize(self, task: AgentTask, step_signals: list[dict[str, bool]]) -> dict[str, Any]:
-        screenshot_steps = sum(1 for item in step_signals if item["used_screenshot"])
-        return {
-            "screenshot_steps": screenshot_steps,
-            "recovered_after_visual_check": any(
-                step_signals[index]["used_screenshot"] and step_signals[index + 1]["succeeded"]
-                for index in range(len(step_signals) - 1)
-            ),
-        }
-```
+   ```python
+   from pathlib import Path
 
-Try it locally:
-
-```python
-from agent_xray.analyzer import analyze_task
-
-analysis = analyze_task(task, detectors=[ScreenshotRecoveryDetector()])
-print(analysis.metrics()["recovered_after_visual_check"])
-```
-
-To ship an in-repo detector:
-
-1. Add a new module under `src/agent_xray/signals/`.
-2. Instantiate it in `discover_detectors()` inside [`src/agent_xray/signals/__init__.py`](src/agent_xray/signals/__init__.py).
-3. Add or update tests that exercise both `detect_step()` and `summarize()`.
-4. Add a ruleset entry if the new metric should affect grading.
-
-External plugins can register detectors through the `agent_xray.signals` entry-point group.
-
-## Write An Adapter
-
-Adapters convert trace records from one framework into `AgentStep` objects. Put new adapters under `src/agent_xray/adapters/`.
-
-Minimal adapter example:
-
-```python
-from __future__ import annotations
-
-from pathlib import Path
-
-from agent_xray.adapters import _iter_json_objects, _normalize_tool_input
-from agent_xray.schema import AgentStep
+   from agent_xray.adapters import _iter_json_objects, _normalize_tool_input
+   from agent_xray.schema import AgentStep
 
 
-def load(path: Path) -> list[AgentStep]:
-    steps: list[AgentStep] = []
-    for _, payload in _iter_json_objects(path):
-        tool_name = payload.get("tool_name")
-        if tool_name is None:
-            continue
-        steps.append(
-            AgentStep.from_dict(
-                {
-                    "task_id": str(payload.get("task_id") or path.stem),
-                    "step": len(steps) + 1,
-                    "tool_name": str(tool_name),
-                    "tool_input": _normalize_tool_input(payload.get("tool_input")),
-                    "tool_result": payload.get("tool_result"),
-                    "error": payload.get("error"),
-                    "timestamp": payload.get("timestamp") or payload.get("ts"),
-                }
-            )
-        )
-    return steps
-```
+   def load(path: Path) -> list[AgentStep]:
+       steps: list[AgentStep] = []
+       for _, payload in _iter_json_objects(path):
+           tool_name = payload.get("tool_name")
+           if tool_name is None:
+               continue
+           steps.append(
+               AgentStep.from_dict(
+                   {
+                       "task_id": str(payload.get("task_id") or path.stem),
+                       "step": len(steps) + 1,
+                       "tool_name": str(tool_name),
+                       "tool_input": _normalize_tool_input(payload.get("tool_input")),
+                       "tool_result": payload.get("tool_result"),
+                       "error": payload.get("error"),
+                       "timestamp": payload.get("timestamp") or payload.get("ts"),
+                   }
+               )
+           )
+       return steps
+   ```
 
-Then register the new format key in [`src/agent_xray/adapters/__init__.py`](src/agent_xray/adapters/__init__.py) so `--format your_format` works.
+2. Register the format key in `src/agent_xray/adapters/__init__.py`.
+
+   Add it to `FORMATS` so `agent-xray --format <name>` can resolve the adapter.
+
+3. Preserve as much structured metadata as possible.
+
+   Important fields:
+
+   - timestamps and durations
+   - tool inputs and tool outputs
+   - model metadata
+   - browser context
+   - reasoning or intervention metadata
+
+4. Add tests.
+
+   Minimum coverage:
+
+   - adapter fixture file under `tests/fixtures/`
+   - positive parse case in `tests/test_adapters.py`
+   - edge-case behavior for malformed or partial records
 
 Adapter rules:
 
-- Normalize into `AgentStep`; do not add framework-specific branches throughout the analyzer.
-- Preserve timestamps, tool inputs, model metadata, and browser context when available.
-- Drop malformed records quietly unless a warning materially helps debugging.
-- Add focused tests with tiny fixture files rather than giant real-world traces.
+- normalize into `AgentStep` instead of branching inside the analyzer
+- skip malformed records quietly unless a warning materially helps the user
+- keep fixtures small enough that failures are obvious from the diff
 
-## Add A Rule Set
+## How To Add A New Signal Detector
 
-Rulesets live in `src/agent_xray/rules/*.json`.
+Signal detectors add task metrics without changing analyzer logic.
 
-Start from `default.json` or `browser_flow.json`, then:
+1. Create a new module under `src/agent_xray/signals/`.
+2. Implement the `SignalDetector` protocol:
 
-1. Pick the metrics you want to score.
-2. Define signal entries using `field`, `op`, `value`, `points`, and `reason`.
-3. Set `thresholds` or `grade_thresholds`.
-4. Add `golden_requirements` if a run must hit a terminal condition before it can earn `GOLDEN`.
+   ```python
+   from typing import Any
 
-Example:
+   from agent_xray.schema import AgentStep, AgentTask
 
-```json
-{
-  "name": "my_rules",
-  "signals": [
-    {
-      "label": "uses_multiple_tools",
-      "field": "unique_tools",
-      "op": "gte",
-      "value": 2,
-      "points": 2,
-      "reason": "used more than one tool"
-    }
-  ],
-  "thresholds": {
-    "GOLDEN": 6,
-    "GOOD": 4,
-    "OK": 2,
-    "WEAK": 0
-  }
-}
-```
 
-Run it with:
+   class ScreenshotRecoveryDetector:
+       name = "screenshot_recovery"
+
+       def detect_step(self, step: AgentStep) -> dict[str, bool]:
+           browser = step.browser
+           return {
+               "used_screenshot": bool(browser and browser.had_screenshot),
+               "succeeded": step.error is None and bool(step.tool_result),
+           }
+
+       def summarize(
+           self,
+           task: AgentTask,
+           step_signals: list[dict[str, bool]],
+       ) -> dict[str, Any]:
+           screenshot_steps = sum(1 for item in step_signals if item["used_screenshot"])
+           return {
+               "screenshot_steps": screenshot_steps,
+               "recovered_after_visual_check": any(
+                   step_signals[index]["used_screenshot"]
+                   and step_signals[index + 1]["succeeded"]
+                   for index in range(len(step_signals) - 1)
+               ),
+           }
+   ```
+
+3. Wire it into `discover_detectors()` in `src/agent_xray/signals/__init__.py`, or expose it through the `agent_xray.signals` entry-point group if it lives outside the repo.
+4. Add tests for both `detect_step()` and `summarize()`.
+5. Add or update a ruleset if the new metric should affect grades.
+
+Detector guidance:
+
+- keep step signals simple and boolean where possible
+- emit flat, stable metric names from `summarize()`
+- prefer domain metrics over prompt-specific heuristics when you can measure both
+
+## How To Add A New Report Type
+
+Reports are a CLI surface, so treat them as public API.
+
+1. Add `report_<name>()` and `report_<name>_data()` to `src/agent_xray/reports.py`.
+
+   Convention:
+
+   - text function returns a terminal-friendly string
+   - data function returns JSON-serializable data
+
+2. Wire both into `cmd_report()` in `src/agent_xray/cli.py`.
+3. Add the new report name to the CLI parser choices.
+4. Add tests:
+
+   - text and JSON coverage in `tests/test_reports.py`
+   - CLI coverage in `tests/test_reports_cli.py`
+
+5. Update `README.md` or `docs/` if the new report is user-facing.
+
+A report is a good fit when:
+
+- it summarizes an existing set of metrics
+- it helps a human make a decision faster
+- it does not need new normalization logic
+
+If you need new raw metrics first, add those in a detector or the analyzer before adding the report.
+
+## Rules And Root-Cause Extensions
+
+You do not need to change Python code to add a ruleset.
+
+- put a JSON file in `src/agent_xray/rules/` or anywhere on disk
+- run it with `agent-xray grade ./traces --rules ./path/to/rules.json`
+- document it in [`docs/custom-rules.md`](docs/custom-rules.md) if it becomes part of the public surface
+
+If you need custom fix-plan targets, use the target-resolver extension point in `src/agent_xray/diagnose.py`:
+
+- implement the `TargetResolver` protocol
+- register it with `register_target_resolver()`
+- pass it to `build_fix_plan(..., target_resolver=...)`
+
+## Testing Expectations
+
+Before opening a PR, run the checks relevant to your change:
 
 ```bash
-agent-xray grade ./traces --rules ./src/agent_xray/rules/my_rules.json
+python -m pytest tests -q
+python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy src/agent_xray --strict
 ```
 
-## Code Style
+If you changed packaging or install behavior, also run:
 
-- Formatting and linting: `ruff` is the source of truth.
-- Typing: `mypy --strict` must stay green for the core package.
-- Tests: every behavior change needs tests, especially adapters, detector metrics, replay logic, and rule evaluation.
-- Docs: keep README, changelog, and CLI help aligned with the real surface area.
-- Compatibility: avoid Windows-only paths or shell examples in user-facing docs.
+```bash
+python -m build --no-isolation
+```
 
-## PR Process
+## PR Review Checklist
 
-1. Open a focused PR. One behavior change beats five loosely related edits.
-2. Include tests and any rules or fixtures needed to explain the change.
-3. Update `README.md`, `CHANGELOG.md`, or `docs/` when the public surface changes.
-4. Run `pytest`, `ruff`, `mypy`, and `python -m build --no-isolation` before asking for review.
-5. Call out tradeoffs, backwards-compatibility risks, and any follow-up work in the PR description.
+Use this checklist before asking for review:
+
+- the change is focused and has a clear reason to exist
+- adapters still normalize into `AgentStep` instead of bypassing the schema
+- new signals or reports have tests
+- CLI changes update help text and docs
+- public behavior changes update `README.md`, `docs/`, or both
+- new rulesets include realistic thresholds and, when needed, `golden_requirements`
+- no unrelated files were reformatted or rewritten
+- `pytest`, `ruff`, and `mypy` pass locally for the touched area
+
+## Style Notes
+
+- Prefer ASCII in docs, fixtures, and source unless the file already uses Unicode intentionally.
+- Keep terminal examples shell-agnostic when possible; avoid Windows-only commands in user-facing docs.
+- Favor small explicit helpers over clever normalization logic.
+- If a trace field is optional, preserve it when available rather than inventing fallback values.

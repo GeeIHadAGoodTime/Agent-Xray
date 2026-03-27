@@ -12,6 +12,9 @@ license = "MIT"
 authors = [
   { name = "agent-xray contributors" }
 ]
+maintainers = [
+  { name = "agent-xray security contact via GitHub Security Advisories" }
+]
 keywords = [
   "agents",
   "ai",
@@ -24,7 +27,6 @@ keywords = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
-  "Framework :: AsyncIO",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -35,6 +37,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Debuggers",
+  "Topic :: Software Development :: Quality Assurance",
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
@@ -46,6 +49,7 @@ Repository = "https://github.com/GeeIHadAGoodTime/Agent-Xray"
 Documentation = "https://github.com/GeeIHadAGoodTime/Agent-Xray#readme"
 Changelog = "https://github.com/GeeIHadAGoodTime/Agent-Xray/blob/main/CHANGELOG.md"
 Issues = "https://github.com/GeeIHadAGoodTime/Agent-Xray/issues"
+Security = "https://github.com/GeeIHadAGoodTime/Agent-Xray/security/advisories/new"
 
 [project.optional-dependencies]
 runner = [
@@ -59,6 +63,7 @@ tui = [
   "textual>=0.52",
 ]
 test = [
+  "hypothesis>=6.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",
 ]
@@ -77,6 +82,7 @@ all = [
   "mypy>=1.10",
   "opentelemetry-api>=1.30",
   "opentelemetry-sdk>=1.30",
+  "hypothesis>=6.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.11.0",
@@ -88,6 +94,7 @@ dev = [
   "mypy>=1.10",
   "opentelemetry-api>=1.30",
   "opentelemetry-sdk>=1.30",
+  "hypothesis>=6.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.11.0",
@@ -108,7 +115,7 @@ where = ["src"]
 include = ["agent_xray*"]
 
 [tool.setuptools.package-data]
-agent_xray = ["py.typed", "rules/*.json"]
+agent_xray = ["py.typed", "rules/*.json", "examples/*.jsonl"]
 
 [tool.ruff]
 line-length = 100
@@ -136,6 +143,9 @@ ignore_errors = true
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = [
+  "benchmark: performance benchmarks that can be skipped in fast CI",
+]
 
 [tool.coverage.run]
 branch = true

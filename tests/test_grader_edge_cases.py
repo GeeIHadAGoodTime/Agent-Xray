@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_xray.grader import RuleSet, grade_task, load_rules
+from agent_xray.grader import RuleSet, _compare, grade_task, load_rules, validate_rules
 from agent_xray.schema import AgentStep, AgentTask
 
 
@@ -76,6 +76,51 @@ def test_grade_conflicting_labels() -> None:
     )
     assert result.score == 2
     assert [signal.name for signal in result.signals] == ["shared", "shared"]
+
+
+@pytest.mark.parametrize(
+    ("actual", "operator", "expected", "result"),
+    [
+        (2, "gte", 1, True),
+        (2, "gt", 2, False),
+        (2, "lte", 2, True),
+        (2, "lt", 1, False),
+        ("ok", "equals", "ok", True),
+        ("ok", "in", ["ok", "other"], True),
+        ("ok", "contains_any", ["ok", "other"], True),
+        ("ok", "ne", "different", True),
+        ("ok", "not_in", ["different"], True),
+    ],
+)
+def test_compare_supports_op_and_shorthand_forms(
+    actual: object, operator: str, expected: object, result: bool
+) -> None:
+    assert _compare(actual, {"op": operator, "value": expected}) is result
+    assert _compare(actual, {operator: expected}) is result
+
+
+def test_validate_rules_catches_bad_rules() -> None:
+    rules = RuleSet(
+        name="invalid",
+        description="bad rules",
+        signals=[
+            {"field": "missing.metric", "op": "mystery", "value": 1, "points": 1, "label": "bad_op"},
+            {"field": "step_count", "op": "gte", "points": 1, "label": "missing_value"},
+            {"field": "errors", "op": "equals", "value": 0, "points": 1, "label": "dup_positive"},
+            {"field": "errors", "op": "equals", "value": 0, "points": -1, "label": "dup_negative"},
+        ],
+        grade_thresholds={"GOLDEN": 1},
+    )
+
+    warnings = validate_rules(rules)
+
+    assert any("unknown operator 'mystery'" in warning for warning in warnings)
+    assert any("unknown field 'missing.metric'" in warning for warning in warnings)
+    assert any("missing a comparison value" in warning for warning in warnings)
+    assert any("contradictory scoring" in warning for warning in warnings)
+    assert any("missing grade threshold 'GOOD'" in warning for warning in warnings)
+    assert any("missing grade threshold 'OK'" in warning for warning in warnings)
+    assert any("missing grade threshold 'WEAK'" in warning for warning in warnings)
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from .analyzer import TaskAnalysis, analyze_task, analyze_tasks, load_tasks
-from .grader import GradeResult, RuleSet, grade_task, grade_tasks, load_rules
+from .grader import (
+    GradeResult,
+    RuleSet,
+    grade_task,
+    grade_tasks,
+    load_rules,
+    normalize_score,
+    validate_rules,
+)
 from .protocols import PromptBuilder, StaticPromptBuilder, StaticToolRegistry, ToolRegistry
 from .root_cause import ClassificationConfig, RootCauseResult, classify_failures, classify_task
 from .schema import (
@@ -40,6 +48,8 @@ __all__ = [
     "grade_task",
     "grade_tasks",
     "load_rules",
+    "normalize_score",
+    "validate_rules",
     "classify_task",
     "classify_failures",
     "surface_for_task",
@@ -49,4 +59,3 @@ __all__ = [
 ]
 
 __version__ = "0.1.0"
-

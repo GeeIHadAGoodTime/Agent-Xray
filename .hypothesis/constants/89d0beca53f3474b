@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\otel.py
+# hypothesis_version: 6.142.4
+
+[1000000, 'STATUS_CODE_UNSET', '[{', 'arrayValue', 'attributes', 'boolValue', 'bytesValue', 'chat', 'code', 'doubleValue', 'endTimeUnixNano', 'error.type', 'execute_tool', 'gen_ai', 'gen_ai.', 'gen_ai.request.model', 'gen_ai.response.cost', 'gen_ai.tool.name', 'gen_ai.usage.cost', 'input', 'intValue', 'items', 'key', 'kvlistValue', 'llm', 'llm.cost.usd', 'message', 'name', 'opentelemetry.trace', 'otel-trace', 'output', 'parentSpanId', 'resource', 'resourceSpans', 'respond', 'scopeSpans', 'session.id', 'spanId', 'spans', 'startTimeUnixNano', 'status', 'stringValue', 'task.id', 'thread.id', 'tool', 'tool.arguments', 'tool.name', 'traceId', 'url', 'utf-8', 'value', 'values', 'workflow.id']

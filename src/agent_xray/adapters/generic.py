@@ -1,3 +1,9 @@
+"""Adapter for loosely structured generic JSONL step traces.
+
+This module handles records that already expose ``tool_name`` and ``tool_input``
+fields either at the top level or inside common nested payload keys.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,6 +37,15 @@ def _normalized_record(payload: dict[str, Any], path: Path) -> dict[str, Any] | 
 
 
 def load(path: Path) -> list[AgentStep]:
+    """Load a generic JSONL trace file.
+
+    Args:
+        path: JSONL file containing agent steps in a near-normalized structure.
+
+    Returns:
+        A list of parsed ``AgentStep`` records.
+    """
+
     steps: list[AgentStep] = []
     for _, payload in _iter_json_objects(path):
         record = _normalized_record(payload, path)

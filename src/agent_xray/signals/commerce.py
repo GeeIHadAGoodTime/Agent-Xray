@@ -1,3 +1,5 @@
+"""Signals for browser commerce and checkout flows."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +10,8 @@ from ..schema import AgentStep, AgentTask
 
 
 class CommerceDetector:
+    """Detect shopping, checkout, and payment form activity."""
+
     name = "commerce"
 
     PAYMENT_FIELD_KEYWORDS = [

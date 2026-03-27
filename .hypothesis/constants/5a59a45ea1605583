@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\flywheel.py
+# hypothesis_version: 6.142.4
+
+['*.json', 'BROKEN', 'GOLDEN', 'GOOD', 'OK', 'WEAK', 'degrading', 'distribution', 'grade', 'grade_deltas', 'grade_distribution', 'grades', 'improvements', 'improving', 'regressions', 'stable', 'summary', 'task_grades', 'task_id', 'tasks', 'trend', 'utf-8']

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_xray.grader import GradeResult, grade_task, load_rules
-from agent_xray.root_cause import classify_task
+from agent_xray.root_cause import ClassificationConfig, RootCauseResult, classify_task
 from agent_xray.schema import AgentStep, AgentTask
 
 RULES_PATH = Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules" / "default.json"
@@ -19,6 +19,10 @@ def _step(
     page_url: str | None = None,
     tools_available: list[str] | None = None,
     llm_reasoning: str | None = None,
+    context_usage_pct: float | None = None,
+    context_window: int | None = None,
+    compaction_count: int | None = None,
+    output_tokens: int | None = None,
 ) -> AgentStep:
     return AgentStep(
         task_id="task-1",
@@ -30,11 +34,20 @@ def _step(
         page_url=page_url,
         tools_available=tools_available,
         llm_reasoning=llm_reasoning,
+        context_usage_pct=context_usage_pct,
+        context_window=context_window,
+        compaction_count=compaction_count,
+        output_tokens=output_tokens,
     )
 
 
-def _task(steps: list[AgentStep]) -> AgentTask:
-    return AgentTask(task_id="task-1", task_text="investigate failure", steps=steps)
+def _task(steps: list[AgentStep], *, task_category: str | None = None) -> AgentTask:
+    return AgentTask(
+        task_id="task-1",
+        task_text="investigate failure",
+        task_category=task_category,
+        steps=steps,
+    )
 
 
 def _failing_grade(task: AgentTask, *, score: int = -1) -> GradeResult:
@@ -53,6 +66,7 @@ def test_classify_spin() -> None:
     cause = classify_task(task, _failing_grade(task))
     assert cause is not None
     assert cause.root_cause == "spin"
+    assert cause.confidence_score == 0.9
 
 
 def test_classify_routing_bug() -> None:
@@ -78,6 +92,47 @@ def test_classify_approval_block() -> None:
     cause = classify_task(task, _failing_grade(task))
     assert cause is not None
     assert cause.root_cause == "approval_block"
+
+
+def test_classify_delegation_failure() -> None:
+    task = _task(
+        [
+            _step(1, "spawn_agent", tool_result="Worker launched."),
+            _step(2, "wait_agent", error="timeout waiting for delegated worker result"),
+            _step(3, "send_input", tool_result="failed to deliver follow-up to worker"),
+        ]
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "delegation_failure"
+    assert cause.confidence == "high"
+    assert cause.confidence_score == 1.0
+
+
+def test_classify_test_failure_loop() -> None:
+    task = _task(
+        [
+            _step(1, "read_file", tool_input={"path": "src/parser.py"}, tool_result="parser source"),
+            _step(
+                2,
+                "pytest",
+                tool_input={"command": "python -m pytest tests/test_parser.py"},
+                tool_result="2 failed, 5 passed: tests/test_parser.py::test_whitespace regression",
+            ),
+            _step(
+                3,
+                "pytest",
+                tool_input={"command": "python -m pytest tests/test_parser.py"},
+                tool_result="2 failed, 5 passed: tests/test_parser.py::test_whitespace regression",
+            ),
+        ],
+        task_category="coding",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "test_failure_loop"
+    assert cause.confidence == "high"
+    assert cause.confidence_score == 1.0
 
 
 def test_classify_tool_selection_bug() -> None:
@@ -108,11 +163,35 @@ def test_classify_tool_selection_bug() -> None:
     assert cause.root_cause == "tool_selection_bug"
 
 
+def test_classify_insufficient_sources() -> None:
+    task = _task(
+        [
+            _step(
+                1,
+                "web_search",
+                tool_input={"query": "agent observability best practices"},
+                tool_result="Top result: https://a.example.test/report",
+            ),
+            _step(
+                2,
+                "respond",
+                tool_result="According to https://a.example.test/report, this should work.",
+            ),
+        ],
+        task_category="research",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "insufficient_sources"
+    assert cause.confidence == "high"
+    assert cause.confidence_score == 1.0
+
+
 def test_classify_early_abort() -> None:
     task = _task(
         [
-            _step(1, "respond", tool_result="Starting."),
-            _step(2, "respond", tool_result="Could not finish."),
+            _step(1, "browser_navigate", tool_result="OK", page_url="https://shop.example.test"),
+            _step(2, "browser_click", tool_result="Clicked.", page_url="https://shop.example.test"),
         ]
     )
     cause = classify_task(task, _failing_grade(task))
@@ -133,6 +212,47 @@ def test_classify_stuck_loop() -> None:
     cause = classify_task(task, _failing_grade(task))
     assert cause is not None
     assert cause.root_cause == "stuck_loop"
+
+
+def test_classify_memory_overload() -> None:
+    task = _task(
+        [
+            _step(
+                1,
+                "read_file",
+                tool_input={"path": "trace.log"},
+                tool_result="loaded long trace context",
+                context_usage_pct=0.55,
+                context_window=128000,
+            ),
+            _step(
+                2,
+                "shell",
+                tool_input={"command": "analyze failures"},
+                tool_result="Context window is full and I am losing track of earlier failures.",
+                llm_reasoning="The context is full and I am losing track of earlier failures.",
+                context_usage_pct=0.92,
+                context_window=128000,
+                compaction_count=2,
+                output_tokens=24,
+            ),
+            _step(
+                3,
+                "respond",
+                tool_result="Unsure.",
+                llm_reasoning="I am not sure anymore because the context is too much.",
+                context_usage_pct=0.95,
+                context_window=128000,
+                output_tokens=4,
+            ),
+        ],
+        task_category="coding",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "memory_overload"
+    assert cause.confidence == "medium"
+    assert cause.confidence_score == 0.7
 
 
 def test_classify_reasoning_bug() -> None:
@@ -216,7 +336,55 @@ def test_classify_model_limit() -> None:
     assert cause.root_cause == "model_limit"
 
 
+def test_numeric_confidence_compatibility() -> None:
+    baseline = RootCauseResult(
+        task_id="task-1",
+        root_cause="spin",
+        grade="BROKEN",
+        score=-1,
+        confidence="high",
+    )
+    numeric = RootCauseResult(
+        task_id="task-2",
+        root_cause="prompt_bug",
+        grade="BROKEN",
+        score=-2,
+        confidence=0.72,
+    )
+    assert baseline.confidence == "high"
+    assert baseline.confidence_score == 0.9
+    assert numeric.confidence == "medium"
+    assert numeric.confidence_score == 0.72
+
+
+def test_classification_config_customization() -> None:
+    task = _task(
+        [
+            _step(
+                1,
+                "web_search",
+                tool_input={"query": "agent observability best practices"},
+                tool_result="Top result: https://a.example.test/report",
+            ),
+            _step(
+                2,
+                "respond",
+                tool_result="According to https://a.example.test/report, this should work.",
+            ),
+        ],
+        task_category="research",
+    )
+    cause = classify_task(
+        task,
+        _failing_grade(task),
+        config=ClassificationConfig(insufficient_sources_min_searches=1, low_source_diversity_threshold=1),
+    )
+    assert cause is not None
+    assert cause.root_cause == "early_abort"
+
+
 def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:
     grade = grade_task(golden_task, load_rules(RULES_PATH))
     assert grade.grade == "GOOD"
     assert classify_task(golden_task, grade) is None
+

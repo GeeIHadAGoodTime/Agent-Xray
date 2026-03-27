@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\signals\__init__.py
+# hypothesis_version: 6.142.4
+
+['BUILTIN_DETECTORS', 'CodingDetector', 'CommerceDetector', 'MemoryDetector', 'MultiAgentDetector', 'PlanningDetector', 'ResearchDetector', 'SignalDetector', 'StepSignals', 'SummaryMetrics', 'agent_xray.signals', 'coding', 'commerce', 'discover_detectors', 'memory', 'multi_agent', 'planning', 'research', 'run_detection', 'select']

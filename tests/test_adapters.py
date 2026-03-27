@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import agent_xray.adapters.otel as otel_adapter
-from agent_xray.adapters import adapt, autodetect
+from agent_xray.adapters import adapt, autodetect, format_info
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -26,6 +26,10 @@ def test_autodetect_crewai() -> None:
 
 def test_autodetect_generic() -> None:
     assert autodetect(FIXTURES / "generic_trace.jsonl") == "generic"
+
+
+def test_autodetect_openai_chat() -> None:
+    assert autodetect(FIXTURES / "openai_chat_trace.jsonl") == "openai_chat"
 
 
 def test_adapt_openai_produces_valid_steps() -> None:
@@ -70,6 +74,26 @@ def test_adapt_generic_round_trips() -> None:
     assert steps[0].to_dict()["tool_input"]["query"] == "AI chip market 2026"
     assert steps[4].tool_input["value"] == "competitor revenue 2025"
     assert steps[-1].tool_result == "Revenue grew 12%."
+
+
+def test_adapt_openai_chat_produces_valid_steps() -> None:
+    steps = adapt(FIXTURES / "openai_chat_trace.jsonl", format="openai_chat")
+    assert len(steps) == 5
+    assert steps[0].task_id == "chat_market_001"
+    assert steps[0].tool_name == "web_search"
+    assert steps[0].tool_input["query"] == "AI chip market size 2026"
+    assert steps[1].tool_input["url"] == "https://example.com/reports/ai-chip-market-2026"
+    assert steps[2].tool_result == "Global AI chip revenue projected to reach $214B in 2026."
+    assert steps[3].tool_name == "lookup_price"
+    assert steps[3].tool_result == "NVDA closed at 913.52 USD."
+    assert steps[4].tool_input["subject"] == "AI chip market update"
+    assert steps[4].tool_result == "Email queued for delivery."
+
+
+def test_format_info_reports_openai_chat_confidence() -> None:
+    format_name, confidence = format_info(FIXTURES / "openai_chat_trace.jsonl")
+    assert format_name == "openai_chat"
+    assert confidence > 0.5
 
 
 def test_adapt_otel_produces_valid_steps(monkeypatch) -> None:

@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\signals\coding.py
+# hypothesis_version: 6.142.4
+
+['.', '.,:;', '/', '://', '[a-z0-9_-]+', '\\d+(?:[\\\\/]\\d+)+', 'ai', 'app', 'bash', 'build', 'build_runs', 'cargo_build', 'coding', 'com', 'compile', 'create_file', 'delete_file', 'dev', 'edit', 'edit_file', 'edu', 'error_count', 'eslint', 'execute', 'file', 'file_operations', 'git', 'git_commit', 'git_diff', 'git_operations', 'git_push', 'git_status', 'gov', 'has_error', 'has_file_path', 'http://', 'https://', 'io', 'is_build', 'is_file_op', 'is_git', 'is_lint', 'is_shell', 'is_test', 'lint', 'lint_runs', 'make', 'mypy', 'net', 'npm_run', 'org', 'patch', 'pytest', 'read', 'read_file', 'ruff', 'run_command', 'run_test', 'run_tests', 'shell', 'shell_commands', 'terminal', 'test', 'test_runs', 'test_to_edit_ratio', 'type', 'typecheck', 'unique_files_touched', 'us', 'v?\\d+(?:\\.\\d+){1,4}', 'write', 'write_file']

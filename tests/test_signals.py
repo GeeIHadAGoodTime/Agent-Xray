@@ -4,7 +4,7 @@ import json
 
 from agent_xray.grader import grade_task, load_rules
 from agent_xray.schema import AgentStep, AgentTask
-from agent_xray.signals import discover_detectors, run_detection
+from agent_xray.signals import BUILTIN_DETECTORS, discover_detectors, run_detection
 from agent_xray.signals.coding import CodingDetector
 from agent_xray.signals.commerce import CommerceDetector
 from agent_xray.signals.research import ResearchDetector
@@ -169,7 +169,12 @@ def test_research_detector_synthesis() -> None:
 
 def test_discover_detectors_finds_builtins() -> None:
     names = {detector.name for detector in discover_detectors()}
-    assert {"commerce", "coding", "research"} <= names
+    assert {"commerce", "coding", "research", "multi_agent", "memory", "planning"} <= names
+
+
+def test_builtin_detectors_registry_contains_all_signal_modules() -> None:
+    names = {detector_cls().name for detector_cls in BUILTIN_DETECTORS}
+    assert names == {"commerce", "coding", "research", "multi_agent", "memory", "planning"}
 
 
 def test_run_detection_returns_all_detectors() -> None:
@@ -190,10 +195,11 @@ def test_run_detection_returns_all_detectors() -> None:
                 {"query": "agent xray"},
                 tool_result="https://docs.example.test/page",
             ),
+            _step(4, "create_plan", {"plan_id": "plan-1", "steps": ["search", "write"]}),
         ],
     )
     results = run_detection(task)
-    assert {"commerce", "coding", "research"} <= set(results)
+    assert {"commerce", "coding", "research", "multi_agent", "memory", "planning"} <= set(results)
 
 
 def test_grader_with_dotpath_signal_fields(tmp_path) -> None:

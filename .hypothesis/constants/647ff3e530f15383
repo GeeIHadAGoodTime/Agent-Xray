@@ -1,0 +1,4 @@
+# file: J:\PROJECTS\agent-xray\src\agent_xray\protocols.py
+# hypothesis_version: 6.142.4
+
+['task_id', 'tool_name']

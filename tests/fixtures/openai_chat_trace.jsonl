@@ -1,0 +1,13 @@
+# Raw Chat Completions transcript with assistant tool_calls and tool replies.
+
+{"conversation_id":"chat_market_001","role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"web_search","arguments":"{\"query\": \"AI chip market size 2026\"}"}}],"model":"gpt-4.1-mini","usage":{"prompt_tokens":42,"completion_tokens":11,"duration_ms":105}}
+{"conversation_id":"chat_market_001","role":"tool","tool_call_id":"call_1","content":"Found 4 market reports and 2 analyst notes."}
+{"conversation_id":"chat_market_001","role":"assistant","content":"Opening the strongest source first.","tool_calls":[{"id":"call_2","type":"function","function":{"name":"browser_open","arguments":"{\"url\": \"https://example.com/reports/ai-chip-market-2026\"}"}}],"model":"gpt-4.1-mini","usage":{"prompt_tokens":51,"completion_tokens":13,"duration_ms":118}}
+{"conversation_id":"chat_market_001","role":"tool","tool_call_id":"call_2","content":"Loaded vendor market report page."}
+{"conversation_id":"chat_market_001","role":"assistant","content":"Extracting the topline market estimate.","tool_calls":[{"id":"call_3","type":"function","function":{"name":"extract_text","arguments":"{\"selector\": \"main article\"}"}}],"model":"gpt-4.1-mini","usage":{"prompt_tokens":55,"completion_tokens":14,"duration_ms":123}}
+{"conversation_id":"chat_market_001","role":"tool","tool_call_id":"call_3","content":"Global AI chip revenue projected to reach $214B in 2026."}
+{"conversation_id":"chat_market_001","role":"assistant","content":"Checking the latest NVDA close for the summary.","tool_calls":[{"id":"call_4","type":"function","function":{"name":"lookup_price","arguments":"{\"ticker\": \"NVDA\"}"}}],"model":"gpt-4.1-mini","usage":{"prompt_tokens":44,"completion_tokens":10,"duration_ms":97}}
+{"conversation_id":"chat_market_001","role":"tool","tool_call_id":"call_4","content":"NVDA closed at 913.52 USD."}
+{"conversation_id":"chat_market_001","role":"assistant","content":"Sharing the digest with operations.","tool_calls":[{"id":"call_5","type":"function","function":{"name":"send_email","arguments":"{\"to\": \"ops@example.com\", \"subject\": \"AI chip market update\"}"}}],"model":"gpt-4.1-mini","usage":{"prompt_tokens":61,"completion_tokens":16,"duration_ms":131}}
+{"conversation_id":"chat_market_001","role":"tool","tool_call_id":"call_5","content":"Email queued for delivery."}
+{"conversation_id":"chat_market_001","role":"assistant","content":"All requested actions are complete.","model":"gpt-4.1-mini"}

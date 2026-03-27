@@ -244,6 +244,11 @@ def golden_task() -> AgentTask:
 
 
 @pytest.fixture
+def multi_step_commerce_task(golden_task: AgentTask) -> AgentTask:
+    return golden_task
+
+
+@pytest.fixture
 def broken_task() -> AgentTask:
     task_id = "broken-task"
     steps = [
@@ -373,6 +378,89 @@ def research_task() -> AgentTask:
         task_category="research",
         steps=steps,
         outcome=_outcome(task_id, "success", len(steps), "Research summary delivered."),
+    )
+
+
+@pytest.fixture
+def adapter_formats() -> tuple[str, ...]:
+    return ("generic", "openai", "langchain", "anthropic", "crewai", "otel")
+
+
+@pytest.fixture(params=("generic", "openai", "langchain", "anthropic", "crewai", "otel"))
+def adapter_format(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+@pytest.fixture
+def adapter_trace_paths() -> dict[str, Path]:
+    fixtures_dir = Path(__file__).resolve().parent / "fixtures"
+    return {
+        "generic": fixtures_dir / "generic_trace.jsonl",
+        "openai": fixtures_dir / "openai_trace.jsonl",
+        "langchain": fixtures_dir / "langchain_trace.jsonl",
+        "anthropic": fixtures_dir / "anthropic_trace.jsonl",
+        "crewai": fixtures_dir / "crewai_trace.jsonl",
+        "otel": fixtures_dir / "otel_trace.json",
+    }
+
+
+@pytest.fixture
+def large_task() -> AgentTask:
+    task_id = "large-task"
+    urls = [
+        "https://shop.example.test/",
+        "https://shop.example.test/search?q=headset",
+        "https://shop.example.test/products/wireless-headset",
+        "https://shop.example.test/cart",
+        "https://shop.example.test/checkout",
+        "https://shop.example.test/payment",
+    ]
+    tools = [
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_click",
+        "browser_fill_ref",
+        "browser_wait",
+    ]
+    steps: list[AgentStep] = []
+    for index in range(1, 61):
+        tool_name = tools[(index - 1) % len(tools)]
+        page_url = urls[(index - 1) % len(urls)]
+        tool_input: dict[str, object] = {"ref": f"element-{index}"}
+        if tool_name == "browser_navigate":
+            tool_input = {"url": page_url}
+        elif tool_name == "browser_fill_ref":
+            tool_input = {"ref": f"field-{index}", "text": f"value-{index}"}
+        steps.append(
+            _step(
+                task_id,
+                index,
+                tool_name,
+                tool_input,
+                tool_result=f"step-{index} completed on {page_url}",
+                duration_ms=100 + index,
+                timestamp=f"2026-03-26T12:{index % 60:02d}:00Z",
+                model_name="gpt-5-mini",
+                input_tokens=120 + index,
+                output_tokens=40 + (index % 7),
+                cost_usd=0.001,
+                tools_available=[
+                    "browser_navigate",
+                    "browser_snapshot",
+                    "browser_click",
+                    "browser_fill_ref",
+                    "browser_wait",
+                ],
+                llm_reasoning=f"Advance the checkout flow at step {index}.",
+                page_url=page_url,
+            )
+        )
+    return AgentTask(
+        task_id=task_id,
+        task_text="Perform a long commerce flow with repeated navigation and checkout updates.",
+        task_category="commerce",
+        steps=steps,
+        outcome=_outcome(task_id, "success", len(steps), "Large trace completed."),
     )
 
 
