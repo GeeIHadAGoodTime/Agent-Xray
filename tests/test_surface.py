@@ -58,10 +58,10 @@ def test_surface_history_windowing() -> None:
     history = surface["steps"][-1]["conversation_history"]
 
     assert history[0]["content"] == "inspect long run"
-    assert history[1]["content"] == 'tool_1 {}'
+    assert history[1]["content"] == "tool_1 {}"
     assert history[2]["content"] == "ok"
     assert history[3]["content"] == "[...8 steps omitted...]"
-    assert history[-2]["content"] == 'tool_6 {}'
+    assert history[-2]["content"] == "tool_6 {}"
     assert history[-1]["content"] == "ok"
 
 

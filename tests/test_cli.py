@@ -116,9 +116,7 @@ def test_cmd_surface_task(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> 
 def test_cmd_tree_output(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
     result = cmd_tree(Namespace(log_dir_opt=tmp_trace_dir, days=None, format="auto", json=True))
     payload = json.loads(capsys.readouterr().out)
-    task_ids = {
-        task_id for task_ids in payload["20260326"].values() for task_id in task_ids
-    }
+    task_ids = {task_id for task_ids in payload["20260326"].values() for task_id in task_ids}
     assert result == 0
     assert "20260326" in payload
     assert "golden-task" in task_ids
@@ -240,7 +238,10 @@ def test_analyze_help_includes_example(capsys: pytest.CaptureFixture[str]) -> No
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["analyze", "--help"])
-    assert "Example: agent-xray analyze ./traces --rules browser_flow --json" in capsys.readouterr().out
+    assert (
+        "Example: agent-xray analyze ./traces --rules browser_flow --json"
+        in capsys.readouterr().out
+    )
 
 
 def test_cmd_analyze_missing_dir_shows_quickstart_hint(

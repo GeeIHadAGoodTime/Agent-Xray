@@ -40,8 +40,12 @@ class PlanningDetector:
         is_plan_step = (
             tool in self.STEP_TOOLS
             or "plan_step" in tool
-            or any(key in step.tool_input for key in ("step", "step_id", "current_step", "step_index"))
-            or any(marker in combined_text for marker in ("plan step", "step 1", "step 2", "step 3"))
+            or any(
+                key in step.tool_input for key in ("step", "step_id", "current_step", "step_index")
+            )
+            or any(
+                marker in combined_text for marker in ("plan step", "step 1", "step 2", "step 3")
+            )
         )
         return {
             "is_plan_step": is_plan_step,
@@ -82,7 +86,7 @@ class PlanningDetector:
             for key in ("planned_steps", "total_steps"):
                 value = step.tool_input.get(key)
                 try:
-                    expected = max(expected, int(value))
+                    expected = max(expected, int(value))  # type: ignore[arg-type]
                 except (TypeError, ValueError):
                     continue
         if expected > 0:
@@ -91,7 +95,7 @@ class PlanningDetector:
         for step in task.sorted_steps:
             for key in ("step", "step_id", "current_step", "step_index"):
                 try:
-                    observed = max(observed, int(step.tool_input.get(key)))
+                    observed = max(observed, int(step.tool_input.get(key)))  # type: ignore[arg-type]
                 except (TypeError, ValueError):
                     continue
         return observed

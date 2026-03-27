@@ -125,7 +125,9 @@ def _dump(data: object) -> None:
     print(json.dumps(data, indent=2))
 
 
-def _emit(message: str, args: argparse.Namespace | CliSettings | None, *, final: bool = False) -> None:
+def _emit(
+    message: str, args: argparse.Namespace | CliSettings | None, *, final: bool = False
+) -> None:
     ui = _settings(args)
     if ui.quiet and not final:
         return
@@ -398,7 +400,9 @@ def _synthetic_example_lines() -> list[str]:
     ]
 
 
-def _populate_quickstart_dir(destination: Path, args: argparse.Namespace | CliSettings | None) -> None:
+def _populate_quickstart_dir(
+    destination: Path, args: argparse.Namespace | CliSettings | None
+) -> None:
     copied = 0
     try:
         copied = _copy_traversable_tree(files("agent_xray.examples"), destination)
@@ -664,7 +668,9 @@ def cmd_tui(args: argparse.Namespace) -> int:
         try:
             from agent_xray.tui.app import AgentXrayApp
         except ImportError:
-            _emit("TUI requires textual. Install with: pip install agent-xray[tui]", args, final=True)
+            _emit(
+                "TUI requires textual. Install with: pip install agent-xray[tui]", args, final=True
+            )
             return 1
 
         app = AgentXrayApp(log_dir=args.log_dir, task_id=args.task_id)
@@ -692,7 +698,9 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
         if target_grade is None:
             target_grade = min(grades, key=lambda item: item.score)
         surface_started = perf_counter()
-        surface_text = format_surface_text(surface_for_task(resolve_task(tasks, target_grade.task_id)))
+        surface_text = format_surface_text(
+            surface_for_task(resolve_task(tasks, target_grade.task_id))
+        )
         _emit_verbose(
             f"Quickstart surface step completed in {_format_elapsed(perf_counter() - surface_started)}",
             args,
@@ -728,7 +736,9 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
-def _grade_and_analyze(args: argparse.Namespace) -> tuple[
+def _grade_and_analyze(
+    args: argparse.Namespace,
+) -> tuple[
     list[AgentTask],
     list[Any],
     dict[str, Any],
@@ -767,7 +777,11 @@ def cmd_report(args: argparse.Namespace) -> int:
             if use_json:
                 _dump(report_compare_days_data(tasks, grades, analyses, args.day1, args.day2))
             elif use_markdown:
-                _emit(report_compare_days_markdown(tasks, grades, analyses, args.day1, args.day2), args, final=True)
+                _emit(
+                    report_compare_days_markdown(tasks, grades, analyses, args.day1, args.day2),
+                    args,
+                    final=True,
+                )
             else:
                 _emit(
                     _colorize_report_headers(

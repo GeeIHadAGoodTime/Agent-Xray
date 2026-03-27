@@ -51,7 +51,7 @@ def _prompt_text(task: AgentTask, prompt_builder: PromptBuilder | None) -> str |
 
 def _system_components(task: AgentTask) -> dict[str, Any] | None:
     if isinstance(task.metadata.get("system_context_components"), dict):
-        return task.metadata["system_context_components"]
+        return task.metadata["system_context_components"]  # type: ignore[no-any-return]
     if task.steps:
         first = task.sorted_steps[0]
         comp = first.extensions.get("system_context_components")
@@ -76,7 +76,7 @@ def _window_history(
     return [
         *history[:3],
         marker,
-        *history[-(max_history_steps - 3):],
+        *history[-(max_history_steps - 3) :],
     ]
 
 
@@ -180,20 +180,20 @@ def _surface_presence(
         )
     )
     screenshot_state_present = bool(
-        browser
-        and (browser.had_screenshot is not None or browser.had_screenshot_image is not None)
+        browser and (browser.had_screenshot is not None or browser.had_screenshot_image is not None)
     )
     snapshot_compression_present = bool(
         browser
         and (
-            browser.snapshot_compressed is not None
-            or browser.snapshot_pre_compress_len is not None
+            browser.snapshot_compressed is not None or browser.snapshot_pre_compress_len is not None
         )
     )
     memory_present = any(
         value is not None for key, value in memory_rag.items() if key.startswith("memory_")
     )
-    rag_present = any(value is not None for key, value in memory_rag.items() if key.startswith("rag_"))
+    rag_present = any(
+        value is not None for key, value in memory_rag.items() if key.startswith("rag_")
+    )
     return {
         "llm_reasoning": bool(reasoning and reasoning.llm_reasoning),
         "model_name": bool(model and model.model_name is not None),
@@ -305,14 +305,18 @@ def _aligned_steps(
         right_block = right_steps[right_start:right_end]
         block_size = max(len(left_block), len(right_block))
         for index in range(block_size):
-            left_step = left_block[index] if index < len(left_block) else None
-            right_step = right_block[index] if index < len(right_block) else None
+            left_entry: dict[str, Any] | None = (
+                left_block[index] if index < len(left_block) else None
+            )
+            right_entry: dict[str, Any] | None = (
+                right_block[index] if index < len(right_block) else None
+            )
             status = "replace"
-            if left_step is None:
+            if left_entry is None:
                 status = "insert"
-            elif right_step is None:
+            elif right_entry is None:
                 status = "delete"
-            entry = _alignment_entry(status, left_step, right_step)
+            entry = _alignment_entry(status, left_entry, right_entry)
             if divergence_point is None:
                 divergence_point = entry
             alignment.append(entry)
@@ -389,7 +393,8 @@ def surface_for_task(
             # Tool availability — THE decision surface
             "tools_available_names": tool_names,
             "tools_available_count": (
-                tools.tools_available_count if tools and tools.tools_available_count is not None
+                tools.tools_available_count
+                if tools and tools.tools_available_count is not None
                 else len(tool_names)
             ),
             "rejected_tools": tools.rejected_tools if tools else None,
@@ -418,7 +423,9 @@ def surface_for_task(
             "continuation_nudge": reasoning.continuation_nudge if reasoning else None,
             "force_termination": reasoning.force_termination if reasoning else None,
             "hard_loop_breaker": reasoning.hard_loop_breaker if reasoning else None,
-            "consecutive_failure_warning": reasoning.consecutive_failure_warning if reasoning else None,
+            "consecutive_failure_warning": reasoning.consecutive_failure_warning
+            if reasoning
+            else None,
             "approval_path": reasoning.approval_path if reasoning else None,
             # Browser state
             "page_url": browser.page_url if browser else None,
@@ -542,8 +549,10 @@ def diff_tasks(
         left_surface["steps"],
         right_surface["steps"],
     )
-    diverged_at = None if divergence_point is None else (
-        divergence_point["left_step"] or divergence_point["right_step"]
+    diverged_at = (
+        None
+        if divergence_point is None
+        else (divergence_point["left_step"] or divergence_point["right_step"])
     )
     prompt_diff = list(
         difflib.unified_diff(

@@ -79,7 +79,9 @@ class CodingDetector:
         }
 
     def _has_file_path(self, value: Any) -> bool:
-        return any(True for text in self._iter_strings(value) for _ in self._iter_file_matches(text))
+        return any(
+            True for text in self._iter_strings(value) for _ in self._iter_file_matches(text)
+        )
 
     def _count_unique_files(self, task: AgentTask) -> int:
         files: set[str] = set()
@@ -91,7 +93,11 @@ class CodingDetector:
     def _iter_file_matches(self, text: str) -> Iterable[str]:
         for match in self.FILE_PATH_RE.finditer(text):
             candidate = match.group(0).rstrip(".,:;")
-            if candidate and not self._is_likely_url(candidate) and not self._is_likely_non_path(candidate):
+            if (
+                candidate
+                and not self._is_likely_url(candidate)
+                and not self._is_likely_non_path(candidate)
+            ):
                 yield candidate
 
     def _is_likely_non_path(self, value: str) -> bool:

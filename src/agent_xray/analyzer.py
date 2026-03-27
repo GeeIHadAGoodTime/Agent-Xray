@@ -12,7 +12,10 @@ from .schema import AgentStep, AgentTask, TaskOutcome
 from .signals import SignalDetector, run_detection
 
 ERROR_PATTERNS = [
-    (r"not approved|approval denied|blocked by approval|needs the user's ok first", "approval_block"),
+    (
+        r"not approved|approval denied|blocked by approval|needs the user's ok first",
+        "approval_block",
+    ),
     (r"unknown tool", "unknown_tool"),
     (r"not available in your capability tier|permission denied|forbidden", "tier_block"),
     (r"timed out|timeout", "timeout"),
@@ -117,17 +120,11 @@ class TaskAnalysis:
 
     @property
     def tokens_in(self) -> int:
-        return sum(
-            (step.model.input_tokens or 0) if step.model else 0
-            for step in self.task.steps
-        )
+        return sum((step.model.input_tokens or 0) if step.model else 0 for step in self.task.steps)
 
     @property
     def tokens_out(self) -> int:
-        return sum(
-            (step.model.output_tokens or 0) if step.model else 0
-            for step in self.task.steps
-        )
+        return sum((step.model.output_tokens or 0) if step.model else 0 for step in self.task.steps)
 
     def metrics(self) -> dict[str, Any]:
         metrics = {

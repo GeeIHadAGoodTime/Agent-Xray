@@ -302,7 +302,9 @@ def coding_task() -> AgentTask:
             {"command": "python -m pytest tests/test_parser.py"},
             tool_result="1 failed, 6 passed",
         ),
-        _step(task_id, 4, "edit_file", {"path": "tests/test_parser.py"}, tool_result="updated test"),
+        _step(
+            task_id, 4, "edit_file", {"path": "tests/test_parser.py"}, tool_result="updated test"
+        ),
         _step(
             task_id,
             5,

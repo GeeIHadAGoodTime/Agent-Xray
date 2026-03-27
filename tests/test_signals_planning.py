@@ -62,7 +62,9 @@ def test_planning_detector_summarizes_plan_metrics() -> None:
     steps = [
         _step(1, "create_plan", {"plan_id": "plan-alpha", "steps": ["search", "write", "verify"]}),
         _step(2, "execute_plan_step", {"plan_id": "plan-alpha", "step": 1, "status": "completed"}),
-        _step(3, "execute_plan_step", {"plan_id": "plan-alpha", "step": 2}, tool_result="completed"),
+        _step(
+            3, "execute_plan_step", {"plan_id": "plan-alpha", "step": 2}, tool_result="completed"
+        ),
         _step(4, "replan", {"plan_id": "plan-alpha"}, tool_result="Updated plan"),
     ]
     summary = detector.summarize(

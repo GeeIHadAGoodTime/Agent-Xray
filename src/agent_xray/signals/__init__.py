@@ -97,7 +97,7 @@ def _load_builtin_detector(module_name: str, class_name: str) -> type[SignalDete
             stacklevel=2,
         )
         return None
-    return detector
+    return detector  # type: ignore[no-any-return]
 
 
 BUILTIN_DETECTORS: tuple[type[SignalDetector], ...] = tuple(

@@ -54,7 +54,14 @@ def test_normalize_score_known_ruleset() -> None:
         description="known score span",
         signals=[
             {"field": "errors", "op": "equals", "value": 0, "points": 2, "label": "zero_errors"},
-            {"field": "step_count", "op": "gte", "value": 2, "points": 3, "else_points": -1, "label": "enough_steps"},
+            {
+                "field": "step_count",
+                "op": "gte",
+                "value": 2,
+                "points": 3,
+                "else_points": -1,
+                "label": "enough_steps",
+            },
         ],
         grade_thresholds={"GOLDEN": 4, "GOOD": 2, "OK": 0, "WEAK": -1},
     )
@@ -74,7 +81,14 @@ def test_grade_task_includes_normalized_score() -> None:
         description="task normalization",
         signals=[
             {"field": "errors", "op": "equals", "value": 0, "points": 2, "label": "zero_errors"},
-            {"field": "step_count", "op": "gte", "value": 2, "points": 3, "else_points": -1, "label": "enough_steps"},
+            {
+                "field": "step_count",
+                "op": "gte",
+                "value": 2,
+                "points": 3,
+                "else_points": -1,
+                "label": "enough_steps",
+            },
         ],
         grade_thresholds={"GOLDEN": 4, "GOOD": 2, "OK": 0, "WEAK": -1},
     )
@@ -85,14 +99,22 @@ def test_grade_task_includes_normalized_score() -> None:
     assert result.normalized_score == pytest.approx((1 - (-1)) / (5 - (-1)))
 
 
-def test_load_rules_prints_validation_warnings(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_load_rules_prints_validation_warnings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     rules_path = tmp_path / "invalid_rules.json"
     rules_path.write_text(
         json.dumps(
             {
                 "name": "invalid",
                 "signals": [
-                    {"field": "missing.metric", "op": "mystery", "value": 1, "points": 1, "label": "bad"}
+                    {
+                        "field": "missing.metric",
+                        "op": "mystery",
+                        "value": 1,
+                        "points": 1,
+                        "label": "bad",
+                    }
                 ],
                 "grade_thresholds": {"GOLDEN": 1},
             }

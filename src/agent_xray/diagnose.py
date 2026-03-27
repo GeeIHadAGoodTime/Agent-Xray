@@ -270,7 +270,8 @@ def build_fix_plan(
                 severity=_severity_for_root_cause(cause),
                 investigate_task=worst.task_id,
                 targets=targets,
-                fix_hint=worst.prompt_fix_hint or ROOT_CAUSES.get(cause, _UNKNOWN_ROOT_CAUSE)["fix_hint"],
+                fix_hint=worst.prompt_fix_hint
+                or ROOT_CAUSES.get(cause, _UNKNOWN_ROOT_CAUSE)["fix_hint"],
                 verify_command=_verify_command_for(cause, worst.task_id),
                 evidence=worst.evidence[:3],
             )

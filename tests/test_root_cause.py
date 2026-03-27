@@ -112,7 +112,9 @@ def test_classify_delegation_failure() -> None:
 def test_classify_test_failure_loop() -> None:
     task = _task(
         [
-            _step(1, "read_file", tool_input={"path": "src/parser.py"}, tool_result="parser source"),
+            _step(
+                1, "read_file", tool_input={"path": "src/parser.py"}, tool_result="parser source"
+            ),
             _step(
                 2,
                 "pytest",
@@ -377,7 +379,9 @@ def test_classification_config_customization() -> None:
     cause = classify_task(
         task,
         _failing_grade(task),
-        config=ClassificationConfig(insufficient_sources_min_searches=1, low_source_diversity_threshold=1),
+        config=ClassificationConfig(
+            insufficient_sources_min_searches=1, low_source_diversity_threshold=1
+        ),
     )
     assert cause is not None
     assert cause.root_cause == "early_abort"
@@ -387,4 +391,3 @@ def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:
     grade = grade_task(golden_task, load_rules(RULES_PATH))
     assert grade.grade == "GOOD"
     assert classify_task(golden_task, grade) is None
-

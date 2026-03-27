@@ -1,4 +1,4 @@
-﻿"""Text, data, and Markdown report generation for agent-xray.`r`n`r`nEach report type exposes a text formatter, a structured ``*_data`` variant for`r`nJSON output, and a GitHub-flavored ``*_markdown`` variant for docs and issue`r`nthreads. Reports operate on already-loaded tasks, grades, and analyses so the`r`nCLI and tests can share the same computations.`r`n"""
+"""Text, data, and Markdown report generation for agent-xray.`r`n`r`nEach report type exposes a text formatter, a structured ``*_data`` variant for`r`nJSON output, and a GitHub-flavored ``*_markdown`` variant for docs and issue`r`nthreads. Reports operate on already-loaded tasks, grades, and analyses so the`r`nCLI and tests can share the same computations.`r`n"""
 
 from __future__ import annotations
 
@@ -57,10 +57,7 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
         rows = [["-", *(["-"] * (len(headers) - 1))]]
     header = "| " + " | ".join(_markdown_escape(item) for item in headers) + " |"
     divider = "| " + " | ".join("---" for _ in headers) + " |"
-    body = [
-        "| " + " | ".join(_markdown_escape(item) for item in row) + " |"
-        for row in rows
-    ]
+    body = ["| " + " | ".join(_markdown_escape(item) for item in row) + " |" for row in rows]
     return "\n".join([header, divider, *body])
 
 
@@ -69,14 +66,10 @@ def _text_table(headers: list[str], rows: list[list[Any]]) -> list[str]:
     for row in rows:
         for index, cell in enumerate(row):
             widths[index] = max(widths[index], len(str(cell)))
-    header = "  " + "  ".join(
-        f"{str(cell):<{widths[index]}}" for index, cell in enumerate(headers)
-    )
+    header = "  " + "  ".join(f"{str(cell):<{widths[index]}}" for index, cell in enumerate(headers))
     divider = "  " + "  ".join("-" * width for width in widths)
     body = [
-        "  " + "  ".join(
-            f"{str(cell):<{widths[index]}}" for index, cell in enumerate(row)
-        )
+        "  " + "  ".join(f"{str(cell):<{widths[index]}}" for index, cell in enumerate(row))
         for row in rows
     ]
     return [header, divider, *body]
@@ -187,21 +180,36 @@ def report_health(
         lines.append(f"  {label:7s} {_bar(count, total)} {count:3d} ({_pct(count, total)}%)")
     lines.append(f"\n  Total: {total} tasks")
 
-    lines.extend([
-        "",
-        f"  Error tasks: {data['error_tasks']}/{total} ({_pct(data['error_tasks'], total)}%)",
-        f"  Spin tasks:  {data['spin_tasks']}/{total} ({_pct(data['spin_tasks'], total)}%)",
-        f"  Timeouts:    {data['timeout_tasks']}/{total}",
-        f"  Hallucinations: {data['hallucination_tasks']}/{total}",
-        f"  Approval blocks: {data['approval_blocked_tasks']}/{total}",
-    ])
+    lines.extend(
+        [
+            "",
+            f"  Error tasks: {data['error_tasks']}/{total} ({_pct(data['error_tasks'], total)}%)",
+            f"  Spin tasks:  {data['spin_tasks']}/{total} ({_pct(data['spin_tasks'], total)}%)",
+            f"  Timeouts:    {data['timeout_tasks']}/{total}",
+            f"  Hallucinations: {data['hallucination_tasks']}/{total}",
+            f"  Approval blocks: {data['approval_blocked_tasks']}/{total}",
+        ]
+    )
 
     if len(data["day_trends"]) > 1:
         rows = [
-            [day, stats["tasks"], stats["golden"], stats["good"], stats["broken"], f"{stats['pass_pct']}%"]
+            [
+                day,
+                stats["tasks"],
+                stats["golden"],
+                stats["good"],
+                stats["broken"],
+                f"{stats['pass_pct']}%",
+            ]
             for day, stats in data["day_trends"].items()
         ]
-        lines.extend(["", "DAY TRENDS:", *_text_table(["Day", "Tasks", "GOLDEN", "GOOD", "BROKEN", "Pass%"], rows)])
+        lines.extend(
+            [
+                "",
+                "DAY TRENDS:",
+                *_text_table(["Day", "Tasks", "GOLDEN", "GOOD", "BROKEN", "Pass%"], rows),
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -261,15 +269,24 @@ def report_health_markdown(
     ]
     if len(data["day_trends"]) > 1:
         day_rows = [
-            [day, stats["tasks"], stats["golden"], stats["good"], stats["broken"], f"{stats['pass_pct']}%"]
+            [
+                day,
+                stats["tasks"],
+                stats["golden"],
+                stats["good"],
+                stats["broken"],
+                f"{stats['pass_pct']}%",
+            ]
             for day, stats in data["day_trends"].items()
         ]
-        parts.extend([
-            "",
-            "## Day Trends",
-            "",
-            _markdown_table(["Day", "Tasks", "GOLDEN", "GOOD", "BROKEN", "Pass%"], day_rows),
-        ])
+        parts.extend(
+            [
+                "",
+                "## Day Trends",
+                "",
+                _markdown_table(["Day", "Tasks", "GOLDEN", "GOOD", "BROKEN", "Pass%"], day_rows),
+            ]
+        )
     return "\n".join(parts)
 
 
@@ -300,16 +317,18 @@ def _golden_items(
             milestones.append("checkout")
         if commerce.get("reached_payment"):
             milestones.append("payment")
-        items.append({
-            "task_id": task.task_id,
-            "grade": grade.grade,
-            "score": grade.score,
-            "steps": analysis.step_count,
-            "urls": len(analysis.unique_urls),
-            "fills": commerce.get("fill_count", 0),
-            "site": analysis.site_name,
-            "milestones": milestones,
-        })
+        items.append(
+            {
+                "task_id": task.task_id,
+                "grade": grade.grade,
+                "score": grade.score,
+                "steps": analysis.step_count,
+                "urls": len(analysis.unique_urls),
+                "fills": commerce.get("fill_count", 0),
+                "site": analysis.site_name,
+                "milestones": milestones,
+            }
+        )
     items.sort(key=lambda item: -item["score"])
     return items
 
@@ -346,11 +365,13 @@ def report_golden(
         avg_steps = sum(item["steps"] for item in golden_good) / len(golden_good)
         avg_urls = sum(item["urls"] for item in golden_good) / len(golden_good)
         site_counts: Counter[str] = Counter(item["site"] for item in golden_good)
-        lines.extend([
-            "",
-            f"  Avg steps: {avg_steps:.1f}, Avg URLs: {avg_urls:.1f}",
-            f"  Sites: {dict(site_counts.most_common(10))}",
-        ])
+        lines.extend(
+            [
+                "",
+                f"  Avg steps: {avg_steps:.1f}, Avg URLs: {avg_urls:.1f}",
+                f"  Sites: {dict(site_counts.most_common(10))}",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -404,11 +425,15 @@ def report_golden_markdown(
         ]
         for item in _golden_items(tasks, grades, analyses, min_steps=min_steps)
     ]
-    return "\n".join([
-        "## Golden / Good Runs",
-        "",
-        _markdown_table(["Task", "Grade", "Score", "Steps", "URLs", "Fills", "Site", "Flow"], rows),
-    ])
+    return "\n".join(
+        [
+            "## Golden / Good Runs",
+            "",
+            _markdown_table(
+                ["Task", "Grade", "Score", "Steps", "URLs", "Fills", "Site", "Flow"], rows
+            ),
+        ]
+    )
 
 
 # â”€â”€ Broken Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -461,7 +486,11 @@ def report_broken(
 
     lines.append("Worst tasks:")
     for task, grade, analysis in broken[:15]:
-        spin_info = f" spin={analysis.max_repeat_tool}x{analysis.max_repeat_count}" if analysis.is_spin else ""
+        spin_info = (
+            f" spin={analysis.max_repeat_tool}x{analysis.max_repeat_count}"
+            if analysis.is_spin
+            else ""
+        )
         lines.append(
             f"  [{grade.score:+3d}] {task.task_id[:24]:24s} "
             f"steps={analysis.step_count} errs={analysis.errors}{spin_info} "
@@ -508,14 +537,16 @@ def report_broken_data(
             why["routing"] += 1
     items = []
     for task, grade, analysis in broken[:15]:
-        items.append({
-            "task_id": task.task_id,
-            "score": grade.score,
-            "steps": analysis.step_count,
-            "errors": analysis.errors,
-            "spin": analysis.is_spin,
-            "site": analysis.site_name,
-        })
+        items.append(
+            {
+                "task_id": task.task_id,
+                "score": grade.score,
+                "steps": analysis.step_count,
+                "errors": analysis.errors,
+                "spin": analysis.is_spin,
+                "site": analysis.site_name,
+            }
+        )
     return {"count": len(broken), "why": dict(why), "worst_tasks": items}
 
 
@@ -540,15 +571,17 @@ def report_broken_markdown(
         [item["task_id"], item["score"], item["steps"], item["errors"], item["spin"], item["site"]]
         for item in data["worst_tasks"]
     ]
-    return "\n".join([
-        "## Broken Tasks",
-        "",
-        _markdown_table(["Reason", "Count"], why_rows),
-        "",
-        "## Worst Tasks",
-        "",
-        _markdown_table(["Task", "Score", "Steps", "Errors", "Spin", "Site"], task_rows),
-    ])
+    return "\n".join(
+        [
+            "## Broken Tasks",
+            "",
+            _markdown_table(["Reason", "Count"], why_rows),
+            "",
+            "## Worst Tasks",
+            "",
+            _markdown_table(["Task", "Score", "Steps", "Errors", "Spin", "Site"], task_rows),
+        ]
+    )
 
 
 # â”€â”€ Tool Effectiveness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -579,7 +612,9 @@ def report_tools(
                 tool_durations[step.tool_name].append(step.duration_ms)
 
     lines = ["TOOL EFFECTIVENESS", "=" * 60, ""]
-    lines.append(f"  {'Tool':30s} {'Calls':>6s} {'Errors':>7s} {'Err%':>5s} {'Avg ms':>7s} {'Flag':>8s}")
+    lines.append(
+        f"  {'Tool':30s} {'Calls':>6s} {'Errors':>7s} {'Err%':>5s} {'Avg ms':>7s} {'Flag':>8s}"
+    )
     lines.append("  " + "-" * 65)
     for tool, calls in tool_calls.most_common():
         errs = tool_errors.get(tool, 0)
@@ -634,11 +669,15 @@ def report_tools_data(
         errs = tool_errors.get(tool, 0)
         durations = tool_durations.get(tool, [])
         avg_ms = round(sum(durations) / len(durations)) if durations else 0
-        items.append({
-            "tool": tool, "calls": calls, "errors": errs,
-            "error_pct": round(errs * 100 / max(1, calls)),
-            "avg_ms": avg_ms,
-        })
+        items.append(
+            {
+                "tool": tool,
+                "calls": calls,
+                "errors": errs,
+                "error_pct": round(errs * 100 / max(1, calls)),
+                "avg_ms": avg_ms,
+            }
+        )
     return {"tools": items}
 
 
@@ -660,11 +699,13 @@ def report_tools_markdown(
         [item["tool"], item["calls"], item["errors"], f"{item['error_pct']}%", item["avg_ms"]]
         for item in data["tools"]
     ]
-    return "\n".join([
-        "## Tool Effectiveness",
-        "",
-        _markdown_table(["Tool", "Calls", "Errors", "Err%", "Avg ms"], rows),
-    ])
+    return "\n".join(
+        [
+            "## Tool Effectiveness",
+            "",
+            _markdown_table(["Tool", "Calls", "Errors", "Err%", "Avg ms"], rows),
+        ]
+    )
 
 
 # â”€â”€ Flow Funnel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -674,11 +715,15 @@ def _coding_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, boo
     coding = analysis.signal_metrics.get("coding", {})
     tools = _tool_sequence(task)
     edit_indices = [
-        index for index, tool in enumerate(tools)
-        if any(keyword in tool for keyword in ("edit", "write", "patch", "create", "delete", "file"))
+        index
+        for index, tool in enumerate(tools)
+        if any(
+            keyword in tool for keyword in ("edit", "write", "patch", "create", "delete", "file")
+        )
     ]
     test_indices = [
-        index for index, tool in enumerate(tools)
+        index
+        for index, tool in enumerate(tools)
         if any(keyword in tool for keyword in ("test", "lint", "build", "type"))
     ]
     last_edit = max(edit_indices) if edit_indices else -1
@@ -691,8 +736,14 @@ def _coding_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, boo
             or coding.get("build_runs", 0) > 0
             or bool(test_indices)
         ),
-        "Fix": bool(edit_indices and test_indices and any(index > min(test_indices) for index in edit_indices)),
-        "Verify": bool(test_indices and last_edit >= 0 and any(index > last_edit for index in test_indices)),
+        "Fix": bool(
+            edit_indices
+            and test_indices
+            and any(index > min(test_indices) for index in edit_indices)
+        ),
+        "Verify": bool(
+            test_indices and last_edit >= 0 and any(index > last_edit for index in test_indices)
+        ),
     }
 
 
@@ -701,16 +752,20 @@ def _research_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, b
     return {
         "Started": bool(task.steps),
         "Search": research.get("search_count", 0) > 0 or _task_has_tool_keyword(task, "search"),
-        "Read": research.get("read_count", 0) > 0 or _task_has_tool_keyword(task, "read", "fetch", "scrape"),
-        "Synthesize": research.get("has_synthesis_step", False) or _task_has_tool_keyword(task, "respond", "answer", "summarize"),
+        "Read": research.get("read_count", 0) > 0
+        or _task_has_tool_keyword(task, "read", "fetch", "scrape"),
+        "Synthesize": research.get("has_synthesis_step", False)
+        or _task_has_tool_keyword(task, "respond", "answer", "summarize"),
     }
 
 
 def _browser_flow_flags(task: AgentTask, analysis: TaskAnalysis) -> dict[str, bool]:
     return {
         "Started": bool(task.steps),
-        "Browse": _has_browser_steps(task) or _task_has_url_keyword(analysis, "search", "docs", "issues"),
-        "Form": _task_has_tool_keyword(task, "fill", "type", "select") or _task_has_url_keyword(analysis, "form", "settings", "wizard"),
+        "Browse": _has_browser_steps(task)
+        or _task_has_url_keyword(analysis, "search", "docs", "issues"),
+        "Form": _task_has_tool_keyword(task, "fill", "type", "select")
+        or _task_has_url_keyword(analysis, "form", "settings", "wizard"),
         "Complete": (
             bool(task.outcome and task.outcome.status == "success")
             or _task_has_url_keyword(analysis, "review", "confirm", "complete", "success", "done")
@@ -814,7 +869,9 @@ def _flow_summary(analyses: dict[str, TaskAnalysis]) -> dict[str, Any]:
                 group["stages"][stage] += 1
         if detected["final_url"]:
             group["final_urls"][detected["final_url"]] += 1
-    ordered = sorted(groups.values(), key=lambda item: (-item["tasks"], item["domain"], item["label"]))
+    ordered = sorted(
+        groups.values(), key=lambda item: (-item["tasks"], item["domain"], item["label"])
+    )
     for group in ordered:
         if group["tasks"]:
             group["avg_steps"] = round(group["avg_steps"] / group["tasks"], 1)
@@ -854,15 +911,19 @@ def report_flows(
 
     for group in data["groups"]:
         counts = "   ".join(f"{group['stages'][stage]:>8d}" for stage in group["stage_order"])
-        rates = "   ".join(f"{_pct(group['stages'][stage], group['tasks']):>7d}%" for stage in group["stage_order"])
-        lines.extend([
-            "",
-            f"  {group['label']} [{group['domain']}] ({group['tasks']} tasks)",
-            f"    {' -> '.join(group['stage_order'])}",
-            f"    {counts}",
-            f"    {rates}",
-            f"    spins={group['spins']}  avg_steps={group['avg_steps']}",
-        ])
+        rates = "   ".join(
+            f"{_pct(group['stages'][stage], group['tasks']):>7d}%" for stage in group["stage_order"]
+        )
+        lines.extend(
+            [
+                "",
+                f"  {group['label']} [{group['domain']}] ({group['tasks']} tasks)",
+                f"    {' -> '.join(group['stage_order'])}",
+                f"    {counts}",
+                f"    {rates}",
+                f"    spins={group['spins']}  avg_steps={group['avg_steps']}",
+            ]
+        )
 
         if group["final_urls"]:
             lines.append("    Common endpoints:")
@@ -920,12 +981,14 @@ def report_flows_markdown(
             [stage, group["stages"][stage], f"{_pct(group['stages'][stage], group['tasks'])}%"]
             for stage in group["stage_order"]
         ]
-        parts.extend([
-            "",
-            f"## {group['label']} [{group['domain']}]",
-            "",
-            _markdown_table(["Stage", "Reached", "Reach %"], stage_rows),
-        ])
+        parts.extend(
+            [
+                "",
+                f"## {group['label']} [{group['domain']}]",
+                "",
+                _markdown_table(["Stage", "Reached", "Reach %"], stage_rows),
+            ]
+        )
     return "\n".join(parts)
 
 
@@ -972,16 +1035,20 @@ def report_outcomes(
     for outcome, count in outcome_counts.most_common():
         lines.append(f"  {outcome:20s} {count:4d} ({round(count * 100 / max(1, total))}%)")
 
-    lines.extend([
-        "",
-        f"  Data coverage: {with_text}/{total} have user_text, {with_outcome}/{total} have outcome",
-    ])
+    lines.extend(
+        [
+            "",
+            f"  Data coverage: {with_text}/{total} have user_text, {with_outcome}/{total} have outcome",
+        ]
+    )
 
     if len(prompt_variants) > 1 or (len(prompt_variants) == 1 and "unknown" not in prompt_variants):
         lines.append(f"  Prompt variants: {dict(prompt_variants.most_common())}")
 
     # Cross-tab: Outcome x Grade
-    lines.extend(["", "OUTCOME x GRADE:", f"  {'Outcome':20s} " + " ".join(f"{g:>7s}" for g in GRADE_LABELS)])
+    lines.extend(
+        ["", "OUTCOME x GRADE:", f"  {'Outcome':20s} " + " ".join(f"{g:>7s}" for g in GRADE_LABELS)]
+    )
     for outcome in sorted(grade_by_outcome):
         row = grade_by_outcome[outcome]
         cells = " ".join(f"{row.get(g, 0):7d}" for g in GRADE_LABELS)
@@ -1037,19 +1104,27 @@ def report_outcomes_markdown(
     """
     data = report_outcomes_data(tasks, grades, analyses)
     total = len(tasks)
-    outcome_rows = [[name, count, f"{_pct(count, total)}%"] for name, count in data["outcomes"].items()]
+    outcome_rows = [
+        [name, count, f"{_pct(count, total)}%"] for name, count in data["outcomes"].items()
+    ]
     cross_rows = [
         [outcome, *[data["outcome_x_grade"][outcome].get(label, 0) for label in GRADE_LABELS]]
         for outcome in sorted(data["outcome_x_grade"])
     ]
-    parts = ["## Outcome Distribution", "", _markdown_table(["Outcome", "Count", "Pct"], outcome_rows)]
+    parts = [
+        "## Outcome Distribution",
+        "",
+        _markdown_table(["Outcome", "Count", "Pct"], outcome_rows),
+    ]
     if cross_rows:
-        parts.extend([
-            "",
-            "## Outcome x Grade",
-            "",
-            _markdown_table(["Outcome", *GRADE_LABELS], cross_rows),
-        ])
+        parts.extend(
+            [
+                "",
+                "## Outcome x Grade",
+                "",
+                _markdown_table(["Outcome", *GRADE_LABELS], cross_rows),
+            ]
+        )
     return "\n".join(parts)
 
 
@@ -1111,7 +1186,9 @@ def report_actions(
     routing_tasks = sum(1 for a in analyses.values() if a.no_tools_steps > 0)
     if routing_tasks >= 3:
         priority += 1
-        lines.append(f"  #{priority} ROUTING GAP: {routing_tasks} tasks had steps with 0 tools available")
+        lines.append(
+            f"  #{priority} ROUTING GAP: {routing_tasks} tasks had steps with 0 tools available"
+        )
         lines.append("")
 
     # 4. Hallucinated tools
@@ -1130,13 +1207,14 @@ def report_actions(
         lines.append("")
 
     # 5. Low flow completion
-    browser_tasks = [a for a in analyses.values() if any(
-        s.tool_name.startswith(("browser_", "desktop_")) for s in a.task.steps
-    )]
+    browser_tasks = [
+        a
+        for a in analyses.values()
+        if any(s.tool_name.startswith(("browser_", "desktop_")) for s in a.task.steps)
+    ]
     if browser_tasks:
         payment_reached = sum(
-            1 for a in browser_tasks
-            if a.signal_metrics.get("commerce", {}).get("reached_payment")
+            1 for a in browser_tasks if a.signal_metrics.get("commerce", {}).get("reached_payment")
         )
         pct = round(payment_reached * 100 / max(1, len(browser_tasks)))
         if pct < 10:
@@ -1148,13 +1226,12 @@ def report_actions(
             lines.append("")
 
     # 6. Approval blocks
-    approval_tasks = sum(
-        1 for a in analyses.values()
-        if a.error_kinds.get("approval_block", 0) > 0
-    )
+    approval_tasks = sum(1 for a in analyses.values() if a.error_kinds.get("approval_block", 0) > 0)
     if approval_tasks >= 3:
         priority += 1
-        lines.append(f"  #{priority} APPROVAL BLOCKS: {approval_tasks} tasks blocked by approval policy")
+        lines.append(
+            f"  #{priority} APPROVAL BLOCKS: {approval_tasks} tasks blocked by approval policy"
+        )
         lines.append("")
 
     if priority == 0:
@@ -1225,11 +1302,13 @@ def report_actions_markdown(
         [index, item["type"], item.get("affected_tasks", "-"), item.get("details", "-")]
         for index, item in enumerate(data["action_items"], start=1)
     ]
-    return "\n".join([
-        "## Prioritized Action Items",
-        "",
-        _markdown_table(["Priority", "Type", "Affected", "Details"], rows),
-    ])
+    return "\n".join(
+        [
+            "## Prioritized Action Items",
+            "",
+            _markdown_table(["Priority", "Type", "Affected", "Details"], rows),
+        ]
+    )
 
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Cost Analysis Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -1241,9 +1320,15 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
     total_cost = 0.0
     total_steps = 0
     task_rows: list[dict[str, Any]] = []
-    by_model: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": set(), "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
-    by_category: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
-    by_day: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
+    by_model: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"tasks": set(), "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+    )
+    by_category: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+    )
+    by_day: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+    )
 
     for task in tasks:
         analysis = analyses[task.task_id]
@@ -1272,18 +1357,20 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
         day_bucket["tokens_out"] += task_tokens_out
         day_bucket["cost_usd"] += task_cost
 
-        task_rows.append({
-            "task_id": task.task_id,
-            "model": _primary_model(task),
-            "models": _task_models(task),
-            "category": category,
-            "day": day,
-            "steps": task_steps,
-            "tokens_in": task_tokens_in,
-            "tokens_out": task_tokens_out,
-            "cost_usd": round(task_cost, 6),
-            "cost_per_step": round(task_cost / max(1, task_steps), 6),
-        })
+        task_rows.append(
+            {
+                "task_id": task.task_id,
+                "model": _primary_model(task),
+                "models": _task_models(task),
+                "category": category,
+                "day": day,
+                "steps": task_steps,
+                "tokens_in": task_tokens_in,
+                "tokens_out": task_tokens_out,
+                "cost_usd": round(task_cost, 6),
+                "cost_per_step": round(task_cost / max(1, task_steps), 6),
+            }
+        )
 
         for step in task.sorted_steps:
             model = step.model_name or "unknown"
@@ -1297,7 +1384,9 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
     task_rows.sort(key=lambda item: (-item["cost_usd"], item["task_id"]))
 
     def _finalize(name: str, bucket: dict[str, Any]) -> dict[str, Any]:
-        task_count = len(bucket["tasks"]) if isinstance(bucket["tasks"], set) else int(bucket["tasks"])
+        task_count = (
+            len(bucket["tasks"]) if isinstance(bucket["tasks"], set) else int(bucket["tasks"])
+        )
         return {
             "tasks": task_count,
             "steps": bucket["steps"],
@@ -1342,13 +1431,15 @@ def report_cost(
     data = _cost_summary(tasks, analyses)
     summary = data["summary"]
     lines = ["COST ANALYSIS", "=" * 60, ""]
-    lines.extend([
-        f"  Total tokens in:  {summary['tokens_in']}",
-        f"  Total tokens out: {summary['tokens_out']}",
-        f"  Total cost:       {_format_money(summary['cost_usd'])}",
-        f"  Cost per task:    {_format_money(summary['avg_cost_per_task'])}",
-        f"  Cost per step:    {_format_money(summary['avg_cost_per_step'])}",
-    ])
+    lines.extend(
+        [
+            f"  Total tokens in:  {summary['tokens_in']}",
+            f"  Total tokens out: {summary['tokens_out']}",
+            f"  Total cost:       {_format_money(summary['cost_usd'])}",
+            f"  Cost per task:    {_format_money(summary['avg_cost_per_task'])}",
+            f"  Cost per step:    {_format_money(summary['avg_cost_per_step'])}",
+        ]
+    )
 
     def _append_group(title: str, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -1366,7 +1457,16 @@ def report_cost(
             ]
             for row in rows
         ]
-        lines.extend(["", f"{title}:", *_text_table(["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"], table)])
+        lines.extend(
+            [
+                "",
+                f"{title}:",
+                *_text_table(
+                    ["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"],
+                    table,
+                ),
+            ]
+        )
 
     _append_group("BY MODEL", data["by_model"])
     _append_group("BY CATEGORY", data["by_category"])
@@ -1387,7 +1487,16 @@ def report_cost(
         for item in data["most_expensive_tasks"]
     ]
     if task_rows:
-        lines.extend(["", "MOST EXPENSIVE TASKS:", *_text_table(["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"], task_rows)])
+        lines.extend(
+            [
+                "",
+                "MOST EXPENSIVE TASKS:",
+                *_text_table(
+                    ["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"],
+                    task_rows,
+                ),
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1436,31 +1545,58 @@ def report_cost_markdown(
             ],
         ),
     ]
-    for title, rows in (("By Model", data["by_model"]), ("By Category", data["by_category"]), ("By Day", data["by_day"])):
-        parts.extend([
+    for title, rows in (
+        ("By Model", data["by_model"]),
+        ("By Category", data["by_category"]),
+        ("By Day", data["by_day"]),
+    ):
+        parts.extend(
+            [
+                "",
+                f"## {title}",
+                "",
+                _markdown_table(
+                    ["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"],
+                    [
+                        [
+                            row["name"],
+                            row["tasks"],
+                            row["steps"],
+                            row["tokens_in"],
+                            row["tokens_out"],
+                            _format_money(row["cost_usd"]),
+                            _format_money(row["avg_cost_per_task"]),
+                            _format_money(row["avg_cost_per_step"]),
+                        ]
+                        for row in rows
+                    ],
+                ),
+            ]
+        )
+    parts.extend(
+        [
             "",
-            f"## {title}",
+            "## Most Expensive Tasks",
             "",
             _markdown_table(
-                ["Group", "Tasks", "Steps", "In", "Out", "Cost", "Cost/Task", "Cost/Step"],
+                ["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"],
                 [
-                    [row["name"], row["tasks"], row["steps"], row["tokens_in"], row["tokens_out"], _format_money(row["cost_usd"]), _format_money(row["avg_cost_per_task"]), _format_money(row["avg_cost_per_step"])]
-                    for row in rows
+                    [
+                        item["task_id"],
+                        item["model"],
+                        item["category"],
+                        item["day"],
+                        item["steps"],
+                        item["tokens_in"],
+                        item["tokens_out"],
+                        _format_money(item["cost_usd"]),
+                        _format_money(item["cost_per_step"]),
+                    ]
+                    for item in data["most_expensive_tasks"]
                 ],
             ),
-        ])
-    parts.extend([
-        "",
-        "## Most Expensive Tasks",
-        "",
-        _markdown_table(
-            ["Task", "Model", "Category", "Day", "Steps", "In", "Out", "Cost", "Cost/Step"],
-            [
-                [item["task_id"], item["model"], item["category"], item["day"], item["steps"], item["tokens_in"], item["tokens_out"], _format_money(item["cost_usd"]), _format_money(item["cost_per_step"])]
-                for item in data["most_expensive_tasks"]
-            ],
-        ),
-    ])
+        ]
+    )
     return "\n".join(parts)
 
 
@@ -1481,18 +1617,22 @@ def _fix_plan_summary(tasks: list[AgentTask], grades: list[GradeResult]) -> dict
             for item in failure.evidence:
                 if item not in evidence:
                     evidence.append(item)
-        fixes.append({
-            "priority": entry.priority,
-            "root_cause": entry.root_cause,
-            "root_cause_label": cause_meta.get("label", entry.root_cause),
-            "affected_tasks": sorted(item.task_id for item in failures_by_cause.get(entry.root_cause, [])),
-            "affected_count": entry.count,
-            "impact_score": entry.impact,
-            "investigate_task": entry.investigate_task,
-            "targets": list(entry.targets),
-            "fix_hint": entry.fix_hint,
-            "evidence": evidence[:5] or list(entry.evidence),
-        })
+        fixes.append(
+            {
+                "priority": entry.priority,
+                "root_cause": entry.root_cause,
+                "root_cause_label": cause_meta.get("label", entry.root_cause),
+                "affected_tasks": sorted(
+                    item.task_id for item in failures_by_cause.get(entry.root_cause, [])
+                ),
+                "affected_count": entry.count,
+                "impact_score": entry.impact,
+                "investigate_task": entry.investigate_task,
+                "targets": list(entry.targets),
+                "fix_hint": entry.fix_hint,
+                "evidence": evidence[:5] or list(entry.evidence),
+            }
+        )
     return {"count": len(fixes), "failures_considered": len(failures), "fixes": fixes}
 
 
@@ -1518,15 +1658,19 @@ def report_fixes(
         lines.append("  No BROKEN or WEAK tasks found. Nothing to diagnose.")
         return "\n".join(lines)
     for item in data["fixes"]:
-        lines.extend([
-            f"Priority #{item['priority']}: {item['root_cause']} ({item['affected_count']} task(s), impact={item['impact_score']})",
-            f"  Targets: {', '.join(item['targets'])}",
-            f"  Fix hint: {item['fix_hint']}",
-            f"  Investigate task: {item['investigate_task']}",
-            f"  Affected tasks: {', '.join(item['affected_tasks'])}",
-            f"  Evidence: {'; '.join(item['evidence'])}" if item["evidence"] else "  Evidence: none",
-            "",
-        ])
+        lines.extend(
+            [
+                f"Priority #{item['priority']}: {item['root_cause']} ({item['affected_count']} task(s), impact={item['impact_score']})",
+                f"  Targets: {', '.join(item['targets'])}",
+                f"  Fix hint: {item['fix_hint']}",
+                f"  Investigate task: {item['investigate_task']}",
+                f"  Affected tasks: {', '.join(item['affected_tasks'])}",
+                f"  Evidence: {'; '.join(item['evidence'])}"
+                if item["evidence"]
+                else "  Evidence: none",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1569,34 +1713,45 @@ def report_fixes_markdown(
     if not data["fixes"]:
         return "## Fix Plan Report\n\nNo BROKEN or WEAK tasks found. Nothing to diagnose."
     summary_rows = [
-        [item["priority"], item["root_cause"], item["affected_count"], item["impact_score"], item["investigate_task"]]
+        [
+            item["priority"],
+            item["root_cause"],
+            item["affected_count"],
+            item["impact_score"],
+            item["investigate_task"],
+        ]
         for item in data["fixes"]
     ]
     parts = [
         "## Fix Plan Report",
         "",
-        _markdown_table(["Priority", "Root Cause", "Affected Tasks", "Impact Score", "Investigate Task"], summary_rows),
+        _markdown_table(
+            ["Priority", "Root Cause", "Affected Tasks", "Impact Score", "Investigate Task"],
+            summary_rows,
+        ),
     ]
     for item in data["fixes"]:
-        parts.extend([
-            "",
-            f"## Priority {item['priority']}: {item['root_cause']}",
-            "",
-            _markdown_table(
-                ["Field", "Value"],
-                [
-                    ["Root cause", item["root_cause_label"]],
-                    ["Affected tasks", ", ".join(item["affected_tasks"]) or "-"],
-                    ["Impact score", item["impact_score"]],
-                    ["Targets", ", ".join(item["targets"])],
-                    ["Fix hint", item["fix_hint"]],
-                ],
-            ),
-            "",
-            "```text",
-            "\n".join(item["evidence"]) if item["evidence"] else "none",
-            "```",
-        ])
+        parts.extend(
+            [
+                "",
+                f"## Priority {item['priority']}: {item['root_cause']}",
+                "",
+                _markdown_table(
+                    ["Field", "Value"],
+                    [
+                        ["Root cause", item["root_cause_label"]],
+                        ["Affected tasks", ", ".join(item["affected_tasks"]) or "-"],
+                        ["Impact score", item["impact_score"]],
+                        ["Targets", ", ".join(item["targets"])],
+                        ["Fix hint", item["fix_hint"]],
+                    ],
+                ),
+                "",
+                "```text",
+                "\n".join(item["evidence"]) if item["evidence"] else "none",
+                "```",
+            ]
+        )
     return "\n".join(parts)
 
 
@@ -1634,8 +1789,7 @@ def report_compare_days(
         broken = dist.get("BROKEN", 0)
         spins = sum(1 for a in day_analyses if a.is_spin)
         payment = sum(
-            1 for a in day_analyses
-            if a.signal_metrics.get("commerce", {}).get("reached_payment")
+            1 for a in day_analyses if a.signal_metrics.get("commerce", {}).get("reached_payment")
         )
         avg_steps = sum(a.step_count for a in day_analyses) / max(1, total)
         return {
@@ -1739,16 +1893,33 @@ def report_compare_days_markdown(
     s2 = data["day2"][day2]
     rows = [
         ["Tasks", s1["total"], s2["total"], "-"],
-        ["Golden+Good%", f"{s1['golden_good_pct']}%", f"{s2['golden_good_pct']}%", _delta_arrow(s1["golden_good_pct"], s2["golden_good_pct"])],
-        ["Broken%", f"{s1['broken_pct']}%", f"{s2['broken_pct']}%", _delta_arrow(s1["broken_pct"], s2["broken_pct"], higher_is_better=False)],
-        ["Spin%", f"{s1['spin_pct']}%", f"{s2['spin_pct']}%", _delta_arrow(s1["spin_pct"], s2["spin_pct"], higher_is_better=False)],
+        [
+            "Golden+Good%",
+            f"{s1['golden_good_pct']}%",
+            f"{s2['golden_good_pct']}%",
+            _delta_arrow(s1["golden_good_pct"], s2["golden_good_pct"]),
+        ],
+        [
+            "Broken%",
+            f"{s1['broken_pct']}%",
+            f"{s2['broken_pct']}%",
+            _delta_arrow(s1["broken_pct"], s2["broken_pct"], higher_is_better=False),
+        ],
+        [
+            "Spin%",
+            f"{s1['spin_pct']}%",
+            f"{s2['spin_pct']}%",
+            _delta_arrow(s1["spin_pct"], s2["spin_pct"], higher_is_better=False),
+        ],
         ["Avg steps", s1["avg_steps"], s2["avg_steps"], "-"],
     ]
-    return "\n".join([
-        f"## Day Comparison: {day1} vs {day2}",
-        "",
-        _markdown_table(["Metric", day1, day2, "Delta"], rows),
-    ])
+    return "\n".join(
+        [
+            f"## Day Comparison: {day1} vs {day2}",
+            "",
+            _markdown_table(["Metric", day1, day2, "Delta"], rows),
+        ]
+    )
 
 
 # â”€â”€ Coding Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1792,15 +1963,17 @@ def report_coding(
             verify_cycle += 1
 
     n = len(coding_tasks)
-    lines.extend([
-        f"  File operations: {total_files} (avg {total_files / n:.1f}/task)",
-        f"  Test runs:       {total_tests} (avg {total_tests / n:.1f}/task)",
-        f"  Lint runs:       {total_lints}",
-        f"  Git operations:  {total_git}",
-        f"  Edit+test cycle: {verify_cycle}/{n} tasks ({round(verify_cycle * 100 / n)}%)",
-        "",
-        "Tasks:",
-    ])
+    lines.extend(
+        [
+            f"  File operations: {total_files} (avg {total_files / n:.1f}/task)",
+            f"  Test runs:       {total_tests} (avg {total_tests / n:.1f}/task)",
+            f"  Lint runs:       {total_lints}",
+            f"  Git operations:  {total_git}",
+            f"  Edit+test cycle: {verify_cycle}/{n} tasks ({round(verify_cycle * 100 / n)}%)",
+            "",
+            "Tasks:",
+        ]
+    )
     for task, analysis in sorted(coding_tasks, key=lambda x: -x[1].step_count):
         cm = analysis.signal_metrics.get("coding", {})
         lines.append(
@@ -1832,17 +2005,19 @@ def report_coding_data(
     items = []
     for task, analysis in coding_tasks:
         cm = analysis.signal_metrics.get("coding", {})
-        items.append({
-            "task_id": task.task_id,
-            "file_operations": cm.get("file_operations", 0),
-            "test_runs": cm.get("test_runs", 0),
-            "lint_runs": cm.get("lint_runs", 0),
-            "git_operations": cm.get("git_operations", 0),
-            "unique_files": cm.get("unique_files_touched", 0),
-            "has_verify_cycle": cm.get("has_test_verify_cycle", False),
-            "errors": analysis.errors,
-            "steps": analysis.step_count,
-        })
+        items.append(
+            {
+                "task_id": task.task_id,
+                "file_operations": cm.get("file_operations", 0),
+                "test_runs": cm.get("test_runs", 0),
+                "lint_runs": cm.get("lint_runs", 0),
+                "git_operations": cm.get("git_operations", 0),
+                "unique_files": cm.get("unique_files_touched", 0),
+                "has_verify_cycle": cm.get("has_test_verify_cycle", False),
+                "errors": analysis.errors,
+                "steps": analysis.step_count,
+            }
+        )
     return {"count": len(items), "tasks": items}
 
 
@@ -1874,11 +2049,26 @@ def report_coding_markdown(
         ]
         for item in data["tasks"]
     ]
-    return "\n".join([
-        "## Coding Report",
-        "",
-        _markdown_table(["Task", "File Ops", "Tests", "Lints", "Git", "Unique Files", "Verify Cycle", "Errors", "Steps"], rows),
-    ])
+    return "\n".join(
+        [
+            "## Coding Report",
+            "",
+            _markdown_table(
+                [
+                    "Task",
+                    "File Ops",
+                    "Tests",
+                    "Lints",
+                    "Git",
+                    "Unique Files",
+                    "Verify Cycle",
+                    "Errors",
+                    "Steps",
+                ],
+                rows,
+            ),
+        ]
+    )
 
 
 # â”€â”€ Research Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1922,15 +2112,17 @@ def report_research(
             has_synthesis += 1
 
     n = len(research_tasks)
-    lines.extend([
-        f"  Searches:         {total_searches} (avg {total_searches / n:.1f}/task)",
-        f"  Reads:            {total_reads} (avg {total_reads / n:.1f}/task)",
-        f"  Citations:        {total_citations}",
-        f"  Unique domains:   {total_domains} (avg {total_domains / n:.1f}/task)",
-        f"  Has synthesis:    {has_synthesis}/{n} ({round(has_synthesis * 100 / n)}%)",
-        "",
-        "Tasks:",
-    ])
+    lines.extend(
+        [
+            f"  Searches:         {total_searches} (avg {total_searches / n:.1f}/task)",
+            f"  Reads:            {total_reads} (avg {total_reads / n:.1f}/task)",
+            f"  Citations:        {total_citations}",
+            f"  Unique domains:   {total_domains} (avg {total_domains / n:.1f}/task)",
+            f"  Has synthesis:    {has_synthesis}/{n} ({round(has_synthesis * 100 / n)}%)",
+            "",
+            "Tasks:",
+        ]
+    )
     for task, analysis in sorted(research_tasks, key=lambda x: -x[1].step_count):
         rm = analysis.signal_metrics.get("research", {})
         lines.append(
@@ -1962,14 +2154,16 @@ def report_research_data(
     items = []
     for task, analysis in research_tasks:
         rm = analysis.signal_metrics.get("research", {})
-        items.append({
-            "task_id": task.task_id,
-            "search_count": rm.get("search_count", 0),
-            "read_count": rm.get("read_count", 0),
-            "source_diversity": rm.get("source_diversity", 0),
-            "citation_count": rm.get("citation_count", 0),
-            "has_synthesis": rm.get("has_synthesis_step", False),
-        })
+        items.append(
+            {
+                "task_id": task.task_id,
+                "search_count": rm.get("search_count", 0),
+                "read_count": rm.get("read_count", 0),
+                "source_diversity": rm.get("source_diversity", 0),
+                "citation_count": rm.get("citation_count", 0),
+                "has_synthesis": rm.get("has_synthesis_step", False),
+            }
+        )
     return {"count": len(items), "tasks": items}
 
 
@@ -1998,9 +2192,12 @@ def report_research_markdown(
         ]
         for item in data["tasks"]
     ]
-    return "\n".join([
-        "## Research Report",
-        "",
-        _markdown_table(["Task", "Searches", "Reads", "Domains", "Citations", "Synthesis"], rows),
-    ])
-
+    return "\n".join(
+        [
+            "## Research Report",
+            "",
+            _markdown_table(
+                ["Task", "Searches", "Reads", "Domains", "Citations", "Synthesis"], rows
+            ),
+        ]
+    )

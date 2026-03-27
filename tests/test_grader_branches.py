@@ -63,7 +63,9 @@ def test_compare_supports_every_explicit_operator(actual: object, rule: dict[str
         (["card", "cvv"], {"contains_any": ["cvv", "zip"]}),
     ],
 )
-def test_compare_supports_every_legacy_operator_key(actual: object, rule: dict[str, object]) -> None:
+def test_compare_supports_every_legacy_operator_key(
+    actual: object, rule: dict[str, object]
+) -> None:
     assert _compare(actual, rule) is True
 
 

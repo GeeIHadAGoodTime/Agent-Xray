@@ -273,8 +273,8 @@ def format_info(path: str | Path) -> tuple[str, float]:
 
     combined_scores: dict[str, int] = {}
     for format_name in candidates:
-        combined_scores[format_name] = (
-            heuristic_scores.get(format_name, 0) * 10 + (_load_count(resolved_path, format_name) * 5)
+        combined_scores[format_name] = heuristic_scores.get(format_name, 0) * 10 + (
+            _load_count(resolved_path, format_name) * 5
         )
 
     ranked = sorted(

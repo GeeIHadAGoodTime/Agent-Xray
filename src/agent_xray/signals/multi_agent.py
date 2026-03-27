@@ -184,7 +184,7 @@ class MultiAgentDetector:
             if value is None:
                 value = step.extensions.get(key)
             try:
-                depth = int(value)
+                depth = int(value)  # type: ignore[arg-type]
             except (TypeError, ValueError):
                 continue
             if depth > 0:

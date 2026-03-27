@@ -33,7 +33,9 @@ def test_coding_detector_url_not_counted_as_file_path() -> None:
         tool_name="browser_open",
         tool_input={"url": "https://example.test/docs", "note": "See example.test for docs"},
     )
-    summary = detector.summarize(AgentTask(task_id="task-1", steps=[step]), [detector.detect_step(step)])
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=[step]), [detector.detect_step(step)]
+    )
     assert detector.detect_step(step)["has_file_path"] is False
     assert summary["unique_files_touched"] == 0
 

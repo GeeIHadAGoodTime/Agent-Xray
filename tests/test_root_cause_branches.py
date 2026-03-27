@@ -118,15 +118,33 @@ def root_cause_case(request: pytest.FixtureRequest) -> tuple[str, AgentTask, Tas
 
     if name == "spin":
         task = _task("spin", [_step("spin", index, "browser_snapshot") for index in range(1, 7)])
-        return ("spin", task, _analysis(task, max_repeat_tool="browser_snapshot", max_repeat_count=6))
+        return (
+            "spin",
+            task,
+            _analysis(task, max_repeat_tool="browser_snapshot", max_repeat_count=6),
+        )
 
     if name == "environment_drift":
         task = _task(
             "env",
             [
-                _step("env", 1, "browser_click", error="timeout", page_url="https://shop.example/cart"),
-                _step("env", 2, "browser_click", error="404 not found", page_url="https://shop.example/cart"),
-                _step("env", 3, "browser_click", error="click failed", page_url="https://shop.example/cart"),
+                _step(
+                    "env", 1, "browser_click", error="timeout", page_url="https://shop.example/cart"
+                ),
+                _step(
+                    "env",
+                    2,
+                    "browser_click",
+                    error="404 not found",
+                    page_url="https://shop.example/cart",
+                ),
+                _step(
+                    "env",
+                    3,
+                    "browser_click",
+                    error="click failed",
+                    page_url="https://shop.example/cart",
+                ),
                 _step("env", 4, "browser_snapshot", page_url="https://shop.example/cart"),
             ],
         )
@@ -193,13 +211,21 @@ def root_cause_case(request: pytest.FixtureRequest) -> tuple[str, AgentTask, Tas
         task = _task(
             "prompt",
             [
-                _step("prompt", 1, "browser_snapshot", llm_reasoning="I am not sure what to do next."),
+                _step(
+                    "prompt", 1, "browser_snapshot", llm_reasoning="I am not sure what to do next."
+                ),
                 _step("prompt", 2, "browser_click", llm_reasoning="The prompt is unclear."),
-                _step("prompt", 3, "browser_snapshot", llm_reasoning="Still unsure which tool to use."),
+                _step(
+                    "prompt", 3, "browser_snapshot", llm_reasoning="Still unsure which tool to use."
+                ),
                 _step("prompt", 4, "respond"),
             ],
         )
-        return ("prompt_bug", task, _analysis(task, max_repeat_tool="browser_snapshot", max_repeat_count=2))
+        return (
+            "prompt_bug",
+            task,
+            _analysis(task, max_repeat_tool="browser_snapshot", max_repeat_count=2),
+        )
 
     if name == "model_limit":
         task = _task(
@@ -311,7 +337,7 @@ def root_cause_case(request: pytest.FixtureRequest) -> tuple[str, AgentTask, Tas
 
 
 def test_classify_each_root_cause_independently(
-    root_cause_case: tuple[str, AgentTask, TaskAnalysis]
+    root_cause_case: tuple[str, AgentTask, TaskAnalysis],
 ) -> None:
     expected, task, analysis = root_cause_case
     result = classify_task(task, _grade(task), analysis=analysis)
@@ -326,7 +352,9 @@ def test_prompt_bug_fallback_enriches_section() -> None:
             _step("prompt-fallback", 1, "browser_snapshot", page_url="https://shop.example/cart"),
             _step("prompt-fallback", 2, "browser_click", page_url="https://shop.example/checkout"),
             _step("prompt-fallback", 3, "web_search"),
-            _step("prompt-fallback", 4, "browser_snapshot", page_url="https://shop.example/checkout"),
+            _step(
+                "prompt-fallback", 4, "browser_snapshot", page_url="https://shop.example/checkout"
+            ),
             _step("prompt-fallback", 5, "respond"),
         ],
     )

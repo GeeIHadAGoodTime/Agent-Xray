@@ -67,7 +67,9 @@ def test_memory_detector_summarizes_recall_hit_rate() -> None:
 def test_memory_detector_counts_context_injections() -> None:
     detector = MemoryDetector()
     steps = [
-        _step(1, "inject_context", {"memory_key": "profile"}, tool_result="Injected context window."),
+        _step(
+            1, "inject_context", {"memory_key": "profile"}, tool_result="Injected context window."
+        ),
         _step(2, "respond", {}, llm_reasoning="Injected context from memory before answering."),
     ]
     summary = detector.summarize(

@@ -147,7 +147,9 @@ def test_cli_tui_subprocess_reports_missing_textual(tmp_path: Path, tmp_trace_di
     shadow_dir = tmp_path / "shadow"
     textual_dir = shadow_dir / "textual"
     textual_dir.mkdir(parents=True)
-    (textual_dir / "__init__.py").write_text("raise ImportError('shadow textual')\n", encoding="utf-8")
+    (textual_dir / "__init__.py").write_text(
+        "raise ImportError('shadow textual')\n", encoding="utf-8"
+    )
 
     result = _run_cli("tui", str(tmp_trace_dir), extra_pythonpath=shadow_dir)
     assert result.returncode == 1

@@ -6,7 +6,15 @@ from argparse import Namespace
 from agent_xray.cli import cmd_report
 
 
-def _ns(report_type: str, log_dir, *, use_json: bool = False, markdown: bool = False, day1=None, day2=None):
+def _ns(
+    report_type: str,
+    log_dir,
+    *,
+    use_json: bool = False,
+    markdown: bool = False,
+    day1=None,
+    day2=None,
+):
     return Namespace(
         log_dir=log_dir,
         days=None,
@@ -188,14 +196,20 @@ def test_report_compare_text(tmp_trace_dir, capsys):
 
 
 def test_report_compare_json(tmp_trace_dir, capsys):
-    assert cmd_report(_ns("compare", tmp_trace_dir, use_json=True, day1="20260326", day2="20260327")) == 0
+    assert (
+        cmd_report(_ns("compare", tmp_trace_dir, use_json=True, day1="20260326", day2="20260327"))
+        == 0
+    )
     data = json.loads(capsys.readouterr().out)
     assert "day1" in data
     assert "day2" in data
 
 
 def test_report_compare_markdown(tmp_trace_dir, capsys):
-    assert cmd_report(_ns("compare", tmp_trace_dir, markdown=True, day1="20260326", day2="20260327")) == 0
+    assert (
+        cmd_report(_ns("compare", tmp_trace_dir, markdown=True, day1="20260326", day2="20260327"))
+        == 0
+    )
     out = capsys.readouterr().out
     assert "## Day Comparison" in out
     assert "| Metric | 20260326 | 20260327 | Delta |" in out

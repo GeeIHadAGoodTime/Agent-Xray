@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 SCHEMA_VERSION = "1.0"
 
@@ -350,6 +350,30 @@ FIELD_ALIASES = {
 }
 
 
+@overload
+def _build_context(
+    context_name: Literal["model"], payload: dict[str, Any]
+) -> ModelContext | None: ...
+
+
+@overload
+def _build_context(
+    context_name: Literal["tools"], payload: dict[str, Any]
+) -> ToolContext | None: ...
+
+
+@overload
+def _build_context(
+    context_name: Literal["reasoning"], payload: dict[str, Any]
+) -> ReasoningContext | None: ...
+
+
+@overload
+def _build_context(
+    context_name: Literal["browser"], payload: dict[str, Any]
+) -> BrowserContext | None: ...
+
+
 def _build_context(
     context_name: str, payload: dict[str, Any]
 ) -> ModelContext | ToolContext | ReasoningContext | BrowserContext | None:
@@ -359,7 +383,10 @@ def _build_context(
         field_name: coercion_fn(payload.get(field_name))
         for field_name, coercion_fn in CONTEXT_FIELD_COERCIONS[context_name].items()
     }
-    return CONTEXT_FACTORIES[context_name](**coerced_payload)
+    return cast(  # type narrowing handled by @overload
+        ModelContext | ToolContext | ReasoningContext | BrowserContext,
+        CONTEXT_FACTORIES[context_name](**coerced_payload),
+    )
 
 
 def _resolve_schema_version(payload: dict[str, Any], *, scope: str) -> str:
@@ -924,10 +951,14 @@ class AgentTask:
             '1.0'
         """
         steps_payload = payload.get("steps")
-        steps = [
-            step if isinstance(step, AgentStep) else AgentStep.from_dict(_coerce_dict(step))
-            for step in steps_payload
-        ] if isinstance(steps_payload, list) else []
+        steps = (
+            [
+                step if isinstance(step, AgentStep) else AgentStep.from_dict(_coerce_dict(step))
+                for step in steps_payload
+            ]
+            if isinstance(steps_payload, list)
+            else []
+        )
 
         outcome_payload = payload.get("outcome")
         if isinstance(outcome_payload, TaskOutcome):

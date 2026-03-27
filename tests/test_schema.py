@@ -150,17 +150,22 @@ def test_cost_usd_property(sample_step: AgentStep) -> None:
 
 
 def test_from_dict_compaction_fields_flat() -> None:
-    step = AgentStep.from_dict({
-        "task_id": "t", "step": 1, "tool_name": "x", "tool_input": {},
-        "compaction_method": "summarize",
-        "compaction_messages_before": 20,
-        "compaction_messages_after": 10,
-        "compaction_summary_preview": "Earlier context...",
-        "trimmed_messages": 5,
-        "fifo_evicted_messages": 2,
-        "screenshots_evicted": 1,
-        "prompt_variant": "commerce_v3",
-    })
+    step = AgentStep.from_dict(
+        {
+            "task_id": "t",
+            "step": 1,
+            "tool_name": "x",
+            "tool_input": {},
+            "compaction_method": "summarize",
+            "compaction_messages_before": 20,
+            "compaction_messages_after": 10,
+            "compaction_summary_preview": "Earlier context...",
+            "trimmed_messages": 5,
+            "fifo_evicted_messages": 2,
+            "screenshots_evicted": 1,
+            "prompt_variant": "commerce_v3",
+        }
+    )
     assert step.model is not None
     assert step.model.compaction_method == "summarize"
     assert step.model.compaction_messages_before == 20
@@ -173,13 +178,18 @@ def test_from_dict_compaction_fields_flat() -> None:
 
 
 def test_from_dict_tool_context_new_fields() -> None:
-    step = AgentStep.from_dict({
-        "task_id": "t", "step": 1, "tool_name": "x", "tool_input": {},
-        "rejected_tools": ["web_search", "respond"],
-        "focused_set": "browser_payment",
-        "tools_available_count": 5,
-        "conversation_turn_count": 3,
-    })
+    step = AgentStep.from_dict(
+        {
+            "task_id": "t",
+            "step": 1,
+            "tool_name": "x",
+            "tool_input": {},
+            "rejected_tools": ["web_search", "respond"],
+            "focused_set": "browser_payment",
+            "tools_available_count": 5,
+            "conversation_turn_count": 3,
+        }
+    )
     assert step.tools is not None
     assert step.tools.rejected_tools == ["web_search", "respond"]
     assert step.tools.focused_set == "browser_payment"
@@ -190,15 +200,20 @@ def test_from_dict_tool_context_new_fields() -> None:
 
 
 def test_from_dict_reasoning_context_new_fields() -> None:
-    step = AgentStep.from_dict({
-        "task_id": "t", "step": 1, "tool_name": "x", "tool_input": {},
-        "error_registry_context": "timeout on /cart",
-        "continuation_nudge": "proceed_to_checkout",
-        "force_termination": "max_iter",
-        "hard_loop_breaker": "tool_repeat_3x",
-        "consecutive_failure_warning": "3 failures",
-        "approval_path": "auto_approved",
-    })
+    step = AgentStep.from_dict(
+        {
+            "task_id": "t",
+            "step": 1,
+            "tool_name": "x",
+            "tool_input": {},
+            "error_registry_context": "timeout on /cart",
+            "continuation_nudge": "proceed_to_checkout",
+            "force_termination": "max_iter",
+            "hard_loop_breaker": "tool_repeat_3x",
+            "consecutive_failure_warning": "3 failures",
+            "approval_path": "auto_approved",
+        }
+    )
     assert step.reasoning is not None
     assert step.reasoning.error_registry_context == "timeout on /cart"
     assert step.reasoning.continuation_nudge == "proceed_to_checkout"
@@ -210,40 +225,50 @@ def test_from_dict_reasoning_context_new_fields() -> None:
 
 
 def test_from_dict_browser_context_new_fields() -> None:
-    step = AgentStep.from_dict({
-        "task_id": "t", "step": 1, "tool_name": "x", "tool_input": {},
-        "page_url": "https://example.test",
-        "had_screenshot_image": True,
-        "snapshot_pre_compress_len": 9500,
-    })
+    step = AgentStep.from_dict(
+        {
+            "task_id": "t",
+            "step": 1,
+            "tool_name": "x",
+            "tool_input": {},
+            "page_url": "https://example.test",
+            "had_screenshot_image": True,
+            "snapshot_pre_compress_len": 9500,
+        }
+    )
     assert step.browser is not None
     assert step.browser.had_screenshot_image is True
     assert step.browser.snapshot_pre_compress_len == 9500
 
 
 def test_from_dict_all_new_fields_nested() -> None:
-    step = AgentStep.from_dict({
-        "task_id": "t", "step": 1, "tool_name": "x", "tool_input": {},
-        "model": {
-            "compaction_method": "truncate",
-            "trimmed_messages": 3,
-            "prompt_variant": "v2",
-            "prompt_variant_full": "research_deep_v2",
-        },
-        "tools": {
-            "rejected_tools": ["a"],
-            "focused_set": "research",
-            "conversation_turn_count": 7,
-        },
-        "reasoning": {
-            "error_registry_context": "404 errors",
-            "hard_loop_breaker": "url_stuck",
-        },
-        "browser": {
-            "snapshot_pre_compress_len": 3000,
-            "had_screenshot_image": False,
-        },
-    })
+    step = AgentStep.from_dict(
+        {
+            "task_id": "t",
+            "step": 1,
+            "tool_name": "x",
+            "tool_input": {},
+            "model": {
+                "compaction_method": "truncate",
+                "trimmed_messages": 3,
+                "prompt_variant": "v2",
+                "prompt_variant_full": "research_deep_v2",
+            },
+            "tools": {
+                "rejected_tools": ["a"],
+                "focused_set": "research",
+                "conversation_turn_count": 7,
+            },
+            "reasoning": {
+                "error_registry_context": "404 errors",
+                "hard_loop_breaker": "url_stuck",
+            },
+            "browser": {
+                "snapshot_pre_compress_len": 3000,
+                "had_screenshot_image": False,
+            },
+        }
+    )
     assert step.model.compaction_method == "truncate"
     assert step.model.prompt_variant_full == "research_deep_v2"
     assert step.tools.rejected_tools == ["a"]
@@ -258,6 +283,7 @@ def test_json_schemas_include_new_fields() -> None:
         REASONING_CONTEXT_JSON_SCHEMA,
         TOOL_CONTEXT_JSON_SCHEMA,
     )
+
     model_props = MODEL_CONTEXT_JSON_SCHEMA["properties"]
     assert "compaction_method" in model_props
     assert "trimmed_messages" in model_props

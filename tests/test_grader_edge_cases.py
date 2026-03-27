@@ -34,8 +34,20 @@ def test_grade_missing_signal_field_ignored() -> None:
         task,
         _rules(
             [
-                {"field": "missing.metric", "op": "gte", "value": 1, "points": 5, "label": "missing"},
-                {"field": "errors", "op": "equals", "value": 0, "points": 1, "label": "zero_errors"},
+                {
+                    "field": "missing.metric",
+                    "op": "gte",
+                    "value": 1,
+                    "points": 5,
+                    "label": "missing",
+                },
+                {
+                    "field": "errors",
+                    "op": "equals",
+                    "value": 0,
+                    "points": 1,
+                    "label": "zero_errors",
+                },
             ]
         ),
     )
@@ -104,7 +116,13 @@ def test_validate_rules_catches_bad_rules() -> None:
         name="invalid",
         description="bad rules",
         signals=[
-            {"field": "missing.metric", "op": "mystery", "value": 1, "points": 1, "label": "bad_op"},
+            {
+                "field": "missing.metric",
+                "op": "mystery",
+                "value": 1,
+                "points": 1,
+                "label": "bad_op",
+            },
             {"field": "step_count", "op": "gte", "points": 1, "label": "missing_value"},
             {"field": "errors", "op": "equals", "value": 0, "points": 1, "label": "dup_positive"},
             {"field": "errors", "op": "equals", "value": 0, "points": -1, "label": "dup_negative"},
@@ -139,7 +157,10 @@ def test_grade_all_operators(field: str, op: str, value: object) -> None:
     task = _task(AgentStep("task-1", 1, "respond", {}, tool_result="ok"))
     result = grade_task(
         task,
-        _rules([{"field": field, "op": op, "value": value, "points": 1}], thresholds={"GOLDEN": 2, "GOOD": 2, "OK": 1, "WEAK": 0}),
+        _rules(
+            [{"field": field, "op": op, "value": value, "points": 1}],
+            thresholds={"GOLDEN": 2, "GOOD": 2, "OK": 1, "WEAK": 0},
+        ),
     )
     assert result.score == 1
     assert result.grade == "OK"

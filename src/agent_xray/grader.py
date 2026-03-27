@@ -281,14 +281,15 @@ def _range_bounds(rule: dict[str, Any]) -> tuple[float | None, bool, float | Non
     expected = rule.get("value")
     if not _is_numeric(expected):
         return None
+    val = float(expected)  # type: ignore[arg-type]  # guarded by _is_numeric
     if op == "gt":
-        return (float(expected), False, None, False)
+        return (val, False, None, False)
     if op == "gte":
-        return (float(expected), True, None, False)
+        return (val, True, None, False)
     if op == "lt":
-        return (None, False, float(expected), False)
+        return (None, False, val, False)
     if op == "lte":
-        return (None, False, float(expected), True)
+        return (None, False, val, True)
     return None
 
 

@@ -46,9 +46,7 @@ class MemoryDetector:
     CONTEXT_TOOLS = {"context_inject", "inject_context", "load_context", "prepend_context"}
     MEMORY_KEY_KEYS = ("memory_key", "key", "slot", "namespace", "memory_id", "name")
     MISS_PATTERNS = ("0 results", "memory miss", "no memory", "not found", "no relevant context")
-    MEMORY_KEY_RE = re.compile(
-        r"\b(?:memory[_ ]?key|key)\s*[:=]\s*([a-z0-9_.:/-]+)", re.IGNORECASE
-    )
+    MEMORY_KEY_RE = re.compile(r"\b(?:memory[_ ]?key|key)\s*[:=]\s*([a-z0-9_.:/-]+)", re.IGNORECASE)
 
     def detect_step(self, step: AgentStep) -> dict[str, bool | str | None]:
         """Analyze one step for memory and retrieval signals."""

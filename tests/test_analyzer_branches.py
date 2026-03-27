@@ -126,9 +126,7 @@ def test_extract_site_name_returns_unknown_without_any_url_signal() -> None:
         (["a", "b", "c", "c", "c", "c"], ("c", 4)),
     ],
 )
-def test_max_consecutive_repeat_edge_cases(
-    sequence: list[str], expected: tuple[str, int]
-) -> None:
+def test_max_consecutive_repeat_edge_cases(sequence: list[str], expected: tuple[str, int]) -> None:
     assert _max_consecutive_repeat(sequence) == expected
 
 
@@ -172,12 +170,8 @@ def test_analyze_task_spin_tiers_cover_mild_moderate_and_severe() -> None:
             _step(3, "browser_click"),
         )
     )
-    moderate = analyze_task(
-        _task(*[_step(index, "browser_snapshot") for index in range(1, 6)])
-    )
-    severe = analyze_task(
-        _task(*[_step(index, "browser_wait") for index in range(1, 11)])
-    )
+    moderate = analyze_task(_task(*[_step(index, "browser_snapshot") for index in range(1, 6)]))
+    severe = analyze_task(_task(*[_step(index, "browser_wait") for index in range(1, 11)]))
     assert mild.spin_is_mild is True
     assert moderate.spin_is_moderate is True
     assert severe.spin_is_severe is True

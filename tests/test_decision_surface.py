@@ -64,7 +64,12 @@ def _full_surface_task() -> AgentTask:
                     prompt_variant_full=None,
                 ),
                 tools=ToolContext(
-                    tools_available=["browser_navigate", "browser_click", "browser_fill_ref", "browser_snapshot"],
+                    tools_available=[
+                        "browser_navigate",
+                        "browser_click",
+                        "browser_fill_ref",
+                        "browser_snapshot",
+                    ],
                     system_prompt_hash="abc123",
                     message_count=2,
                     rejected_tools=["web_search", "respond"],
@@ -204,7 +209,10 @@ def test_surface_tools_available():
     surface = surface_for_task(task)
     step1 = surface["steps"][0]
     assert step1["tools_available_names"] == [
-        "browser_navigate", "browser_click", "browser_fill_ref", "browser_snapshot"
+        "browser_navigate",
+        "browser_click",
+        "browser_fill_ref",
+        "browser_snapshot",
     ]
     assert step1["tools_available_count"] == 4
 
@@ -237,7 +245,10 @@ def test_surface_tools_available_count_fallback():
         task_id="t",
         steps=[
             AgentStep(
-                "t", 1, "click", {},
+                "t",
+                1,
+                "click",
+                {},
                 tools=ToolContext(
                     tools_available=["a", "b"],
                     tools_available_count=None,
@@ -319,7 +330,10 @@ def test_surface_force_termination():
         task_id="t",
         steps=[
             AgentStep(
-                "t", 1, "respond", {},
+                "t",
+                1,
+                "respond",
+                {},
                 reasoning=ReasoningContext(
                     force_termination="max_iterations_exceeded",
                     hard_loop_breaker="tool_repeat_3x",
@@ -386,7 +400,10 @@ def test_prompt_from_step_extensions():
         task_id="t",
         steps=[
             AgentStep(
-                "t", 1, "click", {},
+                "t",
+                1,
+                "click",
+                {},
                 extensions={"system_prompt_text": "You are a browser agent."},
             ),
         ],
@@ -401,7 +418,10 @@ def test_prompt_metadata_takes_priority_over_extensions():
         metadata={"system_prompt_text": "From metadata."},
         steps=[
             AgentStep(
-                "t", 1, "click", {},
+                "t",
+                1,
+                "click",
+                {},
                 extensions={"system_prompt_text": "From extensions."},
             ),
         ],
@@ -421,7 +441,10 @@ def test_system_components_from_step_extensions():
         task_id="t",
         steps=[
             AgentStep(
-                "t", 1, "click", {},
+                "t",
+                1,
+                "click",
+                {},
                 extensions={"system_context_components": {"mode": "research"}},
             ),
         ],

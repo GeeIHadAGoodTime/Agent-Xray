@@ -330,7 +330,9 @@ def _is_test_tool(step: AgentStep) -> bool:
     if any(marker in tool for marker in TEST_TOOL_MARKERS):
         return True
     command = _normalize_text(str(step.tool_input.get("command", "")))
-    return bool(command and any(marker in command for marker in ("pytest", "unittest", "nosetests")))
+    return bool(
+        command and any(marker in command for marker in ("pytest", "unittest", "nosetests"))
+    )
 
 
 def _is_file_operation(step: AgentStep) -> bool:
@@ -415,7 +417,9 @@ def _memory_quality_drop_evidence(
         for step in high_usage_steps
     ):
         evidence.append("reasoning or results explicitly mention context pressure")
-    if any(_has_prompt_confusion(AgentTask(task_id=task.task_id, steps=[step])) for step in late_steps):
+    if any(
+        _has_prompt_confusion(AgentTask(task_id=task.task_id, steps=[step])) for step in late_steps
+    ):
         evidence.append("late-step reasoning shows confusion after context usage spiked")
     if late_errors > early_errors and late_errors > 0:
         evidence.append(f"late-stage errors increased from {early_errors} to {late_errors}")
@@ -449,6 +453,7 @@ def _apply_classification(
     result.confidence_score = _score_confidence(confidence, result.evidence)
     result.confidence = _confidence_label_from_score(result.confidence_score)
     return result
+
 
 @dataclass(slots=True)
 class ClassificationConfig:
@@ -656,7 +661,11 @@ def _classify_tool_selection_from_search_bias(
     """Classify cases where the agent ignored available browser tools."""
 
     del analysis, config
-    if _browser_tool_available(task) and not _used_browser_tool(task) and _used_only_search_like_tools(task):
+    if (
+        _browser_tool_available(task)
+        and not _used_browser_tool(task)
+        and _used_only_search_like_tools(task)
+    ):
         return (
             "tool_selection_bug",
             "high",
@@ -940,6 +949,3 @@ def format_root_causes_text(results: list[RootCauseResult]) -> str:
             f"evidence={'; '.join(item.evidence[:2])}"
         )
     return "\n".join(lines)
-
-
-
