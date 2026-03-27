@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\grader.py
-# hypothesis_version: 6.142.4
-
-[0.0, 1.0, '.', '.json', '<unknown>', 'BROKEN', 'GOLDEN', 'GOOD', 'OK', 'WEAK', 'agent_xray.rules', 'contains_any', 'default.json', 'description', 'else_points', 'else_reason', 'equals', 'field', 'golden_requirements', 'grade_thresholds', 'gt', 'gte', 'in', 'index', 'label', 'lt', 'lte', 'metric', 'name', 'ne', 'not_in', 'op', 'points', 'reason', 'signals', 'thresholds', 'utf-8', 'validation-probe', 'value']

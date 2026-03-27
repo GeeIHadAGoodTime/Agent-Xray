@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\capture.py
-# hypothesis_version: 6.142.4
-
-['*address*', '*card_number*', '*email*', '*phone*', '*zip*', '/', 'CART', 'CHECKOUT', 'FORM_FILL', 'PAYMENT', '\\b\\d{5}(?:-\\d{4})?\\b', 'card number', 'category', 'checkout', 'cvv', 'expir', 'grade_hint', 'has_payment_fields', 'http://', 'https://', 'is_cart_page', 'is_checkout_page', 'is_real_fill', 'milestone', 'milestones_reached', 'page_url', 'payment method', 'shop.example.test', 'site', 'step', 'step_sequence', 'subtotal', 'task_id', 'tool_input', 'tool_name', 'total_steps', 'url', 'user_text', 'utf-8', 'your cart']

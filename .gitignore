@@ -5,9 +5,11 @@ __pycache__/
 dist/
 build/
 .coverage
+coverage.json
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 .benchmarks/
 .codex_prompts/
 *.whl

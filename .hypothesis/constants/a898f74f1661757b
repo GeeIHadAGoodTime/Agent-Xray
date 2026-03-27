@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\signals\planning.py
-# hypothesis_version: 6.142.4
-
-['adjust_plan', 'checked off', 'complete', 'complete_plan_step', 'completed', 'create plan', 'create_plan', 'current_step', 'done', 'execute_plan_step', 'finished', 'goal', 'id', 'is_goal_tracking', 'is_plan_creation', 'is_plan_revision', 'is_plan_step', 'make_plan', 'mark_plan_step', 'objective', 'plan', 'plan step', 'plan_completion_rate', 'plan_id', 'plan_revisions', 'plan_step', 'plan_steps_executed', 'plan_task', 'planned_steps', 'planning', 'plans_created', 'replan', 'revise plan', 'revise_plan', 'status', 'step', 'step 1', 'step 2', 'step 3', 'step_id', 'step_index', 'steps', 'success criteria', 'total_steps', 'update plan', 'update_plan', 'update_plan_step']

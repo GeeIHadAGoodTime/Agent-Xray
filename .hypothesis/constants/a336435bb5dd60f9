@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\openai_chat.py
-# hypothesis_version: 6.142.4
-
-['arguments', 'assistant', 'content', 'conversation_id', 'duration_ms', 'function', 'id', 'input_tokens', 'llm_reasoning', 'model', 'model_name', 'name', 'output', 'output_tokens', 'result', 'role', 'step', 'task_id', 'tool', 'tool_call_id', 'tool_calls', 'tool_input', 'tool_name', 'tool_result', 'usage']

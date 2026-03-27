@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\comparison.py
-# hypothesis_version: 6.142.4
-
-[0.0, 100, '+', ', ', 'BROKEN', 'Cost Comparison:', 'Divergence Points:', 'GOLDEN', 'GOOD', 'Grade Distribution:', 'OK', 'WEAK', 'conversation history', 'conversation_history', 'divergences', 'left', 'left_cost', 'page URL', 'page_url', 'right', 'right_cost', 'step', 'steps', 'tool set', 'tool_input', 'tool_name']

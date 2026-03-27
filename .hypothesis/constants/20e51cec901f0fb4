@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\root_cause.py
-# hypothesis_version: 6.142.4
-
-[0.5, 100, '=', 'Approval Block', 'BROKEN', 'Custom root cause.', 'Early Abort', 'Environment Drift', 'Model Limit', 'Prompt Bug', 'ROOT CAUSE ANALYSIS', 'Reasoning Bug', 'Routing Bug', 'Spin', 'Stuck Loop', 'Tool Bug', 'Tool Selection Bug', 'Unknown', 'WEAK', 'Worst tasks:', 'approval_block', 'browser', 'browser_', 'click_fail', 'commerce', 'count', 'description', 'desktop_', 'early_abort', 'environment_drift', 'fetch', 'fix_hint', 'high', 'label', 'low', 'medium', 'model_limit', 'not_found', 'only \\d+ unique tool', 'other', 'payment', 'percentage', 'planning', 'prompt_bug', 'reached_checkout', 'reached_payment', 'read', 'reasoning_bug', 'research', 'routing_bug', 'sample_task_ids', 'scrape', 'search', 'spin', 'stuck_loop', 'timeout', 'tool_bug', 'tool_selection_bug', 'tools', 'unknown_tool', 'validation']

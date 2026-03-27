@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\anthropic.py
-# hypothesis_version: 6.142.4
-
-['assistant', 'content', 'conversation_id', 'id', 'input', 'input_tokens', 'model', 'model_name', 'name', 'output_tokens', 'role', 'step', 'task_id', 'tool_input', 'tool_name', 'tool_result', 'tool_use', 'tool_use_id', 'type', 'usage', 'user']

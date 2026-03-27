@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\signals\research.py
-# hypothesis_version: 6.142.4
-
-['\\[\\d+\\]', 'according to', 'answer', 'arxiv_search', 'bing', 'browser', 'browser_navigate', 'browser_snapshot', 'citation_count', 'duckduckgo', 'fetch', 'fetch_page', 'google', 'has_citation', 'has_synthesis_step', 'has_url_in_result', 'http', 'https?://', 'https?://[^\\s\'\\"`]+', 'is_read', 'is_search', 'is_synthesis', 'page_url', 'read_count', 'read_url', 'research', 'respond', 'scrape', 'search', 'search_count', 'search_to_read_ratio', 'source:', 'source_diversity', 'summarize', 'url_references', 'web_search', 'write']

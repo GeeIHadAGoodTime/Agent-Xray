@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\crewai.py
-# hypothesis_version: 6.142.4
-
-['agent_role', 'llm_reasoning', 'output', 'step', 'task', 'task_id', 'thought', 'timestamp', 'tool', 'tool_input', 'tool_name', 'tool_result', 'ts', 'value']

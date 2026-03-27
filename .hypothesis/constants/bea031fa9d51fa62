@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\runner.py
-# hypothesis_version: 6.142.4
-
-[30.0, '/tasks', '/tasks/{task_id}', 'completed', 'id', 'outcome', 'status', 'task-1', 'task_id', 'task_text', 'unknown']

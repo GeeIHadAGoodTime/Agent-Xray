@@ -1,4 +1,0 @@
-# file: J:\PROJECTS\agent-xray\src\agent_xray\adapters\generic.py
-# hypothesis_version: 6.142.4
-
-['agent_step', 'data', 'payload', 'record', 'step', 'task_id', 'tool_input', 'tool_name']
