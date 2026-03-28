@@ -67,6 +67,31 @@ FIX_TARGETS: dict[str, list[str]] = {
         "model choice (try a more capable model)",
         "context window management",
     ],
+    "memory_overload": [
+        "context window management / compaction strategy",
+        "long-context task decomposition",
+        "summarization before context fills",
+    ],
+    "delegation_failure": [
+        "delegation routing rules (which tasks get delegated)",
+        "sub-agent tool availability and permissions",
+        "delegation response handling",
+    ],
+    "test_failure_loop": [
+        "test runner exit conditions",
+        "max retry limits for failing tests",
+        "error pattern detection to abort early",
+    ],
+    "tool_rejection_mismatch": [
+        "tool approval / permission policy",
+        "tool risk classification (rejected tools may be safe)",
+        "focused tool set routing (ensure required tools are available)",
+    ],
+    "insufficient_sources": [
+        "search tool configuration and availability",
+        "minimum source count requirements",
+        "source diversity guidance in prompt",
+    ],
 }
 """Default investigation targets keyed by root cause for the built-in target resolver."""
 
@@ -92,6 +117,11 @@ SEVERITY_BY_ROOT_CAUSE = {
     "model_limit": 2,
     "prompt_bug": 2,
     "reasoning_bug": 1,
+    "memory_overload": 4,
+    "delegation_failure": 3,
+    "test_failure_loop": 3,
+    "tool_rejection_mismatch": 5,
+    "insufficient_sources": 2,
 }
 
 
@@ -186,6 +216,11 @@ def _verify_command_for(root_cause: str, task_id: str) -> str:
         "model_limit": f"agent-xray reasoning {task_id} | grep -i context",
         "prompt_bug": f"agent-xray reasoning {task_id} | grep -i prompt",
         "reasoning_bug": f"agent-xray reasoning {task_id}",
+        "memory_overload": f"agent-xray surface {task_id} | grep context",
+        "delegation_failure": f"agent-xray surface {task_id} | grep delegat",
+        "test_failure_loop": f"agent-xray surface {task_id} | grep test",
+        "tool_rejection_mismatch": f"agent-xray surface {task_id} | grep rejected",
+        "insufficient_sources": f"agent-xray surface {task_id} | grep search",
     }
     return commands.get(root_cause, f"agent-xray reasoning {task_id}")
 

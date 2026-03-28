@@ -429,8 +429,13 @@ def _validate_task_id(payload: dict[str, Any]) -> str:
 def _validate_step(payload: dict[str, Any]) -> int:
     if "step" not in payload:
         return 0
-    step = _coerce_optional_int(payload.get("step"))
-    if step is None or step < 0:
+    raw = payload.get("step")
+    if raw is None:
+        return 0
+    step = _coerce_optional_int(raw)
+    if step is None:
+        return 0  # Unparseable step values (lists, dicts, etc.) default to 0
+    if step < 0:
         raise ValueError("step must be a non-negative integer when provided")
     return step
 

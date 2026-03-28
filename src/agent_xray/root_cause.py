@@ -873,7 +873,7 @@ def classify_task(
         if not (
             task.outcome
             and task.outcome.status
-            in {"spin_terminated", "early_abort", "failed", "timeout", "max_iterations"}
+            in {"spin_terminated", "early_abort", "failed", "timeout", "max_iterations", "llm_error"}
         ):
             return None
     cfg = config or _DEFAULT_CONFIG
@@ -992,10 +992,10 @@ def classify_failures(
     failures: list[RootCauseResult] = []
     for task in tasks:
         grade = grade_by_task[task.task_id]
-        if grade.grade in {"BROKEN", "WEAK"}:
-            classification = classify_task(task, grade)
-            if classification is not None:
-                failures.append(classification)
+        # classify_task handles both BROKEN/WEAK grades AND failure outcomes
+        classification = classify_task(task, grade)
+        if classification is not None:
+            failures.append(classification)
     return failures
 
 

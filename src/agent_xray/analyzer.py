@@ -508,7 +508,11 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "max_repeat_count": repeat_count,
         "errors": errors,
         "error_rate": errors / max(1, len(task.steps)),
-        "total_duration_ms": sum(step.duration_ms or 0 for step in task.steps),
+        "total_duration_ms": (
+            int(task.outcome.total_duration_s * 1000)
+            if task.outcome and task.outcome.total_duration_s
+            else sum(step.duration_ms or 0 for step in task.steps)
+        ),
         "hallucinated_tools": hallucinated_tools,
         "no_tools_steps": no_tools_steps,
         "site_name": extract_site_name(task),
@@ -516,11 +520,13 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "timeout_like": timed_out_flag or (
             task.outcome is not None
             and task.outcome.status
-            in {"timeout", "max_iterations", "spin_terminated", "early_abort", "failed"}
+            in {"timeout", "max_iterations", "spin_terminated"}
         )
         or len(task.steps) >= 75,
         "task_completed": (
-            task.outcome is not None and task.outcome.status in {"success", "completed"}
+            task.outcome is not None
+            and task.outcome.status
+            in {"success", "completed", "payment_gate"}
         ),
         "error_kinds": dict(error_kinds),
         "total_cost_usd": float(total_cost),
