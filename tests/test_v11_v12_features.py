@@ -451,6 +451,40 @@ class TestCompletenessReport:
         low_pos = text.index("[LOW]")
         assert crit_pos < high_pos < low_pos
 
+    def test_format_text_with_all_dimensions(self) -> None:
+        """When all_dimensions is populated, format_text shows PASS/FAIL per dimension."""
+        report = CompletenessReport(
+            dimensions_checked=3,
+            dimensions_ok=2,
+            all_dimensions=["outcome_records", "tool_schemas", "model_name"],
+            warnings=[
+                CompletenessWarning("tool_schemas", "critical", "No schemas", 100.0, "Log them"),
+            ],
+        )
+        text = report.format_text()
+        assert "[PASS]" in text
+        assert "[FAIL]" in text
+        assert "tool_schemas" in text
+        assert "outcome_records" in text
+        assert "model_name" in text
+
+    def test_format_text_fallback_without_all_dimensions(self) -> None:
+        """When all_dimensions is empty, format_text falls back to severity-grouped output."""
+        report = CompletenessReport(
+            dimensions_checked=3,
+            dimensions_ok=1,
+            warnings=[
+                CompletenessWarning("dim_x", "high", "something", 50.0, "fix X"),
+            ],
+        )
+        text = report.format_text()
+        # Fallback should still show the warning
+        assert "[HIGH]" in text
+        assert "dim_x" in text
+        assert "Fix:" in text
+        # But should NOT show [PASS] since all_dimensions is empty
+        assert "[PASS]" not in text
+
 
 # ===========================================================================
 # 2. CACHE TOKEN FLOW

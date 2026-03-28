@@ -41,9 +41,33 @@ from .schema import (
     TaskOutcome,
     ToolContext,
 )
+from .baseline import (
+    Baseline,
+    OverheadResult,
+    PromptHashGroup,
+    build_baseline,
+    format_overhead_report,
+    format_prompt_impact_report,
+    generate_naked_prompt,
+    group_by_prompt_hash,
+    measure_overhead,
+)
+from .golden import (
+    OPTIMIZATION_PROFILES,
+    GoldenRank,
+    capture_exemplar,
+    explain_efficiency_gap,
+    find_exemplars,
+    format_golden_ranking,
+    rank_golden_runs,
+)
 from .signals import SignalDetector, discover_detectors, run_detection
 from .surface import (
     diff_tasks,
+    enriched_tree_for_tasks,
+    format_diff_summary,
+    format_enriched_tree_text,
+    format_prompt_diff,
     format_reasoning_text,
     format_surface_text,
     format_tree_text,
@@ -106,7 +130,11 @@ __all__ = [
     "format_surface_text",
     "format_reasoning_text",
     "format_tree_text",
+    "format_diff_summary",
+    "format_prompt_diff",
+    "format_enriched_tree_text",
     "tree_for_tasks",
+    "enriched_tree_for_tasks",
     # Comparison
     "ModelComparisonResult",
     "compare_model_runs",
@@ -114,10 +142,28 @@ __all__ = [
     # Replay
     "replay_fixture",
     "format_replay_text",
+    # Golden ranking
+    "GoldenRank",
+    "OPTIMIZATION_PROFILES",
+    "rank_golden_runs",
+    "find_exemplars",
+    "explain_efficiency_gap",
+    "format_golden_ranking",
+    "capture_exemplar",
+    # Baseline / overhead
+    "Baseline",
+    "OverheadResult",
+    "PromptHashGroup",
+    "generate_naked_prompt",
+    "build_baseline",
+    "measure_overhead",
+    "group_by_prompt_hash",
+    "format_overhead_report",
+    "format_prompt_impact_report",
     # Signals
     "SignalDetector",
     "discover_detectors",
     "run_detection",
 ]
 
-__version__ = "1.2.5"
+__version__ = "1.2.6"

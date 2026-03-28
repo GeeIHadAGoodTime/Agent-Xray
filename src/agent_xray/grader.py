@@ -88,6 +88,19 @@ def _resolve_rules_path(path: str | Path | None) -> Path:
     return candidate
 
 
+def _list_available_rulesets() -> list[str]:
+    """Return names of all bundled rulesets."""
+    rules_dir = Path(str(files("agent_xray.rules")))
+    names: list[str] = []
+    for p in sorted(rules_dir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            names.append(str(data.get("name", p.stem)))
+        except Exception:
+            names.append(p.stem)
+    return names
+
+
 def load_rules(path: str | Path | None = None) -> RuleSet:
     """Load a ruleset from a user path or bundled rules name.
 
@@ -98,6 +111,10 @@ def load_rules(path: str | Path | None = None) -> RuleSet:
     Returns:
         RuleSet: Parsed grading configuration.
 
+    Raises:
+        FileNotFoundError: When the path does not resolve to an existing file.
+            The error message lists available bundled rulesets.
+
     Example:
         >>> rules = load_rules("default")
         >>> rules.name
@@ -105,7 +122,16 @@ def load_rules(path: str | Path | None = None) -> RuleSet:
     """
 
     rule_path = _resolve_rules_path(path)
-    raw_payload = json.loads(rule_path.read_text(encoding="utf-8"))
+    try:
+        raw_payload = json.loads(rule_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        available = _list_available_rulesets()
+        available_text = ", ".join(available) if available else "(none found)"
+        raise FileNotFoundError(
+            f"Ruleset not found: {path}\n"
+            f"Available built-in rulesets: {available_text}\n"
+            f"Use a built-in name or provide a path to a custom .json file."
+        ) from None
     if not isinstance(raw_payload, dict):
         raise ValueError(f"rules file did not contain a JSON object: {rule_path}")
     payload = {str(key): value for key, value in raw_payload.items()}

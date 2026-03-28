@@ -107,8 +107,6 @@ class TaskAnalysis:
     final_answer_empty_but_success: bool = False
     # DOM element ref mismatch
     element_ref_mismatches: int = 0
-    # Explicit failure outcome
-    task_failed: bool = False
 
     @property
     def task_id(self) -> str:
@@ -362,13 +360,31 @@ def _tools_available(step: AgentStep) -> list[str] | None:
     return list(step.tools.tools_available)
 
 
-def _step_cost(step: AgentStep) -> float:
+def _step_cost(step: AgentStep, pricing_data: dict[str, Any] | None = None) -> float:
+    """Compute cost for a single step.
+
+    Uses the trace-provided ``cost_usd`` when available.  Falls back to
+    token-based estimation via the pricing database.
+    """
     if step.model and step.model.cost_usd is not None:
         return float(step.model.cost_usd)
+    # Estimate from token counts + pricing database
+    if step.model and step.model.model_name and (
+        step.model.input_tokens or step.model.output_tokens
+    ):
+        from .pricing import get_model_cost
+
+        return get_model_cost(
+            model_name=step.model.model_name,
+            input_tokens=step.model.input_tokens or 0,
+            output_tokens=step.model.output_tokens or 0,
+            cached_tokens=step.model.cache_read_tokens or 0,
+            pricing_data=pricing_data,
+        )
     return 0.0
 
 
-def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
+def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None = None) -> dict[str, Any]:
     urls = _unique_urls(task)
     url_paths = _unique_url_paths(urls)
     tool_sequence = [step.tool_name for step in task.sorted_steps]
@@ -386,7 +402,7 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
             error_kinds[error_kind] += 1
         if error_kind == "unknown_tool":
             hallucinated_tools += 1
-    total_cost = sum(_step_cost(step) for step in task.steps)
+    total_cost = sum(_step_cost(step, pricing_data) for step in task.steps)
     # Consume rejected_tools across all steps
     rejected_tool_count = sum(
         len(step.tools.rejected_tools or [])
@@ -566,6 +582,7 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
 def analyze_task(
     task: AgentTask,
     detectors: list[SignalDetector] | None = None,
+    pricing_data: dict[str, Any] | None = None,
 ) -> TaskAnalysis:
     """Analyze one task and compute core plus detector-derived metrics.
 
@@ -573,6 +590,8 @@ def analyze_task(
         task: Task to analyze.
         detectors: Optional detector instances. When omitted, built-in and
             installed detectors are discovered automatically.
+        pricing_data: Pre-loaded pricing dict for cost estimation.
+            When omitted, the bundled pricing database is loaded automatically.
 
     Returns:
         TaskAnalysis: Computed metrics and summaries for the task.
@@ -582,7 +601,7 @@ def analyze_task(
         >>> analysis.metrics()["step_count"]
         4
     """
-    core = _compute_core_metrics(task)
+    core = _compute_core_metrics(task, pricing_data)
     signal_metrics = run_detection(task, detectors)
     return TaskAnalysis(task=task, signal_metrics=signal_metrics, **core)
 
@@ -590,17 +609,22 @@ def analyze_task(
 def analyze_tasks(
     tasks: list[AgentTask],
     detectors: list[SignalDetector] | None = None,
+    pricing_data: dict[str, Any] | None = None,
 ) -> dict[str, TaskAnalysis]:
     """Analyze multiple tasks and index results by task id.
 
     Args:
         tasks: Tasks to analyze.
         detectors: Optional shared detector instances.
+        pricing_data: Pre-loaded pricing dict for cost estimation.
 
     Returns:
         dict[str, TaskAnalysis]: Per-task analyses keyed by ``task_id``.
     """
-    return {task.task_id: analyze_task(task, detectors=detectors) for task in tasks}
+    return {
+        task.task_id: analyze_task(task, detectors=detectors, pricing_data=pricing_data)
+        for task in tasks
+    }
 
 
 def _extract_day(path: Path, payload: dict[str, Any]) -> str | None:

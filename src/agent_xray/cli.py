@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from importlib.resources import files
 from pathlib import Path
 from time import perf_counter
@@ -19,7 +21,7 @@ from .analyzer import analyze_task, analyze_tasks, load_adapted_tasks, load_task
 from .capture import capture_task
 from .comparison import compare_model_runs, format_model_comparison
 from .flywheel import run_flywheel
-from .grader import grade_tasks, load_rules
+from .grader import GradeResult, grade_tasks, load_rules
 from .replay import format_replay_text, replay_fixture
 from .reports import (
     report_actions,
@@ -55,6 +57,12 @@ from .reports import (
     report_research,
     report_research_data,
     report_research_markdown,
+    report_spins,
+    report_spins_data,
+    report_spins_markdown,
+    report_timeline,
+    report_timeline_data,
+    report_timeline_markdown,
     report_tools,
     report_tools_data,
     report_tools_markdown,
@@ -63,6 +71,10 @@ from .root_cause import classify_failures
 from .schema import AgentTask
 from .surface import (
     diff_tasks,
+    enriched_tree_for_tasks,
+    format_diff_summary,
+    format_enriched_tree_text,
+    format_prompt_diff,
     format_reasoning_text,
     format_surface_text,
     format_tree_text,
@@ -168,6 +180,27 @@ def _format_elapsed(seconds: float) -> str:
     return f"{seconds:.2f}s"
 
 
+def _parse_bucket_arg(value: str | None) -> int:
+    """Parse a bucket argument like '15m' or '1h' into minutes."""
+    if not value:
+        return 60
+    value = value.strip().lower()
+    if value.endswith("m"):
+        try:
+            return max(1, int(value[:-1]))
+        except ValueError:
+            return 60
+    if value.endswith("h"):
+        try:
+            return max(1, int(value[:-1]) * 60)
+        except ValueError:
+            return 60
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 60
+
+
 def _grade_distribution(grades: list[Any]) -> dict[str, int]:
     counts = Counter(grade.grade for grade in grades)
     return {label: counts.get(label, 0) for label in GRADE_LABELS}
@@ -205,6 +238,9 @@ def _run_command(args: argparse.Namespace, action: Callable[[], int]) -> int:
     try:
         return action()
     except CliError as exc:
+        _emit(str(exc), args, final=True)
+        return 1
+    except FileNotFoundError as exc:
         _emit(str(exc), args, final=True)
         return 1
     except KeyError as exc:
@@ -458,7 +494,11 @@ def _load_tasks_with_format(
     ui = _settings(settings)
     path = Path(log_dir)
     if not path.exists():
-        raise CliError(f"Directory not found: {path}. Run agent-xray quickstart for a demo.")
+        raise CliError(
+            f"Path not found: {path}\n"
+            f"Set AGENT_XRAY_LOG_DIR or pass a valid path.\n"
+            f"Run 'agent-xray quickstart' for a demo."
+        )
     _emit_verbose(
         f"Loading traces from {path} (format={format_name}, days={days if days is not None else 'all'}"
         + (f", pattern={pattern}" if pattern else "")
@@ -582,9 +622,23 @@ def cmd_diff(args: argparse.Namespace) -> int:
         data = diff_tasks(resolve_task(tasks, args.task_id_1), resolve_task(tasks, args.task_id_2))
         if args.json:
             _dump(data)
+        elif getattr(args, "summary", False):
+            output = format_diff_summary(data)
+            # Append prompt diff if prompts differ
+            prompt_diff_lines = data.get("prompt_diff") or []
+            if prompt_diff_lines:
+                output += "\n\n" + format_prompt_diff(data)
+            _emit(output, args, final=True)
         else:
             lines: list[str] = []
             for key, section in data.items():
+                if key == "prompt_diff":
+                    # Use the formatted prompt diff instead of raw list
+                    prompt_diff_lines = data.get("prompt_diff") or []
+                    if prompt_diff_lines:
+                        lines.append("")
+                        lines.append(format_prompt_diff(data))
+                    continue
                 lines.append(f"\n{key}:")
                 if isinstance(section, dict):
                     for sub_key, value in section.items():
@@ -603,6 +657,10 @@ def cmd_grade(args: argparse.Namespace) -> int:
             args.log_dir, days=args.days, format_name=args.format,
             pattern=getattr(args, "pattern", None), settings=args,
         )
+        tasks = _apply_filters(args, tasks)
+        if not tasks:
+            _emit("No tasks remain after applying filters.", args, final=True)
+            return 0
         started = perf_counter()
         rules = load_rules(args.rules)
         if not args.json:
@@ -707,11 +765,25 @@ def cmd_grade(args: argparse.Namespace) -> int:
 
 def cmd_tree(args: argparse.Namespace) -> int:
     def _action() -> int:
-        data = tree_for_tasks(_load(args))
-        if args.json:
-            _dump(data)
+        tasks = _apply_filters(args, _load(args))
+        if not tasks:
+            _emit("No tasks remain after applying filters.", args, final=True)
+            return 0
+        rules_path = getattr(args, "rules", None)
+        if rules_path:
+            rules = load_rules(rules_path)
+            grades = grade_tasks(tasks, rules)
+            enriched = enriched_tree_for_tasks(tasks, grades)
+            if args.json:
+                _dump(enriched)
+            else:
+                _emit(format_enriched_tree_text(enriched), args, final=True)
         else:
-            _emit(format_tree_text(data), args, final=True)
+            enriched = enriched_tree_for_tasks(tasks)
+            if args.json:
+                _dump(enriched)
+            else:
+                _emit(format_enriched_tree_text(enriched), args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -861,6 +933,7 @@ def _grade_and_analyze(
     tasks = _load_tasks_with_format(
         args.log_dir, days=args.days, format_name=args.format, settings=args
     )
+    tasks = _apply_filters(args, tasks)
     rules = load_rules(args.rules) if args.rules else load_rules()
     _emit_verbose(f"Grading {len(tasks)} task(s) with rules={rules.name}", args)
     grades = grade_tasks(tasks, rules)
@@ -907,6 +980,64 @@ def cmd_report(args: argparse.Namespace) -> int:
                 )
             return 0
 
+        if report_type == "overhead":
+            from .baseline import (
+                format_overhead_report,
+                group_by_prompt_hash,
+                load_baselines,
+                measure_all_overhead,
+                overhead_report_data,
+            )
+
+            baselines_dir = getattr(args, "baselines", None)
+            if not baselines_dir:
+                _emit("--baselines is required for the overhead report", args, final=True)
+                return 1
+            baselines = load_baselines(baselines_dir)
+            if not baselines:
+                _emit(f"No baselines found in {baselines_dir}", args, final=True)
+                return 1
+            grade_map = {g.task_id: g.grade for g in grades}
+            results = measure_all_overhead(tasks, grade_map, baselines)
+            hash_groups = group_by_prompt_hash(tasks, analyses, grade_map, baselines)
+            if use_json:
+                _dump(overhead_report_data(results, hash_groups))
+            else:
+                _emit(
+                    _colorize_report_headers(
+                        format_overhead_report(results, hash_groups), args
+                    ),
+                    args,
+                    final=True,
+                )
+            return 0
+
+        if report_type == "prompt-impact":
+            from .baseline import (
+                format_prompt_impact_report,
+                group_by_prompt_hash,
+                load_baselines,
+                prompt_impact_data,
+            )
+
+            baselines_dir = getattr(args, "baselines", None)
+            baselines = load_baselines(baselines_dir) if baselines_dir else None
+            grade_map = {g.task_id: g.grade for g in grades}
+            hash_groups = group_by_prompt_hash(tasks, analyses, grade_map, baselines)
+            if use_json:
+                _dump(prompt_impact_data(hash_groups))
+            else:
+                _emit(
+                    _colorize_report_headers(
+                        format_prompt_impact_report(hash_groups), args
+                    ),
+                    args,
+                    final=True,
+                )
+            return 0
+
+        bucket_minutes = _parse_bucket_arg(getattr(args, "bucket", "1h"))
+
         text_funcs = {
             "health": lambda: report_health(tasks, grades, analyses),
             "golden": lambda: report_golden(tasks, grades, analyses),
@@ -919,6 +1050,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             "research": lambda: report_research(tasks, analyses),
             "cost": lambda: report_cost(tasks, analyses),
             "fixes": lambda: report_fixes(tasks, grades, analyses),
+            "timeline": lambda: report_timeline(tasks, grades, analyses, bucket_minutes),
+            "spins": lambda: report_spins(tasks, analyses),
         }
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
@@ -932,6 +1065,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             "research": lambda: report_research_data(tasks, analyses),
             "cost": lambda: report_cost_data(tasks, analyses),
             "fixes": lambda: report_fixes_data(tasks, grades, analyses),
+            "timeline": lambda: report_timeline_data(tasks, grades, analyses, bucket_minutes),
+            "spins": lambda: report_spins_data(tasks, analyses),
         }
         markdown_funcs: dict[str, Any] = {
             "health": lambda: report_health_markdown(tasks, grades, analyses),
@@ -945,6 +1080,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             "research": lambda: report_research_markdown(tasks, analyses),
             "cost": lambda: report_cost_markdown(tasks, analyses),
             "fixes": lambda: report_fixes_markdown(tasks, grades, analyses),
+            "timeline": lambda: report_timeline_markdown(tasks, grades, analyses, bucket_minutes),
+            "spins": lambda: report_spins_markdown(tasks, analyses),
         }
 
         if report_type not in text_funcs:
@@ -1092,6 +1229,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             args.log_dir, days=args.days, format_name=args.format,
             pattern=getattr(args, "pattern", None), settings=args,
         )
+        tasks = _apply_filters(args, tasks)
+        if not tasks:
+            _emit("No tasks remain after applying filters.", args, final=True)
+            return 0
         rules = load_rules(getattr(args, "rules", "default"))
         grades = grade_tasks(tasks, rules)
         classifications = classify_failures(tasks, grades)
@@ -1100,6 +1241,21 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             _dump([entry.to_dict() for entry in plan])
         else:
             _emit(format_fix_plan_text(plan), args, final=True)
+        return 0
+    return _run_command(args, _action)
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Watch a JSONL log file and print grades as tasks complete."""
+    def _action() -> int:
+        from .watch import watch_file
+        watch_file(
+            args.file,
+            rules_path=getattr(args, "rules", None),
+            poll_interval=getattr(args, "poll", 2.0),
+            json_output=getattr(args, "json", False),
+            color=not getattr(args, "no_color", False) and os.getenv("NO_COLOR") is None,
+        )
         return 0
     return _run_command(args, _action)
 
@@ -1163,6 +1319,359 @@ def cmd_rules_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_since(value: str) -> datetime:
+    """Parse a --since value into a datetime.
+
+    Accepts relative durations like ``2h``, ``30m``, ``1d`` or ISO timestamps.
+    """
+    match = re.fullmatch(r"(\d+)\s*([smhd])", value.strip())
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        delta = {
+            "s": timedelta(seconds=amount),
+            "m": timedelta(minutes=amount),
+            "h": timedelta(hours=amount),
+            "d": timedelta(days=amount),
+        }[unit]
+        return datetime.now(timezone.utc) - delta
+    # Try ISO timestamp
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        raise CliError(
+            f"Invalid --since value: {value!r}\n"
+            f"Use a relative duration (e.g. 2h, 30m, 1d) or an ISO timestamp."
+        ) from None
+
+
+def _task_timestamp(task: AgentTask) -> datetime | None:
+    """Extract the earliest timestamp from a task."""
+    for step in task.sorted_steps:
+        ts = step.timestamp
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                continue
+    if task.outcome and task.outcome.timestamp:
+        try:
+            dt = datetime.fromisoformat(task.outcome.timestamp)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            pass
+    return None
+
+
+def _filter_tasks(
+    tasks: list[AgentTask],
+    *,
+    grade_filter: str | None = None,
+    site_filter: str | None = None,
+    outcome_filter: str | None = None,
+    since_filter: str | None = None,
+    grades: list[GradeResult] | None = None,
+) -> list[AgentTask]:
+    """Apply CLI filter flags to a task list.
+
+    When ``grade_filter`` is used and ``grades`` is not provided, tasks are
+    graded on the fly with the default ruleset.
+    """
+    filtered = list(tasks)
+
+    if since_filter:
+        cutoff = _parse_since(since_filter)
+        kept: list[AgentTask] = []
+        for task in filtered:
+            ts = _task_timestamp(task)
+            if ts is None or ts >= cutoff:
+                kept.append(task)
+        filtered = kept
+
+    if site_filter:
+        site_lower = site_filter.lower()
+        filtered = [
+            task for task in filtered
+            if site_lower in analyze_task(task).site_name.lower()
+        ]
+
+    if outcome_filter:
+        outcome_lower = outcome_filter.lower()
+        filtered = [
+            task for task in filtered
+            if task.outcome is not None and outcome_lower in task.outcome.status.lower()
+        ]
+
+    if grade_filter:
+        allowed = {g.strip().upper() for g in grade_filter.split(",")}
+        if grades is None:
+            rules = load_rules()
+            grades = grade_tasks(filtered, rules)
+        grade_map = {g.task_id: g.grade for g in grades}
+        filtered = [
+            task for task in filtered
+            if grade_map.get(task.task_id, "") in allowed
+        ]
+
+    return filtered
+
+
+def _apply_filters(
+    args: argparse.Namespace,
+    tasks: list[AgentTask],
+    grades: list[GradeResult] | None = None,
+) -> list[AgentTask]:
+    """Convenience wrapper: read filter flags from args and apply them."""
+    return _filter_tasks(
+        tasks,
+        grade_filter=getattr(args, "grade_filter", None),
+        site_filter=getattr(args, "site_filter", None),
+        outcome_filter=getattr(args, "outcome_filter", None),
+        since_filter=getattr(args, "since_filter", None),
+        grades=grades,
+    )
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    """Search tasks by user_text substring."""
+
+    def _action() -> int:
+        tasks = _load(args)
+        query = args.query.lower()
+        matches: list[dict[str, Any]] = []
+        grade_map: dict[str, str] = {}
+        grade_filter = getattr(args, "grade_filter", None)
+
+        if grade_filter:
+            rules = load_rules()
+            grades = grade_tasks(tasks, rules)
+            grade_map = {g.task_id: g.grade for g in grades}
+            allowed = {g.strip().upper() for g in grade_filter.split(",")}
+        else:
+            allowed = None
+
+        for task in tasks:
+            text = task.task_text or ""
+            if query not in text.lower():
+                continue
+            if allowed and grade_map.get(task.task_id, "") not in allowed:
+                continue
+            analysis = analyze_task(task)
+            entry: dict[str, Any] = {
+                "task_id": task.task_id,
+                "grade": grade_map.get(task.task_id, ""),
+                "outcome": task.outcome.status if task.outcome else "",
+                "step_count": len(task.steps),
+                "site": analysis.site_name,
+                "user_text": text[:80],
+            }
+            matches.append(entry)
+
+        if not matches:
+            _emit(f"No tasks matching {args.query!r}.", args, final=True)
+            return 0
+
+        if args.json:
+            _dump(matches)
+        else:
+            lines: list[str] = [f"Found {len(matches)} task(s) matching {args.query!r}:", ""]
+            for entry in matches:
+                grade_str = f" [{entry['grade']}]" if entry["grade"] else ""
+                outcome_str = f" ({entry['outcome']})" if entry["outcome"] else ""
+                lines.append(
+                    f"  {entry['task_id']}{grade_str}{outcome_str}"
+                    f"  steps={entry['step_count']}  site={entry['site']}"
+                )
+                lines.append(f"    {entry['user_text']}")
+            _emit("\n".join(lines), args, final=True)
+        return 0
+
+    return _run_command(args, _action)
+
+
+def cmd_golden(args: argparse.Namespace) -> int:
+    """Golden exemplar ranking subcommands."""
+    from .golden import (
+        OPTIMIZATION_PROFILES,
+        capture_exemplar,
+        find_exemplars,
+        format_golden_ranking,
+        rank_golden_runs,
+    )
+    from .replay import load_fixture
+
+    subcmd = getattr(args, "golden_command", None)
+
+    if subcmd == "rank":
+        def _action() -> int:
+            tasks = _load(args)
+            rules = load_rules(getattr(args, "rules", None))
+            optimize = getattr(args, "optimize", "balanced")
+            site_filter = getattr(args, "site_filter", None)
+            rankings = rank_golden_runs(tasks, rules=rules, optimize=optimize)
+            if site_filter:
+                site_lower = site_filter.lower()
+                rankings = {
+                    s: r for s, r in rankings.items() if site_lower in s.lower()
+                }
+            if args.json:
+                _dump({s: [r.to_dict() for r in rs] for s, rs in rankings.items()})
+            else:
+                _emit(format_golden_ranking(rankings, optimize), args, final=True)
+            return 0
+
+        return _run_command(args, _action)
+
+    if subcmd == "best":
+        def _action() -> int:
+            tasks = _load(args)
+            rules = load_rules(getattr(args, "rules", None))
+            optimize = getattr(args, "optimize", "balanced")
+            exemplars = find_exemplars(tasks, rules=rules, optimize=optimize)
+            if args.json:
+                _dump([e.to_dict() for e in exemplars])
+            else:
+                if not exemplars:
+                    _emit("No golden/good runs found.", args, final=True)
+                else:
+                    lines: list[str] = ["EXEMPLARS (best run per site)", "=" * 40]
+                    for e in exemplars:
+                        lines.append(
+                            f"  {e.site_name}: {e.task_id[:12]}  eff={e.efficiency:.2f}  "
+                            f"{e.step_count} steps  {e.duration_s:.0f}s  "
+                            f"${e.cost_usd:.2f}  {e.flow_summary}"
+                        )
+                    _emit("\n".join(lines), args, final=True)
+            return 0
+
+        return _run_command(args, _action)
+
+    if subcmd == "capture":
+        def _action() -> int:
+            tasks = _load(args)
+            rules = load_rules(getattr(args, "rules", None))
+            optimize = getattr(args, "optimize", "balanced")
+            site = getattr(args, "site_name", None)
+            output = getattr(args, "out", None)
+            path = capture_exemplar(
+                tasks, rules=rules, site=site, optimize=optimize, output_path=output,
+            )
+            if args.json:
+                _dump({"fixture": str(path)})
+            else:
+                _emit(str(path), args, final=True)
+            return 0
+
+        return _run_command(args, _action)
+
+    if subcmd == "compare":
+        def _action() -> int:
+            tasks = _load(args)
+            rules = load_rules(getattr(args, "rules", None))
+            fixtures_dir = Path(args.fixtures)
+            if not fixtures_dir.exists():
+                raise CliError(f"Fixtures directory not found: {fixtures_dir}")
+            optimize = getattr(args, "optimize", "balanced")
+            rankings = rank_golden_runs(tasks, rules=rules, optimize=optimize)
+            results: list[dict[str, Any]] = []
+            for fixture_path in sorted(fixtures_dir.glob("*.json")):
+                try:
+                    fixture = load_fixture(fixture_path)
+                except Exception:
+                    continue
+                fixture_site = str(fixture.get("site", ""))
+                fixture_steps = int(fixture.get("total_steps", 0) or 0)
+                site_ranks = rankings.get(fixture_site, [])
+                if site_ranks:
+                    best = site_ranks[0]
+                    step_delta = best.step_count - fixture_steps
+                    results.append({
+                        "fixture": fixture_path.name,
+                        "site": fixture_site,
+                        "fixture_steps": fixture_steps,
+                        "current_best_task": best.task_id,
+                        "current_best_steps": best.step_count,
+                        "current_best_efficiency": round(best.efficiency, 4),
+                        "step_delta": step_delta,
+                        "verdict": (
+                            "IMPROVED" if step_delta < -2
+                            else "REGRESSION" if step_delta > 5
+                            else "STABLE"
+                        ),
+                    })
+                else:
+                    results.append({
+                        "fixture": fixture_path.name,
+                        "site": fixture_site,
+                        "fixture_steps": fixture_steps,
+                        "current_best_task": None,
+                        "current_best_steps": None,
+                        "current_best_efficiency": None,
+                        "step_delta": None,
+                        "verdict": "UNMATCHED",
+                    })
+            if args.json:
+                _dump(results)
+            else:
+                lines: list[str] = ["GOLDEN COMPARE (fixtures vs current)", "=" * 50]
+                for r in results:
+                    if r["current_best_task"]:
+                        lines.append(
+                            f"  {r['fixture']:<30s} {r['verdict']:<12s} "
+                            f"fixture={r['fixture_steps']}  "
+                            f"current={r['current_best_steps']}  "
+                            f"eff={r['current_best_efficiency']:.2f}"
+                        )
+                    else:
+                        lines.append(
+                            f"  {r['fixture']:<30s} UNMATCHED  fixture={r['fixture_steps']}"
+                        )
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        return _run_command(args, _action)
+
+    if subcmd == "profiles":
+        lines: list[str] = ["OPTIMIZATION PROFILES", "=" * 50]
+        for name, weights in sorted(OPTIMIZATION_PROFILES.items()):
+            parts = ", ".join(f"{k}={v:.1f}" for k, v in sorted(weights.items()))
+            lines.append(f"  {name:<12s}  {parts}")
+        _emit("\n".join(lines), args, final=True)
+        return 0
+
+    _emit("Usage: agent-xray golden {rank,best,capture,compare,profiles}", args, final=True)
+    return 1
+
+
+def _add_filter_options(parser: argparse.ArgumentParser) -> None:
+    """Add shared filter flags to a subparser."""
+    filter_group = parser.add_argument_group("filters")
+    filter_group.add_argument(
+        "--grade", dest="grade_filter", default=None,
+        help="Only include tasks with this grade (comma-separated: BROKEN,WEAK)",
+    )
+    filter_group.add_argument(
+        "--site", dest="site_filter", default=None,
+        help="Only include tasks whose site_name matches (substring, case-insensitive)",
+    )
+    filter_group.add_argument(
+        "--outcome", dest="outcome_filter", default=None,
+        help="Only include tasks with this outcome status (substring, case-insensitive)",
+    )
+    filter_group.add_argument(
+        "--since", dest="since_filter", default=None,
+        help="Only include tasks after this time (e.g. 2h, 30m, 1d, or ISO timestamp)",
+    )
+
+
 def _add_format_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -1178,6 +1687,128 @@ def _add_pattern_option(parser: argparse.ArgumentParser) -> None:
         help="Glob pattern to filter .jsonl files (e.g. 'agent-steps-*.jsonl'). "
         "Without this, auto-detects files containing agent traces.",
     )
+
+
+def cmd_pricing(args: argparse.Namespace) -> int:
+    """Manage the model pricing database."""
+    from .pricing import (
+        format_model_pricing,
+        load_pricing,
+        pricing_source,
+        update_pricing_cache,
+    )
+
+    subcmd = getattr(args, "pricing_command", None)
+
+    if subcmd == "list":
+        custom = getattr(args, "pricing", None)
+        pricing_data = load_pricing(custom)
+        models = pricing_data.get("models", {})
+        header = f"{'Model':<40} {'Input/1M':>10} {'Output/1M':>10} {'Cached/1M':>10}"
+        _emit(header, args)
+        _emit("-" * len(header), args)
+        for model_name in sorted(models):
+            entry = models[model_name]
+            cached = f"${entry['cached_input']:.4f}" if "cached_input" in entry else "  -"
+            _emit(
+                f"{model_name:<40} ${entry.get('input', 0.0):>9.4f}"
+                f" ${entry.get('output', 0.0):>9.4f} {cached:>10}",
+                args,
+            )
+        aliases = pricing_data.get("aliases", {})
+        if aliases:
+            _emit("", args)
+            _emit(f"Aliases ({len(aliases)}):", args)
+            for alias, target in sorted(aliases.items()):
+                _emit(f"  {alias} -> {target}", args)
+        _emit("", args)
+        _emit(f"Total: {len(models)} models, {len(aliases)} aliases", args, final=True)
+        return 0
+
+    if subcmd == "show":
+        custom = getattr(args, "pricing", None)
+        text = format_model_pricing(args.model_name, load_pricing(custom))
+        _emit(text, args, final=True)
+        return 0
+
+    if subcmd == "update":
+        ok, msg = update_pricing_cache()
+        _emit(msg, args, final=True)
+        return 0 if ok else 1
+
+    if subcmd == "path":
+        custom = getattr(args, "pricing", None)
+        _emit(pricing_source(custom), args, final=True)
+        return 0
+
+    # No sub-subcommand: show help
+    _emit("Usage: agent-xray pricing {list,show,update,path}", args, final=True)
+    return 1
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    def _action() -> int:
+        from .baseline import (
+            build_baseline,
+            format_overhead_report,
+            format_prompt_impact_report,
+            generate_naked_prompt,
+            group_by_prompt_hash,
+            load_baselines,
+            measure_all_overhead,
+            overhead_report_data,
+            prompt_impact_data,
+            save_baseline,
+        )
+
+        subcmd = getattr(args, "baseline_command", None)
+        use_json = getattr(args, "json", False)
+
+        if subcmd == "capture":
+            tasks = _load(args)
+            task = resolve_task(tasks, args.task_id)
+            analysis = analyze_task(task)
+            baseline = build_baseline(task, analysis)
+            out = Path(args.out) if args.out else Path.cwd() / "baselines" / f"{analysis.site_name}.json"
+            path = save_baseline(baseline, out)
+            if use_json:
+                _dump({"baseline": str(path), **baseline.to_dict()})
+            else:
+                _emit(f"Baseline saved to {path}", args, final=True)
+            return 0
+
+        if subcmd == "generate":
+            tasks = _load(args)
+            task = resolve_task(tasks, args.task_id)
+            prompt = generate_naked_prompt(task)
+            if use_json:
+                _dump({"task_id": task.task_id, "naked_prompt": prompt})
+            else:
+                _emit(prompt, args, final=True)
+            return 0
+
+        if subcmd == "list":
+            baselines_dir = Path(args.baselines_dir)
+            baselines = load_baselines(baselines_dir)
+            if use_json:
+                _dump({name: bl.to_dict() for name, bl in baselines.items()})
+            else:
+                if not baselines:
+                    _emit(f"No baselines found in {baselines_dir}", args, final=True)
+                else:
+                    lines = [f"{'Site':<20} {'Steps':>6} {'Duration':>10} {'Cost':>10}"]
+                    lines.append("-" * 50)
+                    for name, bl in sorted(baselines.items()):
+                        lines.append(
+                            f"{name:<20} {bl.step_count:>6} {bl.duration_s:>9.1f}s ${bl.cost_usd:>8.4f}"
+                        )
+                    _emit("\n".join(lines), args, final=True)
+            return 0
+
+        _emit("Usage: agent-xray baseline {capture,generate,list}", args, final=True)
+        return 1
+
+    return _run_command(args, _action)
 
 
 def _add_subparser(
@@ -1241,10 +1872,12 @@ def build_parser() -> argparse.ArgumentParser:
         parser_.add_argument("task_id", help="Task ID or prefix to search for")
         parser_.add_argument(
             "log_dir_pos", nargs="?", default=None,
-            help="Directory or .jsonl file (also accepted via --log-dir)",
+            help="Directory or .jsonl file (also accepted via --log-dir). "
+            "Defaults to AGENT_XRAY_LOG_DIR env var if set.",
         )
         parser_.add_argument(
-            "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
+            "--log-dir", dest="log_dir_opt",
+            help="Directory or .jsonl file containing agent traces",
         )
         parser_.add_argument(
             "--days", type=int, help="Include only the N most recent days of traces"
@@ -1258,17 +1891,24 @@ def build_parser() -> argparse.ArgumentParser:
         sub,
         "diff",
         help_text="Compare two tasks",
-        example="agent-xray diff task-123 task-124 --log-dir ./traces",
+        example="agent-xray diff task-123 task-124 ./traces",
     )
     p_diff.add_argument("task_id_1", help="First task ID to compare")
     p_diff.add_argument("task_id_2", help="Second task ID to compare")
     p_diff.add_argument(
-        "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file (also accepted via --log-dir). "
+        "Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_diff.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces (alias for positional arg)",
     )
     p_diff.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_diff)
     _add_pattern_option(p_diff)
     p_diff.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_diff.add_argument("--summary", action="store_true", help="Show concise side-by-side comparison instead of full diff")
     p_diff.set_defaults(func=cmd_diff)
 
     p_grade = _add_subparser(
@@ -1286,6 +1926,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_grade.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_grade)
     _add_pattern_option(p_grade)
+    _add_filter_options(p_grade)
     p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
     p_grade.set_defaults(func=cmd_grade)
 
@@ -1303,8 +1944,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file (alternative to positional)",
     )
     p_tree.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    p_tree.add_argument(
+        "--rules",
+        help="Ruleset name or path — enriches tree with grades and scores",
+    )
     _add_format_option(p_tree)
     _add_pattern_option(p_tree)
+    _add_filter_options(p_tree)
     p_tree.add_argument("--json", action="store_true", help="Output results as JSON")
     p_tree.set_defaults(func=cmd_tree)
 
@@ -1383,7 +2029,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report = _add_subparser(
         sub,
         "report",
-        help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, compare)",
+        help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, timeline, spins, compare)",
         example="agent-xray report ./traces health",
     )
     p_report.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
@@ -1401,7 +2047,11 @@ def build_parser() -> argparse.ArgumentParser:
             "research",
             "cost",
             "fixes",
+            "timeline",
+            "spins",
             "compare",
+            "overhead",
+            "prompt-impact",
         ],
         help="Type of report to generate",
     )
@@ -1410,10 +2060,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
     p_report.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    p_report.add_argument(
+        "--bucket",
+        default="1h",
+        help="Time bucket for timeline report (e.g. '15m', '1h'). Default: 1h",
+    )
     _add_format_option(p_report)
     _add_pattern_option(p_report)
+    _add_filter_options(p_report)
     p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
     p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
+    p_report.add_argument(
+        "--baselines",
+        help="Directory containing baseline JSON files (for overhead report)",
+    )
     p_report.add_argument("--json", action="store_true", help="Output results as JSON")
     p_report.add_argument("--markdown", action="store_true", help="Output results as Markdown")
     p_report.set_defaults(func=cmd_report)
@@ -1442,8 +2102,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_diagnose.add_argument("--rules", default="default", help="Ruleset name for grading (default: default)")
     _add_format_option(p_diagnose)
     _add_pattern_option(p_diagnose)
+    _add_filter_options(p_diagnose)
     p_diagnose.add_argument("--json", action="store_true", help="Output results as JSON")
     p_diagnose.set_defaults(func=cmd_diagnose)
+
+    p_search = _add_subparser(
+        sub,
+        "search",
+        help_text="Search tasks by user_text",
+        example='agent-xray search "pizza" ./traces',
+    )
+    p_search.add_argument("query", help="Search string (case-insensitive substring match on user_text)")
+    p_search.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_search.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces (alias for positional arg)",
+    )
+    p_search.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_format_option(p_search)
+    _add_pattern_option(p_search)
+    p_search.add_argument(
+        "--grade", dest="grade_filter", default=None,
+        help="Only include tasks with this grade (comma-separated: BROKEN,WEAK)",
+    )
+    p_search.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_search.set_defaults(func=cmd_search)
 
     p_tui = _add_subparser(
         sub,
@@ -1454,6 +2140,75 @@ def build_parser() -> argparse.ArgumentParser:
     p_tui.add_argument("log_dir", help="Trace log directory or jsonl file to inspect")
     p_tui.add_argument("--task-id", help="Specific task id to open. Defaults to the latest task.")
     p_tui.set_defaults(func=cmd_tui)
+
+    p_watch = _add_subparser(
+        sub,
+        "watch",
+        help_text="Tail a JSONL log file and grade tasks as they complete in real-time",
+        example="agent-xray watch path/to/agent-steps-20260328.jsonl --rules browser_flow",
+    )
+    p_watch.add_argument("file", help="Path to a JSONL log file to watch")
+    p_watch.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_watch.add_argument(
+        "--poll",
+        type=float,
+        default=2.0,
+        help="Poll interval in seconds (default: 2.0)",
+    )
+    p_watch.add_argument("--json", action="store_true", help="Output one JSON object per completed task")
+    p_watch.set_defaults(func=cmd_watch)
+
+    # Baseline management subcommands
+    p_baseline = _add_subparser(
+        sub,
+        "baseline",
+        help_text="Capture, generate, or list baselines for overhead measurement",
+        example="agent-xray baseline capture task-123 ./traces -o baselines/dominos.json",
+    )
+    baseline_sub = p_baseline.add_subparsers(dest="baseline_command")
+
+    p_bl_capture = baseline_sub.add_parser("capture", help="Capture a task as a baseline")
+    p_bl_capture.add_argument("task_id", help="Task id to capture")
+    p_bl_capture.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_bl_capture.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces (alias for positional arg)",
+    )
+    p_bl_capture.add_argument("-o", "--out", help="Output JSON file path")
+    p_bl_capture.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_format_option(p_bl_capture)
+    _add_pattern_option(p_bl_capture)
+    p_bl_capture.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_bl_capture.set_defaults(func=cmd_baseline)
+
+    p_bl_generate = baseline_sub.add_parser("generate", help="Print the naked prompt for a task")
+    p_bl_generate.add_argument("task_id", help="Task id to generate prompt for")
+    p_bl_generate.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_bl_generate.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces (alias for positional arg)",
+    )
+    p_bl_generate.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_format_option(p_bl_generate)
+    _add_pattern_option(p_bl_generate)
+    p_bl_generate.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_bl_generate.set_defaults(func=cmd_baseline)
+
+    p_bl_list = baseline_sub.add_parser("list", help="List all baselines in a directory")
+    p_bl_list.add_argument("baselines_dir", help="Directory containing baseline JSON files")
+    p_bl_list.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_bl_list.set_defaults(func=cmd_baseline)
+
+    p_baseline.set_defaults(func=cmd_baseline)
 
     p_quickstart = _add_subparser(
         sub,
@@ -1508,6 +2263,157 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Default: show help when no sub-subcommand given
     p_rules.set_defaults(func=lambda args: (p_rules.print_help(), 0)[1])
+
+    # Pricing management subcommands
+    p_pricing = _add_subparser(
+        sub,
+        "pricing",
+        help_text="List, show, or update model pricing data",
+        example="agent-xray pricing list",
+    )
+    pricing_sub = p_pricing.add_subparsers(dest="pricing_command")
+
+    p_pricing_list = pricing_sub.add_parser("list", help="Show all known models and prices")
+    p_pricing_list.add_argument(
+        "--pricing", help="Path to custom pricing JSON file",
+    )
+    p_pricing_list.set_defaults(func=cmd_pricing)
+
+    p_pricing_show = pricing_sub.add_parser("show", help="Show pricing for a specific model")
+    p_pricing_show.add_argument("model_name", help="Model name (e.g. gpt-4.1-nano)")
+    p_pricing_show.add_argument(
+        "--pricing", help="Path to custom pricing JSON file",
+    )
+    p_pricing_show.set_defaults(func=cmd_pricing)
+
+    p_pricing_update = pricing_sub.add_parser("update", help="Fetch latest pricing from GitHub")
+    p_pricing_update.set_defaults(func=cmd_pricing)
+
+    p_pricing_path = pricing_sub.add_parser("path", help="Show where pricing data is loaded from")
+    p_pricing_path.add_argument(
+        "--pricing", help="Path to custom pricing JSON file",
+    )
+    p_pricing_path.set_defaults(func=cmd_pricing)
+
+    # Default: show help when no sub-subcommand given
+    p_pricing.set_defaults(func=cmd_pricing)
+
+    # Golden exemplar ranking subcommands
+    p_golden = _add_subparser(
+        sub,
+        "golden",
+        help_text="Rank, inspect, and capture golden exemplar runs",
+        example="agent-xray golden rank ./traces --optimize balanced",
+    )
+    golden_sub = p_golden.add_subparsers(dest="golden_command")
+
+    p_golden_rank = golden_sub.add_parser(
+        "rank", help="Rank golden/good runs by efficiency within each site"
+    )
+    p_golden_rank.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_golden_rank.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_golden_rank.add_argument("--rules", help="Ruleset name or path to JSON")
+    p_golden_rank.add_argument(
+        "--optimize", default="balanced",
+        help="Optimization profile: balanced, cost, speed, steps (default: balanced)",
+    )
+    p_golden_rank.add_argument(
+        "--site", dest="site_filter",
+        help="Only show rankings for this site (substring, case-insensitive)",
+    )
+    p_golden_rank.add_argument("--days", type=int, help="Include only the N most recent days")
+    _add_format_option(p_golden_rank)
+    _add_pattern_option(p_golden_rank)
+    p_golden_rank.add_argument("--json", action="store_true", help="Output as JSON")
+    p_golden_rank.set_defaults(func=cmd_golden)
+
+    p_golden_best = golden_sub.add_parser(
+        "best", help="Show the top exemplar for each site"
+    )
+    p_golden_best.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_golden_best.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_golden_best.add_argument("--rules", help="Ruleset name or path to JSON")
+    p_golden_best.add_argument(
+        "--optimize", default="balanced",
+        help="Optimization profile (default: balanced)",
+    )
+    p_golden_best.add_argument("--days", type=int, help="Include only the N most recent days")
+    _add_format_option(p_golden_best)
+    _add_pattern_option(p_golden_best)
+    p_golden_best.add_argument("--json", action="store_true", help="Output as JSON")
+    p_golden_best.set_defaults(func=cmd_golden)
+
+    p_golden_capture = golden_sub.add_parser(
+        "capture", help="Capture the exemplar for a site as a fixture"
+    )
+    p_golden_capture.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_golden_capture.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_golden_capture.add_argument("--rules", help="Ruleset name or path to JSON")
+    p_golden_capture.add_argument(
+        "--optimize", default="balanced",
+        help="Optimization profile (default: balanced)",
+    )
+    p_golden_capture.add_argument(
+        "--site", dest="site_name", help="Site name to capture exemplar for"
+    )
+    p_golden_capture.add_argument("--out", "-o", help="Output file path")
+    p_golden_capture.add_argument("--days", type=int, help="Include only the N most recent days")
+    _add_format_option(p_golden_capture)
+    _add_pattern_option(p_golden_capture)
+    p_golden_capture.add_argument("--json", action="store_true", help="Output as JSON")
+    p_golden_capture.set_defaults(func=cmd_golden)
+
+    p_golden_compare = golden_sub.add_parser(
+        "compare", help="Compare current golden runs against captured fixtures"
+    )
+    p_golden_compare.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_golden_compare.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_golden_compare.add_argument(
+        "--fixtures", required=True,
+        help="Directory containing golden fixture files",
+    )
+    p_golden_compare.add_argument("--rules", help="Ruleset name or path to JSON")
+    p_golden_compare.add_argument(
+        "--optimize", default="balanced",
+        help="Optimization profile (default: balanced)",
+    )
+    p_golden_compare.add_argument("--days", type=int, help="Include only the N most recent days")
+    _add_format_option(p_golden_compare)
+    _add_pattern_option(p_golden_compare)
+    p_golden_compare.add_argument("--json", action="store_true", help="Output as JSON")
+    p_golden_compare.set_defaults(func=cmd_golden)
+
+    p_golden_profiles = golden_sub.add_parser(
+        "profiles", help="List available optimization profiles"
+    )
+    p_golden_profiles.set_defaults(func=cmd_golden)
+
+    # Default: show help when no sub-subcommand given
+    p_golden.set_defaults(func=lambda args: (p_golden.print_help(), 0)[1])
 
     return parser
 

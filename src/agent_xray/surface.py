@@ -576,6 +576,204 @@ def diff_tasks(
     }
 
 
+def _detect_key_differences(diff_data: dict[str, Any]) -> list[str]:
+    """Detect the most significant differences between two compared tasks."""
+    differences: list[str] = []
+    left = diff_data["left"]
+    right = diff_data["right"]
+    left_steps = left.get("steps") or []
+    right_steps = right.get("steps") or []
+
+    # Detect spin patterns
+    for side_label, steps in [("Left", left_steps), ("Right", right_steps)]:
+        tool_runs: dict[str, list[int]] = {}
+        for step in steps:
+            name = step.get("tool_name", "")
+            tool_runs.setdefault(name, []).append(step.get("step", 0))
+        for tool_name, step_nums in tool_runs.items():
+            if len(step_nums) < 3:
+                continue
+            # Check for consecutive runs
+            max_consecutive = 1
+            current_run = 1
+            start_step = step_nums[0]
+            for i in range(1, len(step_nums)):
+                if step_nums[i] == step_nums[i - 1] + 1:
+                    current_run += 1
+                    if current_run > max_consecutive:
+                        max_consecutive = current_run
+                        start_step = step_nums[i - current_run + 1]
+                else:
+                    current_run = 1
+            if max_consecutive >= 3:
+                differences.append(
+                    f"{side_label} spun on {tool_name} "
+                    f"({max_consecutive} repeats starting step {start_step})"
+                )
+
+    # Detect snapshot usage differences
+    left_snapshot = sum(1 for s in left_steps if "snapshot" in (s.get("tool_name") or "").lower())
+    right_snapshot = sum(1 for s in right_steps if "snapshot" in (s.get("tool_name") or "").lower())
+    if left_snapshot == 0 and right_snapshot > 0:
+        differences.append("Right used browser_snapshot after each dialog change")
+    elif right_snapshot == 0 and left_snapshot > 0:
+        differences.append("Left used browser_snapshot after each dialog change")
+
+    # Detect prompt hash differences
+    left_hash = None
+    right_hash = None
+    for step in left_steps:
+        if step.get("system_prompt_hash"):
+            left_hash = step["system_prompt_hash"]
+            break
+    for step in right_steps:
+        if step.get("system_prompt_hash"):
+            right_hash = step["system_prompt_hash"]
+            break
+    if left_hash and right_hash and left_hash != right_hash:
+        differences.append(f"Left prompt hash: {left_hash}, Right: {right_hash}")
+
+    # Detect prompt content differences
+    prompt_diff = diff_data.get("prompt_diff") or []
+    added_lines = [line[1:].strip() for line in prompt_diff if line.startswith("+") and not line.startswith("+++")]
+    removed_lines = [line[1:].strip() for line in prompt_diff if line.startswith("-") and not line.startswith("---")]
+    if added_lines or removed_lines:
+        # Summarize the most significant prompt difference
+        key_added = [line for line in added_lines if len(line) > 10][:1]
+        key_removed = [line for line in removed_lines if len(line) > 10][:1]
+        if key_removed and key_added:
+            differences.append(
+                f"Prompt diff: Left has '{key_removed[0][:80]}' "
+                f"vs Right has '{key_added[0][:80]}'"
+            )
+        elif key_removed:
+            differences.append(f"Prompt diff: Left missing content present in Right")
+        elif key_added:
+            differences.append(f"Prompt diff: Right missing content present in Left")
+
+    return differences
+
+
+def format_diff_summary(diff_data: dict[str, Any]) -> str:
+    """Render a concise side-by-side summary of two compared tasks.
+
+    Args:
+        diff_data: Output from :func:`diff_tasks`.
+
+    Returns:
+        str: Human-readable summary with key metrics and differences.
+    """
+    left = diff_data["left"]
+    right = diff_data["right"]
+    left_id = left.get("task_id", "?")
+    right_id = right.get("task_id", "?")
+    left_steps = left.get("steps") or []
+    right_steps = right.get("steps") or []
+
+    # Extract metrics
+    left_outcome = left.get("outcome") or {}
+    right_outcome = right.get("outcome") or {}
+    left_status = left_outcome.get("status", "unknown") if isinstance(left_outcome, dict) else "unknown"
+    right_status = right_outcome.get("status", "unknown") if isinstance(right_outcome, dict) else "unknown"
+
+    left_errors = sum(1 for s in left_steps if s.get("error"))
+    right_errors = sum(1 for s in right_steps if s.get("error"))
+
+    # Max repeat count
+    def _max_repeat(steps: list[dict[str, Any]]) -> int:
+        if not steps:
+            return 0
+        max_run = 1
+        current_run = 1
+        for i in range(1, len(steps)):
+            if steps[i].get("tool_name") == steps[i - 1].get("tool_name"):
+                current_run += 1
+                max_run = max(max_run, current_run)
+            else:
+                current_run = 1
+        return max_run
+
+    left_max_repeat = _max_repeat(left_steps)
+    right_max_repeat = _max_repeat(right_steps)
+
+    # Unique tools
+    left_tools = len({s.get("tool_name") for s in left_steps if s.get("tool_name")})
+    right_tools = len({s.get("tool_name") for s in right_steps if s.get("tool_name")})
+
+    # Duration
+    left_duration: float | None = None
+    right_duration: float | None = None
+    if isinstance(left_outcome, dict):
+        left_duration = left_outcome.get("total_duration_s") or left_outcome.get("metadata", {}).get("total_duration_s")
+    if isinstance(right_outcome, dict):
+        right_duration = right_outcome.get("total_duration_s") or right_outcome.get("metadata", {}).get("total_duration_s")
+
+    # Context usage (max across steps)
+    def _max_context(steps: list[dict[str, Any]]) -> str:
+        values = [s.get("context_usage_pct") for s in steps if s.get("context_usage_pct") is not None]
+        if not values:
+            return "n/a"
+        return f"{max(values):.1f}%"
+
+    lines = [
+        f"DIFF SUMMARY: {left_id} vs {right_id}",
+        "=" * 60,
+        f"{'':20s}{'Left':>18s}{'Right':>18s}",
+    ]
+
+    # Task text (truncated)
+    left_text = (left.get("task_text") or "")[:30]
+    right_text = (right.get("task_text") or "")[:30]
+    if left_text or right_text:
+        lines.append(f"{'task_text:':20s}{left_text + '...':>18s}{right_text + '...':>18s}")
+
+    lines.append(f"{'outcome:':20s}{left_status:>18s}{right_status:>18s}")
+    lines.append(f"{'steps:':20s}{len(left_steps):>18d}{len(right_steps):>18d}")
+    lines.append(f"{'errors:':20s}{left_errors:>18d}{right_errors:>18d}")
+    lines.append(f"{'max_repeat:':20s}{left_max_repeat:>18d}{right_max_repeat:>18d}")
+    lines.append(f"{'unique_tools:':20s}{left_tools:>18d}{right_tools:>18d}")
+
+    left_dur_str = f"{left_duration:.1f}" if left_duration is not None else "n/a"
+    right_dur_str = f"{right_duration:.1f}" if right_duration is not None else "n/a"
+    lines.append(f"{'duration_s:':20s}{left_dur_str:>18s}{right_dur_str:>18s}")
+
+    lines.append(f"{'context_usage:':20s}{_max_context(left_steps):>18s}{_max_context(right_steps):>18s}")
+
+    similarity = diff_data.get("similarity_score")
+    if similarity is not None:
+        lines.append(f"{'similarity:':20s}{similarity:>18.3f}")
+
+    # Key differences
+    differences = _detect_key_differences(diff_data)
+    if differences:
+        lines.append("")
+        lines.append("KEY DIFFERENCES:")
+        for diff_line in differences:
+            lines.append(f"  - {diff_line}")
+
+    return "\n".join(lines)
+
+
+def format_prompt_diff(diff_data: dict[str, Any]) -> str:
+    """Render only the changed lines between two task prompts.
+
+    Args:
+        diff_data: Output from :func:`diff_tasks`.
+
+    Returns:
+        str: Unified diff of prompt changes, or a message if prompts are identical.
+    """
+    prompt_diff = diff_data.get("prompt_diff") or []
+    if not prompt_diff:
+        return "Prompts are identical (or both missing)."
+
+    # Filter to show only meaningful diff lines (skip file headers for readability)
+    lines = ["PROMPT DIFF:"]
+    for line in prompt_diff:
+        lines.append(f"  {line}")
+    return "\n".join(lines)
+
+
 def tree_for_tasks(tasks: list[AgentTask]) -> dict[str, dict[str, list[str]]]:
     """Group tasks into a ``day -> site -> task_ids`` tree.
 
@@ -587,6 +785,100 @@ def tree_for_tasks(tasks: list[AgentTask]) -> dict[str, dict[str, list[str]]]:
         inferred site name.
     """
     return build_task_tree(tasks)
+
+
+def enriched_tree_for_tasks(
+    tasks: list[AgentTask],
+    grades: list[Any] | None = None,
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Group tasks into a day/site tree with per-task metadata.
+
+    Args:
+        tasks: Tasks to group.
+        grades: Optional list of grade results (must have task_id, grade, score).
+
+    Returns:
+        Nested mapping: day -> site -> list of task info dicts.
+    """
+    from .analyzer import analyze_task as _analyze
+
+    grade_by_id: dict[str, Any] = {}
+    if grades:
+        for g in grades:
+            grade_by_id[g.task_id] = g
+
+    tree: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for task in tasks:
+        analysis = _analyze(task)
+        day = task.day or "unknown-day"
+        site = analysis.site_name
+
+        outcome_status = ""
+        if task.outcome:
+            outcome_status = task.outcome.status
+
+        info: dict[str, Any] = {
+            "task_id": task.task_id,
+            "steps": len(task.steps),
+            "outcome": outcome_status,
+        }
+
+        grade_obj = grade_by_id.get(task.task_id)
+        if grade_obj is not None:
+            info["grade"] = grade_obj.grade
+            info["score"] = grade_obj.score
+
+        tree.setdefault(day, {}).setdefault(site, []).append(info)
+
+    # Sort days
+    return dict(sorted(tree.items()))
+
+
+def format_enriched_tree_text(
+    tree: dict[str, dict[str, list[dict[str, Any]]]],
+) -> str:
+    """Render an enriched day/site/task tree as plain text with metadata.
+
+    Each site line shows task count and grade distribution.
+    Each task line shows grade, score, step count, and outcome.
+    """
+    lines = ["TASK TREE"]
+    for day, sites in tree.items():
+        lines.append(day)
+        for site, task_infos in sites.items():
+            # Build site-level summary
+            total = len(task_infos)
+            grade_counts: dict[str, int] = {}
+            for info in task_infos:
+                grade = info.get("grade")
+                if grade:
+                    grade_counts[grade] = grade_counts.get(grade, 0) + 1
+
+            if grade_counts:
+                grade_parts = ", ".join(
+                    f"{count} {label}" for label, count in sorted(grade_counts.items())
+                )
+                lines.append(f"  {site} ({total} tasks: {grade_parts})")
+            else:
+                lines.append(f"  {site} ({total} tasks)")
+
+            for info in task_infos:
+                task_id = info["task_id"]
+                step_count = info.get("steps", 0)
+                outcome = info.get("outcome", "")
+                grade = info.get("grade")
+                score = info.get("score")
+
+                if grade is not None and score is not None:
+                    score_str = f"+{score}" if score > 0 else str(score)
+                    lines.append(
+                        f"    {task_id}  [{score_str:>3s} {grade:<7s} {step_count:>3d} steps  {outcome}]"
+                    )
+                else:
+                    lines.append(
+                        f"    {task_id}  [{step_count:>3d} steps  {outcome}]"
+                    )
+    return "\n".join(lines)
 
 
 def format_surface_text(surface: dict[str, Any]) -> str:

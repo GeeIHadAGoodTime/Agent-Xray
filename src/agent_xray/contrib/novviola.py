@@ -30,7 +30,7 @@ from agent_xray.diagnose import register_target_resolver
 NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
     "routing_bug": [
         "intent/pipeline.py",
-        "mcp_hub/tool_router.py",
+        "intent/ai_controller.py",
         "mcp_hub/approval_bridge.py",
         "mcp_hub/client_hub.py",
     ],
@@ -63,7 +63,8 @@ NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
         "mcp_servers/browser/server.py",
     ],
     "reasoning_bug": [
-        "services/llm/prompts/sections/",
+        "services/llm/prompts/sections/minimal_core.py",
+        "services/llm/prompts/builder.py",
     ],
     "prompt_bug": [
         # Populated dynamically via PROMPT_BUG_PATTERNS; fallback is builder.py
@@ -88,7 +89,7 @@ NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
         "mcp_hub/client_hub.py",
     ],
     "insufficient_sources": [
-        "services/llm/prompts/sections/research.py",
+        "services/llm/prompts/sections/minimal_core.py",
         "mcp_servers/core_tools/server.py",
     ],
 }
@@ -139,7 +140,7 @@ PROMPT_BUG_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (
         r"tried.*different.*approach|backtrack|going back",
-        "services/llm/prompts/sections/planning.py",
+        "services/llm/prompts/sections/minimal_core.py",
         "Strengthen planning strategy guidance to avoid flip-flopping.",
     ),
     (
@@ -155,12 +156,12 @@ PROMPT_BUG_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (
         r"too many.*steps|running out|context.*full",
-        "services/llm/prompts/sections/planning.py",
+        "services/llm/prompts/sections/minimal_core.py",
         "Improve task decomposition guidance when resource limits loom.",
     ),
     (
         r"not sure which|multiple.*options|could.*either",
-        "services/llm/prompts/sections/tools.py",
+        "mcp_servers/core_tools/server.py",
         "Sharpen tool descriptions and priority ordering to reduce "
         "selection uncertainty.",
     ),
@@ -176,22 +177,25 @@ PROMPT_BUG_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (
         r"delivery address.*fill failed",
-        "services/llm/prompts/sections/payment.py",
+        "mcp_servers/browser/server.py",
         "Ensure delivery address context is used by browser fill logic.",
     ),
 ]
 
 # Prompt section name -> NOVVIOLA file mapping (for prompt_section= evidence)
+# After prompt consolidation (2026-03-27), most sections were merged into
+# minimal_core.py. Only response_format.py and music.py remain as separate files.
 PROMPT_SECTION_FILE_MAP: dict[str, str] = {
-    "research": "services/llm/prompts/sections/research.py",
-    "tools": "services/llm/prompts/sections/tools.py",
-    "browser": "services/llm/prompts/sections/browser.py",
-    "payment": "services/llm/prompts/sections/payment.py",
-    "planning": "services/llm/prompts/sections/planning.py",
-    "delegation": "services/llm/prompts/sections/delegation.py",
+    "research": "services/llm/prompts/sections/minimal_core.py",
+    "tools": "mcp_servers/core_tools/server.py",
+    "browser": "mcp_servers/browser/server.py",
+    "payment": "services/llm/prompts/sections/minimal_core.py",
+    "planning": "services/llm/prompts/sections/minimal_core.py",
+    "delegation": "services/llm/prompts/sections/minimal_core.py",
     "response_format": "services/llm/prompts/sections/response_format.py",
-    "proactive": "services/llm/prompts/sections/proactive.py",
+    "proactive": "services/llm/prompts/sections/minimal_core.py",
     "minimal_core": "services/llm/prompts/sections/minimal_core.py",
+    "music": "services/llm/prompts/sections/music.py",
 }
 
 
@@ -312,7 +316,7 @@ NOVVIOLA_VERIFY_COMMANDS: dict[str, str] = {
         "| tail -10 | python -m json.tool"
     ),
     "model_limit": (
-        "python .claude/skills/step-log-analysis/scripts/analyze.py --days 1"
+        "agent-xray analyze logs/structured/ --format generic --json"
     ),
     "memory_overload": (
         'grep "context_usage_pct" logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl '

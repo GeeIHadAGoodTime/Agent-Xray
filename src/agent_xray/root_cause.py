@@ -102,6 +102,11 @@ ROOT_CAUSES = {
         "description": "The most likely remaining issue is misleading or incomplete instructions.",
         "fix_hint": "Inspect prompt guidance around the failure step.",
     },
+    "unclassified": {
+        "label": "Unclassified",
+        "description": "No specific root cause identified from available evidence.",
+        "fix_hint": "Manual investigation recommended — inspect the task surface and reasoning chain.",
+    },
     "model_limit": {
         "label": "Model Limit",
         "description": "The task may exceed the model's current planning or perception ability.",
@@ -975,8 +980,20 @@ def classify_task(
                 evidence=evidence,
             )
 
+    # Check if there's genuine prompt-bug evidence before falling back
     _enrich_prompt_bug(result, task, analysis)
-    result.evidence.append("fallback classification after excluding stronger operational causes")
+    if result.prompt_section is not None:
+        # Genuine prompt bug detected with specific section attribution
+        result.evidence.append("prompt-section attribution identified specific prompt issue")
+        result.confidence_score = _score_confidence("low", result.evidence)
+        result.confidence = _confidence_label_from_score(result.confidence_score)
+        return result
+
+    # No specific root cause identified — classify as unclassified
+    result.root_cause = "unclassified"
+    result.evidence.append(
+        "No specific root cause identified — manual investigation recommended"
+    )
     if task.outcome is None:
         result.evidence.append(
             "no outcome record — classification confidence further reduced"

@@ -23,6 +23,23 @@ class CompletenessWarning:
     fix_hint: str
 
 
+DIMENSION_DESCRIPTIONS = {
+    "outcome_records": "Task outcome with status and final_answer",
+    "tool_schemas": "Tool schema definitions for input/output validation",
+    "model_name": "Model name and parameters",
+    "cache_tokens": "Cache read/creation token counts for cost analysis",
+    "final_answer": "Final answer text for outcome verification",
+    "system_prompt": "System prompt content",
+    "rejected_tools": "Rejected tools data for policy analysis",
+    "approval_path": "Approval path for risk classification",
+    "conversation_history": "Prior conversation summary for multi-turn context",
+    "step_durations": "Step timestamps for duration analysis",
+    "system_context": "System context components (frustration, user model, etc.)",
+    "llm_reasoning": "Agent reasoning/decision text",
+    "step_data_loss": "Step count consistency (outcome vs actual steps)",
+}
+
+
 @dataclass(slots=True)
 class CompletenessReport:
     """Full completeness assessment for a set of tasks."""
@@ -30,6 +47,7 @@ class CompletenessReport:
     warnings: list[CompletenessWarning] = field(default_factory=list)
     dimensions_checked: int = 0
     dimensions_ok: int = 0
+    all_dimensions: list[str] = field(default_factory=list)
 
     @property
     def score(self) -> float:
@@ -46,20 +64,33 @@ class CompletenessReport:
         return any(w.severity == "critical" for w in self.warnings)
 
     def format_text(self) -> str:
-        if not self.warnings:
-            return f"Data completeness: {self.score_pct}% ({self.dimensions_ok}/{self.dimensions_checked} dimensions)"
         lines = [
             f"Data completeness: {self.score_pct}% ({self.dimensions_ok}/{self.dimensions_checked} dimensions)",
             "",
         ]
-        by_severity = {"critical": [], "high": [], "medium": [], "low": []}
-        for w in self.warnings:
-            by_severity.get(w.severity, by_severity["low"]).append(w)
-        for severity in ("critical", "high", "medium", "low"):
-            for w in by_severity[severity]:
-                tag = severity.upper()
-                lines.append(f"  [{tag}] {w.dimension}: {w.message}")
-                lines.append(f"         Fix: {w.fix_hint}")
+        if self.all_dimensions:
+            failing_dims = {w.dimension for w in self.warnings}
+            warning_by_dim = {w.dimension: w for w in self.warnings}
+
+            for dim in self.all_dimensions:
+                desc = DIMENSION_DESCRIPTIONS.get(dim, dim)
+                if dim in failing_dims:
+                    w = warning_by_dim[dim]
+                    lines.append(f"  [FAIL] {dim:25s} {w.message}")
+                    lines.append(f"         {'':25s} Fix: {w.fix_hint}")
+                else:
+                    lines.append(f"  [PASS] {dim:25s} {desc}")
+        elif self.warnings:
+            # Fallback for manually constructed reports without all_dimensions
+            by_severity = {"critical": [], "high": [], "medium": [], "low": []}
+            for w in self.warnings:
+                by_severity.get(w.severity, by_severity["low"]).append(w)
+            for severity in ("critical", "high", "medium", "low"):
+                for w in by_severity[severity]:
+                    tag = severity.upper()
+                    lines.append(f"  [{tag}] {w.dimension}: {w.message}")
+                    lines.append(f"         Fix: {w.fix_hint}")
+
         return "\n".join(lines)
 
 
@@ -75,9 +106,11 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
     warnings: list[CompletenessWarning] = []
     total_dims = 0
     ok_dims = 0
+    all_dimensions: list[str] = []
 
     # 1. Outcome records
     total_dims += 1
+    all_dimensions.append("outcome_records")
     tasks_with_outcome = sum(1 for t in tasks if t.outcome is not None)
     outcome_pct = tasks_with_outcome / len(tasks) * 100
     if outcome_pct < 50:
@@ -94,6 +127,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 2. Tool schemas
     total_dims += 1
+    all_dimensions.append("tool_schemas")
     has_tool_schemas = False
     for t in tasks:
         for step in t.steps[:3]:
@@ -116,6 +150,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 3. Model name
     total_dims += 1
+    all_dimensions.append("model_name")
     steps_with_model = 0
     steps_with_real_model = 0
     for t in tasks:
@@ -142,6 +177,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 4. Cache tokens
     total_dims += 1
+    all_dimensions.append("cache_tokens")
     has_cache_tokens = any(
         step.model and (step.model.cache_read_tokens is not None or step.model.cache_creation_tokens is not None)
         for t in tasks
@@ -169,6 +205,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 5. Final answer
     total_dims += 1
+    all_dimensions.append("final_answer")
     tasks_with_answer = sum(
         1 for t in tasks
         if t.outcome and t.outcome.final_answer and len(t.outcome.final_answer.strip()) > 0
@@ -191,6 +228,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 6. System prompt visibility
     total_dims += 1
+    all_dimensions.append("system_prompt")
     has_prompt = any(
         "system_prompt_text" in t.metadata
         for t in tasks
@@ -209,6 +247,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 7. Rejected tools usage
     total_dims += 1
+    all_dimensions.append("rejected_tools")
     has_rejected_data = any(
         step.tools and step.tools.rejected_tools
         for t in tasks
@@ -227,6 +266,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 8. Approval path
     total_dims += 1
+    all_dimensions.append("approval_path")
     has_approval = any(
         step.reasoning and step.reasoning.approval_path
         for t in tasks
@@ -245,6 +285,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 9. Conversation history
     total_dims += 1
+    all_dimensions.append("conversation_history")
     tasks_with_turns_no_summary = sum(
         1 for t in tasks
         if t.metadata.get("prior_conversation_turns", 0) > 0
@@ -264,6 +305,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 10. Temporal data (step durations)
     total_dims += 1
+    all_dimensions.append("step_durations")
     total_steps = sum(len(t.steps) for t in tasks)
     steps_with_duration = sum(
         1 for t in tasks
@@ -288,6 +330,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 11. System context components
     total_dims += 1
+    all_dimensions.append("system_context")
     has_system_context = any(
         "system_context_components" in t.metadata
         for t in tasks
@@ -307,6 +350,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 12. LLM reasoning trace
     total_dims += 1
+    all_dimensions.append("llm_reasoning")
     steps_with_reasoning = sum(
         1 for t in tasks
         for step in t.steps
@@ -330,6 +374,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
 
     # 13. Step count consistency (outcome.total_steps vs actual steps)
     total_dims += 1
+    all_dimensions.append("step_data_loss")
     ghost_tasks = sum(
         1 for t in tasks
         if t.outcome and getattr(t.outcome, "total_steps", None)
@@ -351,4 +396,5 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
         warnings=warnings,
         dimensions_checked=total_dims,
         dimensions_ok=ok_dims,
+        all_dimensions=all_dimensions,
     )

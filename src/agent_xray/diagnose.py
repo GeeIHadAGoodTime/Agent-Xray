@@ -100,6 +100,10 @@ FIX_TARGETS: dict[str, list[str]] = {
         "task expectation configuration (accept consultative answers)",
         "grading rules for consultative completions",
     ],
+    "unclassified": [
+        "task surface and reasoning chain (manual investigation)",
+        "step log analysis for unusual patterns",
+    ],
 }
 """Default investigation targets keyed by root cause for the built-in target resolver."""
 
@@ -132,6 +136,7 @@ SEVERITY_BY_ROOT_CAUSE = {
     "insufficient_sources": 2,
     "valid_alternative_path": 0,
     "consultative_success": 0,
+    "unclassified": 1,
 }
 
 
@@ -233,6 +238,7 @@ def _verify_command_for(root_cause: str, task_id: str) -> str:
         "insufficient_sources": f"agent-xray surface {task_id} | grep search",
         "valid_alternative_path": f"agent-xray surface {task_id} | grep tool_name",
         "consultative_success": f"agent-xray reasoning {task_id}",
+        "unclassified": f"agent-xray surface {task_id}",
     }
     return commands.get(root_cause, f"agent-xray reasoning {task_id}")
 

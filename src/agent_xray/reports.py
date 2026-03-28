@@ -1315,6 +1315,10 @@ def report_actions_markdown(
 
 
 def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> dict[str, Any]:
+    from .pricing import get_model_cost, load_pricing
+
+    pricing_data = load_pricing()
+
     total_tokens_in = 0
     total_tokens_out = 0
     total_cost = 0.0
@@ -1329,6 +1333,9 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
     by_day: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"tasks": 0, "steps": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
     )
+    # Track pricing coverage
+    priced_tasks = 0
+    unpriced_models: set[str] = set()
 
     for task in tasks:
         analysis = analyses[task.task_id]
@@ -1340,6 +1347,9 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
         total_tokens_out += task_tokens_out
         total_cost += task_cost
         total_steps += task_steps
+
+        if task_cost > 0:
+            priced_tasks += 1
 
         category = _task_category(task)
         day = task.day or "unknown"
@@ -1379,7 +1389,21 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
             bucket["steps"] += 1
             bucket["tokens_in"] += step.input_tokens or 0
             bucket["tokens_out"] += step.output_tokens or 0
-            bucket["cost_usd"] += float(step.cost_usd or 0.0)
+            # Use trace cost_usd if available, otherwise estimate from pricing
+            step_cost = float(step.cost_usd or 0.0)
+            if step_cost == 0.0 and step.model and step.model.model_name and (
+                step.input_tokens or step.output_tokens
+            ):
+                step_cost = get_model_cost(
+                    model_name=step.model.model_name,
+                    input_tokens=step.input_tokens or 0,
+                    output_tokens=step.output_tokens or 0,
+                    cached_tokens=step.model.cache_read_tokens or 0 if step.model else 0,
+                    pricing_data=pricing_data,
+                )
+                if step_cost == 0.0:
+                    unpriced_models.add(model)
+            bucket["cost_usd"] += step_cost
 
     task_rows.sort(key=lambda item: (-item["cost_usd"], item["task_id"]))
 
@@ -1408,6 +1432,12 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
             "avg_cost_per_task": round(total_cost / max(1, len(tasks)), 6),
             "avg_cost_per_step": round(total_cost / max(1, total_steps), 6),
         },
+        "pricing_coverage": {
+            "priced_tasks": priced_tasks,
+            "total_tasks": len(tasks),
+            "coverage_pct": round(priced_tasks * 100 / max(1, len(tasks))),
+            "unpriced_models": sorted(unpriced_models),
+        },
         "by_model": [_finalize(name, bucket) for name, bucket in sorted(by_model.items())],
         "by_category": [_finalize(name, bucket) for name, bucket in sorted(by_category.items())],
         "by_day": [_finalize(name, bucket) for name, bucket in sorted(by_day.items())],
@@ -1430,6 +1460,7 @@ def report_cost(
     """
     data = _cost_summary(tasks, analyses)
     summary = data["summary"]
+    coverage = data["pricing_coverage"]
     lines = ["COST ANALYSIS", "=" * 60, ""]
     lines.extend(
         [
@@ -1438,8 +1469,19 @@ def report_cost(
             f"  Total cost:       {_format_money(summary['cost_usd'])}",
             f"  Cost per task:    {_format_money(summary['avg_cost_per_task'])}",
             f"  Cost per step:    {_format_money(summary['avg_cost_per_step'])}",
+            f"  Pricing coverage: {coverage['priced_tasks']}/{coverage['total_tasks']}"
+            f" tasks ({coverage['coverage_pct']}%)",
         ]
     )
+    if coverage["unpriced_models"]:
+        models_str = ", ".join(coverage["unpriced_models"])
+        lines.append("")
+        lines.append(
+            f"  NOTE: Pricing unavailable for: {models_str}"
+        )
+        lines.append(
+            "        Run 'agent-xray pricing update' or provide --pricing <file>."
+        )
 
     def _append_group(title: str, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -1531,6 +1573,11 @@ def report_cost_markdown(
     """
     data = _cost_summary(tasks, analyses)
     summary = data["summary"]
+    coverage = data["pricing_coverage"]
+    coverage_line = (
+        f"{coverage['priced_tasks']}/{coverage['total_tasks']}"
+        f" tasks ({coverage['coverage_pct']}%)"
+    )
     parts = [
         "## Cost Analysis",
         "",
@@ -1542,9 +1589,17 @@ def report_cost_markdown(
                 ["Total cost", _format_money(summary["cost_usd"])],
                 ["Cost per task", _format_money(summary["avg_cost_per_task"])],
                 ["Cost per step", _format_money(summary["avg_cost_per_step"])],
+                ["Pricing coverage", coverage_line],
             ],
         ),
     ]
+    if coverage["unpriced_models"]:
+        models_str = ", ".join(f"`{m}`" for m in coverage["unpriced_models"])
+        parts.extend([
+            "",
+            f"> **Note:** Pricing unavailable for: {models_str}.",
+            "> Run `agent-xray pricing update` or provide `--pricing <file>`.",
+        ])
     for title, rows in (
         ("By Model", data["by_model"]),
         ("By Category", data["by_category"]),
@@ -2201,3 +2256,507 @@ def report_research_markdown(
             ),
         ]
     )
+
+
+# -- Timeline Report --------------------------------------------------------
+
+
+def _parse_timestamp_hour(ts: str | None) -> str | None:
+    """Extract 'YYYY-MM-DD HH' bucket from an ISO-8601 or epoch timestamp."""
+    if ts is None:
+        return None
+    # Try ISO-8601 first: 2026-03-26T12:03:30Z
+    if len(ts) >= 13 and "T" in ts:
+        try:
+            return ts[:13].replace("T", " ")
+        except (IndexError, ValueError):
+            pass
+    # Try numeric epoch
+    try:
+        from datetime import datetime, timezone
+        epoch = float(ts)
+        dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H")
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _bucket_key(ts_hour: str, bucket_minutes: int) -> str:
+    """Collapse an 'YYYY-MM-DD HH' into a wider bucket when needed."""
+    if bucket_minutes >= 60:
+        return ts_hour + ":00"
+    # Sub-hour buckets would need minute-level parsing; for the common case
+    # the caller already uses the full hour bucket.
+    return ts_hour + ":00"
+
+
+def _task_timestamp(task: AgentTask, analyses: dict[str, TaskAnalysis]) -> str | None:
+    """Best-effort timestamp for a task (outcome > last step > first step)."""
+    if task.outcome and task.outcome.timestamp:
+        return task.outcome.timestamp
+    steps = task.sorted_steps
+    if steps:
+        return steps[-1].timestamp or steps[0].timestamp
+    return None
+
+
+def _timeline_summary(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+    bucket_minutes: int = 60,
+) -> dict[str, Any]:
+    grade_map = {g.task_id: g for g in grades}
+    buckets: dict[str, list[tuple[AgentTask, GradeResult]]] = {}
+    for task in tasks:
+        ts = _task_timestamp(task, analyses)
+        hour = _parse_timestamp_hour(ts)
+        if hour is None:
+            hour = "unknown"
+        key = _bucket_key(hour, bucket_minutes) if hour != "unknown" else "unknown"
+        buckets.setdefault(key, []).append((task, grade_map[task.task_id]))
+
+    rows: list[dict[str, Any]] = []
+    for bucket in sorted(buckets):
+        entries = buckets[bucket]
+        dist = {label: 0 for label in GRADE_LABELS}
+        durations: list[float] = []
+        errors = 0
+        for task, grade in entries:
+            dist[grade.grade] = dist.get(grade.grade, 0) + 1
+            a = analyses.get(task.task_id)
+            if a:
+                if a.total_duration_ms > 0:
+                    durations.append(a.total_duration_ms / 1000.0)
+                if a.errors > 0:
+                    errors += 1
+        total = len(entries)
+        avg_dur = sum(durations) / len(durations) if durations else 0.0
+        err_rate = round(errors * 100 / total) if total else 0
+        rows.append({
+            "bucket": bucket,
+            "tasks": total,
+            **dist,
+            "avg_duration_s": round(avg_dur, 1),
+            "error_rate_pct": err_rate,
+        })
+    return {"buckets": rows, "bucket_minutes": bucket_minutes}
+
+
+def report_timeline(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+    bucket_minutes: int = 60,
+) -> str:
+    """Render a timeline report showing grade distribution over time buckets.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        bucket_minutes: Bucket granularity in minutes (default 60).
+
+    Returns:
+        A human-readable timeline report string.
+    """
+    data = _timeline_summary(tasks, grades, analyses, bucket_minutes)
+    lines = ["TIMELINE REPORT", "=" * 60, ""]
+    if not data["buckets"]:
+        lines.append("  No tasks with timestamps found.")
+        return "\n".join(lines)
+    table_rows = [
+        [
+            row["bucket"],
+            row["tasks"],
+            row["GOLDEN"],
+            row["GOOD"],
+            row["OK"],
+            row["WEAK"],
+            row["BROKEN"],
+            f"{row['avg_duration_s']:.1f}s",
+            f"{row['error_rate_pct']}%",
+        ]
+        for row in data["buckets"]
+    ]
+    lines.extend(
+        _text_table(
+            ["Hour", "Tasks", "GOLDEN", "GOOD", "OK", "WEAK", "BROKEN", "Avg Duration", "Err Rate"],
+            table_rows,
+        )
+    )
+    return "\n".join(lines)
+
+
+def report_timeline_data(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+    bucket_minutes: int = 60,
+) -> dict[str, Any]:
+    """Return structured timeline report data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        bucket_minutes: Bucket granularity in minutes (default 60).
+
+    Returns:
+        A dictionary with per-bucket grade and latency data.
+    """
+    return _timeline_summary(tasks, grades, analyses, bucket_minutes)
+
+
+def report_timeline_markdown(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    analyses: dict[str, TaskAnalysis],
+    bucket_minutes: int = 60,
+) -> str:
+    """Render timeline report as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        grades: Grade results aligned to ``tasks``.
+        analyses: Task analyses keyed by task id.
+        bucket_minutes: Bucket granularity in minutes (default 60).
+
+    Returns:
+        A Markdown timeline report.
+    """
+    data = _timeline_summary(tasks, grades, analyses, bucket_minutes)
+    rows = [
+        [
+            row["bucket"],
+            row["tasks"],
+            row["GOLDEN"],
+            row["GOOD"],
+            row["OK"],
+            row["WEAK"],
+            row["BROKEN"],
+            f"{row['avg_duration_s']:.1f}s",
+            f"{row['error_rate_pct']}%",
+        ]
+        for row in data["buckets"]
+    ]
+    return "\n".join([
+        "## Timeline Report",
+        "",
+        _markdown_table(
+            ["Hour", "Tasks", "GOLDEN", "GOOD", "OK", "WEAK", "BROKEN", "Avg Duration", "Err Rate"],
+            rows,
+        ),
+    ])
+
+
+# -- Spin Analysis Report ---------------------------------------------------
+
+
+def _detect_spin_sequences(task: AgentTask) -> list[dict[str, Any]]:
+    """Detect consecutive-repeat sequences of 3+ steps on the same tool."""
+    steps = task.sorted_steps
+    sequences: list[dict[str, Any]] = []
+    if len(steps) < 3:
+        return sequences
+
+    i = 0
+    while i < len(steps):
+        tool = steps[i].tool_name
+        j = i + 1
+        while j < len(steps) and steps[j].tool_name == tool:
+            j += 1
+        run_len = j - i
+        if run_len >= 3:
+            # Collect page URLs and error info from the sequence
+            page_urls: list[str] = []
+            has_not_found = False
+            has_dialog_or_nav = False
+            for k in range(i, j):
+                s = steps[k]
+                if s.browser and s.browser.page_url:
+                    page_urls.append(s.browser.page_url)
+                result_text = f"{s.tool_result or ''} {s.error or ''}".lower()
+                if "not found" in result_text:
+                    has_not_found = True
+                if any(marker in result_text for marker in (
+                    "navigation_detected", "dialog", "popup", "modal"
+                )):
+                    has_dialog_or_nav = True
+
+            # Classify pattern
+            if tool == "web_search":
+                pattern = "search_retry"
+            elif has_not_found:
+                pattern = "ref_not_found_loop"
+            elif has_dialog_or_nav:
+                pattern = "stale_ref_after_dialog"
+            else:
+                pattern = "generic"
+
+            sequences.append({
+                "task_id": task.task_id,
+                "tool": tool,
+                "start_step": steps[i].step,
+                "end_step": steps[j - 1].step,
+                "repeats": run_len,
+                "page_urls": list(dict.fromkeys(page_urls)),
+                "pattern": pattern,
+                "has_not_found": has_not_found,
+                "has_dialog_or_nav": has_dialog_or_nav,
+            })
+        i = j
+    return sequences
+
+
+def _extract_site_from_url(url: str) -> str:
+    """Extract a readable site label from a URL."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc or ""
+        if host.startswith("www."):
+            host = host[4:]
+        return host or "unknown"
+    except Exception:
+        return "unknown"
+
+
+PATTERN_DESCRIPTIONS = {
+    "stale_ref_after_dialog": (
+        "Stale ref after dialog",
+        "Agent clicks @eN, page shows dialog, agent clicks same @eN again",
+        "Auto-snapshot after navigation_detected or dialog change",
+    ),
+    "ref_not_found_loop": (
+        "Ref not found loop",
+        "Agent gets \"Ref @eN not found\" error, retries same ref",
+        "Spin detector should trigger after 2 consecutive ref failures",
+    ),
+    "search_retry": (
+        "Search retry loop",
+        "Agent retries web_search with same/similar query",
+        "Detect duplicate search queries",
+    ),
+    "generic": (
+        "Generic repeat loop",
+        "Agent repeats the same tool call without progress",
+        "Review tool output for actionable error signals",
+    ),
+}
+
+
+def _spins_summary(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    all_sequences: list[dict[str, Any]] = []
+    tasks_with_spins = 0
+    for task in tasks:
+        seqs = _detect_spin_sequences(task)
+        if seqs:
+            tasks_with_spins += 1
+            all_sequences.extend(seqs)
+
+    # By tool
+    tool_counts: dict[str, int] = {}
+    for seq in all_sequences:
+        tool_counts[seq["tool"]] = tool_counts.get(seq["tool"], 0) + 1
+    by_tool = sorted(tool_counts.items(), key=lambda x: -x[1])
+
+    # By site
+    site_data: dict[str, list[int]] = {}  # site -> list of repeat counts
+    for seq in all_sequences:
+        urls = seq.get("page_urls", [])
+        site = "unknown"
+        if urls:
+            site = _extract_site_from_url(urls[0])
+        site_data.setdefault(site, []).append(seq["repeats"])
+    by_site = sorted(
+        [
+            {
+                "site": site,
+                "sequences": len(repeats),
+                "avg_repeats": round(sum(repeats) / len(repeats), 1),
+            }
+            for site, repeats in site_data.items()
+        ],
+        key=lambda x: -x["sequences"],
+    )
+
+    # By pattern
+    pattern_counts: dict[str, list[dict[str, Any]]] = {}
+    for seq in all_sequences:
+        pattern_counts.setdefault(seq["pattern"], []).append(seq)
+    by_pattern = sorted(
+        [
+            {
+                "pattern": pat,
+                "count": len(seqs),
+                "example_task": seqs[0]["task_id"] if seqs else "",
+                "example_steps": f"{seqs[0]['start_step']}-{seqs[0]['end_step']}" if seqs else "",
+            }
+            for pat, seqs in pattern_counts.items()
+        ],
+        key=lambda x: -x["count"],
+    )
+
+    # Worst sequences
+    worst = sorted(all_sequences, key=lambda x: -x["repeats"])[:10]
+
+    return {
+        "tasks_with_spins": tasks_with_spins,
+        "total_sequences": len(all_sequences),
+        "by_tool": [{"tool": t, "count": c} for t, c in by_tool],
+        "by_site": by_site,
+        "by_pattern": by_pattern,
+        "worst_sequences": [
+            {
+                "task_id": s["task_id"],
+                "tool": s["tool"],
+                "repeats": s["repeats"],
+                "page_url": s["page_urls"][0] if s.get("page_urls") else "",
+                "start_step": s["start_step"],
+                "end_step": s["end_step"],
+                "pattern": s["pattern"],
+            }
+            for s in worst
+        ],
+    }
+
+
+def report_spins(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render a spin deep-dive report as terminal text.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A human-readable spin analysis report string.
+    """
+    data = _spins_summary(tasks, analyses)
+    lines = ["SPIN ANALYSIS", "=" * 60, ""]
+
+    if data["total_sequences"] == 0:
+        lines.append("  No spin sequences detected.")
+        return "\n".join(lines)
+
+    lines.append(
+        f"{data['tasks_with_spins']} tasks with spin detected "
+        f"({data['total_sequences']} spin sequences total)"
+    )
+
+    # By tool
+    total_seq = max(data["total_sequences"], 1)
+    lines.extend(["", "BY TOOL:"])
+    for entry in data["by_tool"]:
+        pct = round(entry["count"] * 100 / total_seq)
+        lines.append(f"  {entry['tool']:<25s} {entry['count']:3d} sequences  ({pct}%)")
+
+    # By site
+    lines.extend(["", "BY SITE:"])
+    for entry in data["by_site"]:
+        lines.append(
+            f"  {entry['site']:<25s} {entry['sequences']:3d} sequences  "
+            f"(avg {entry['avg_repeats']:.1f} repeats)"
+        )
+
+    # Spin patterns
+    lines.extend(["", "SPIN PATTERNS:"])
+    for idx, entry in enumerate(data["by_pattern"], 1):
+        pat = entry["pattern"]
+        desc = PATTERN_DESCRIPTIONS.get(pat, (pat, "", ""))
+        lines.append(f"  #{idx}: {desc[0]} ({entry['count']} occurrences)")
+        if desc[1]:
+            lines.append(f"     {desc[1]}")
+        if desc[2]:
+            lines.append(f"     -> FIX: {desc[2]}")
+        if entry.get("example_task"):
+            lines.append(f"     Example: task {entry['example_task']} step {entry['example_steps']}")
+        lines.append("")
+
+    # Worst sequences
+    lines.append("WORST SPIN SEQUENCES:")
+    for entry in data["worst_sequences"]:
+        url = entry.get("page_url", "")
+        lines.append(
+            f"  {entry['task_id'][:16]:<16s}  {entry['tool']:<25s}  "
+            f"{entry['repeats']:3d} repeats  {url}"
+        )
+
+    return "\n".join(lines)
+
+
+def report_spins_data(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> dict[str, Any]:
+    """Return structured spin analysis data.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A dictionary with by-tool, by-site, by-pattern, and worst-sequence data.
+    """
+    return _spins_summary(tasks, analyses)
+
+
+def report_spins_markdown(
+    tasks: list[AgentTask],
+    analyses: dict[str, TaskAnalysis],
+) -> str:
+    """Render spin analysis as GitHub-flavored Markdown.
+
+    Args:
+        tasks: Loaded tasks included in the report window.
+        analyses: Task analyses keyed by task id.
+
+    Returns:
+        A Markdown spin analysis report.
+    """
+    data = _spins_summary(tasks, analyses)
+    parts = [
+        "## Spin Analysis",
+        "",
+        f"{data['tasks_with_spins']} tasks with spin detected "
+        f"({data['total_sequences']} spin sequences total)",
+        "",
+    ]
+    if data["by_tool"]:
+        total_seq = max(data["total_sequences"], 1)
+        tool_rows = [
+            [e["tool"], e["count"], f"{round(e['count'] * 100 / total_seq)}%"]
+            for e in data["by_tool"]
+        ]
+        parts.append("### By Tool")
+        parts.append("")
+        parts.append(_markdown_table(["Tool", "Sequences", "Pct"], tool_rows))
+        parts.append("")
+
+    if data["by_site"]:
+        site_rows = [
+            [e["site"], e["sequences"], f"{e['avg_repeats']:.1f}"]
+            for e in data["by_site"]
+        ]
+        parts.append("### By Site")
+        parts.append("")
+        parts.append(_markdown_table(["Site", "Sequences", "Avg Repeats"], site_rows))
+        parts.append("")
+
+    if data["worst_sequences"]:
+        worst_rows = [
+            [e["task_id"], e["tool"], e["repeats"], e.get("page_url", "")]
+            for e in data["worst_sequences"]
+        ]
+        parts.append("### Worst Sequences")
+        parts.append("")
+        parts.append(_markdown_table(["Task", "Tool", "Repeats", "URL"], worst_rows))
+
+    return "\n".join(parts)

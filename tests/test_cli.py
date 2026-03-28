@@ -116,7 +116,12 @@ def test_cmd_surface_task(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> 
 def test_cmd_tree_output(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
     result = cmd_tree(Namespace(log_dir_opt=tmp_trace_dir, days=None, format="auto", json=True))
     payload = json.loads(capsys.readouterr().out)
-    task_ids = {task_id for task_ids in payload["20260326"].values() for task_id in task_ids}
+    # Enriched tree returns list of dicts per site; extract task_ids from them
+    task_ids = {
+        entry["task_id"] if isinstance(entry, dict) else entry
+        for entries in payload["20260326"].values()
+        for entry in entries
+    }
     assert result == 0
     assert "20260326" in payload
     assert "golden-task" in task_ids
@@ -262,8 +267,8 @@ def test_cmd_analyze_missing_dir_shows_quickstart_hint(
     )
     captured = capsys.readouterr()
     assert result == 1
-    assert "Directory not found:" in captured.out
-    assert "Run agent-xray quickstart for a demo." in captured.out
+    assert "Path not found:" in captured.out
+    assert "AGENT_XRAY_LOG_DIR" in captured.out
 
 
 def test_cmd_quickstart_runs_and_creates_demo(
