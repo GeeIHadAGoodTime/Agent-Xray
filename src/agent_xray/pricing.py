@@ -56,15 +56,15 @@ def _resolve_model(name: str, data: dict[str, Any]) -> dict[str, float] | None:
 
     # 3. Prefix match: the name in the trace may have a date suffix
     #    (e.g., "gpt-4.1-nano-2025-04-14" should match "gpt-4.1-nano")
+    #    Only allow trace name to be longer than or equal to the pricing key
+    #    (not shorter — "gpt-5" must NOT match "gpt-5-mini").
     #    Prefer the longest matching key to avoid "gpt-4.1" matching before "gpt-4.1-nano".
     best_key: str | None = None
     best_len = 0
     for model_key in models:
-        if name.startswith(model_key) or model_key.startswith(name):
-            match_len = min(len(name), len(model_key))
-            if match_len > best_len:
-                best_len = match_len
-                best_key = model_key
+        if name.startswith(model_key) and len(model_key) > best_len:
+            best_len = len(model_key)
+            best_key = model_key
     if best_key is not None:
         return models[best_key]
 
