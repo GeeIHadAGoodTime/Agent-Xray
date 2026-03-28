@@ -8,7 +8,7 @@ from typing import Any
 from .analyzer import TaskAnalysis, classify_error
 from .diagnose import build_fix_plan
 from .grader import GradeResult
-from .root_cause import ROOT_CAUSES, classify_failures
+from .root_cause import ROOT_CAUSES, ClassificationConfig, classify_failures
 from .schema import AgentTask
 
 GRADE_LABELS = ["GOLDEN", "GOOD", "OK", "WEAK", "BROKEN"]
@@ -1658,8 +1658,12 @@ def report_cost_markdown(
 # Ã¢â€â‚¬Ã¢â€â‚¬ Fix Plan Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 
-def _fix_plan_summary(tasks: list[AgentTask], grades: list[GradeResult]) -> dict[str, Any]:
-    failures = classify_failures(tasks, grades)
+def _fix_plan_summary(
+    tasks: list[AgentTask],
+    grades: list[GradeResult],
+    classification_config: ClassificationConfig | None = None,
+) -> dict[str, Any]:
+    failures = classify_failures(tasks, grades, config=classification_config)
     plan = build_fix_plan(failures)
     failures_by_cause: dict[str, list[Any]] = defaultdict(list)
     for failure in failures:
@@ -1695,6 +1699,7 @@ def report_fixes(
     tasks: list[AgentTask],
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
+    classification_config: ClassificationConfig | None = None,
 ) -> str:
     """Render the prioritized fix plan as terminal text.
 
@@ -1707,7 +1712,7 @@ def report_fixes(
         A text report describing the prioritized fix plan.
     """
     _ = analyses
-    data = _fix_plan_summary(tasks, grades)
+    data = _fix_plan_summary(tasks, grades, classification_config)
     lines = ["FIX PLAN REPORT", "=" * 60, ""]
     if not data["fixes"]:
         lines.append("  No BROKEN or WEAK tasks found. Nothing to diagnose.")
@@ -1733,6 +1738,7 @@ def report_fixes_data(
     tasks: list[AgentTask],
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
+    classification_config: ClassificationConfig | None = None,
 ) -> dict[str, Any]:
     """Return structured fix-plan data.
 
@@ -1745,13 +1751,14 @@ def report_fixes_data(
         A dictionary containing prioritized root-cause fixes.
     """
     _ = analyses
-    return _fix_plan_summary(tasks, grades)
+    return _fix_plan_summary(tasks, grades, classification_config)
 
 
 def report_fixes_markdown(
     tasks: list[AgentTask],
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
+    classification_config: ClassificationConfig | None = None,
 ) -> str:
     """Render the prioritized fix plan as GitHub-flavored Markdown.
 
@@ -1764,7 +1771,7 @@ def report_fixes_markdown(
         A Markdown report describing the prioritized fix plan.
     """
     _ = analyses
-    data = _fix_plan_summary(tasks, grades)
+    data = _fix_plan_summary(tasks, grades, classification_config)
     if not data["fixes"]:
         return "## Fix Plan Report\n\nNo BROKEN or WEAK tasks found. Nothing to diagnose."
     summary_rows = [

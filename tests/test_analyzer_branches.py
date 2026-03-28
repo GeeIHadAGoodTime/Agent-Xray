@@ -6,6 +6,7 @@ from agent_xray.analyzer import (
     _max_consecutive_repeat,
     _unique_url_paths,
     analyze_task,
+    classify_soft_error,
     classify_error,
     extract_site_from_urlish,
     extract_site_name,
@@ -197,3 +198,67 @@ def test_analyze_task_error_rate_tiers_are_exclusive() -> None:
     assert medium.error_rate_is_high is False
     assert high.error_rate_is_high is True
     assert high.error_rate_is_medium is False
+
+
+def test_soft_error_detected_not_on_page() -> None:
+    assert classify_soft_error("NOT ON A PAYMENT PAGE") == "soft_not_on_page"
+
+
+def test_soft_error_none_for_normal_result() -> None:
+    assert classify_soft_error("Success") == ""
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Element not found for selector .checkout", "soft_element_missing"),
+        ("Request timed out after 30s", "soft_timeout"),
+        ("Access denied by upstream", "soft_access_denied"),
+        ("429 too many requests", "soft_rate_limit"),
+        ("Failed to submit form", "soft_failure"),
+    ],
+)
+def test_classify_soft_error_patterns(message: str, expected: str) -> None:
+    assert classify_soft_error(message) == expected
+
+
+def test_soft_errors_counted_in_metrics() -> None:
+    task = _task(
+        _step(1, "browser_fill_ref", tool_result="Element not found"),
+        _step(2, "browser_click", tool_result="429 too many requests"),
+        _step(3, "browser_click", tool_result="Success"),
+    )
+    analysis = analyze_task(task)
+    assert analysis.soft_errors == 2
+    assert analysis.soft_error_kinds == {
+        "soft_element_missing": 1,
+        "soft_rate_limit": 1,
+    }
+    assert analysis.metrics()["soft_errors"] == 2
+    assert analysis.metrics()["soft_error_kinds"] == {
+        "soft_element_missing": 1,
+        "soft_rate_limit": 1,
+    }
+
+
+def test_soft_errors_not_double_counted() -> None:
+    task = _task(
+        _step(
+            1,
+            "browser_fill_ref",
+            tool_result="Element not found",
+            error="timeout waiting for element",
+        )
+    )
+    analysis = analyze_task(task)
+    assert analysis.soft_errors == 0
+    assert analysis.soft_error_kinds == {}
+
+
+def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
+    task = _task(_step(1, "browser_fill_ref", tool_result="Element not found"))
+    analysis = analyze_task(task)
+    restored = type(analysis).from_dict(analysis.to_dict())
+    assert restored.soft_errors == 1
+    assert restored.soft_error_kinds == {"soft_element_missing": 1}
+    assert restored.task.task_id == analysis.task.task_id

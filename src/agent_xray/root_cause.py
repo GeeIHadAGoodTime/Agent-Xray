@@ -486,6 +486,9 @@ class ClassificationConfig:
     low_source_diversity_threshold: int = 2
     memory_overload_usage_pct: float = 85.0
     memory_overload_short_output_chars: int = 80
+    # Tool names whose rejection is intentional policy, not a mismatch.
+    # Rejections of these tools are excluded from tool_rejection_mismatch.
+    expected_rejections: frozenset[str] = frozenset()
 
 
 _DEFAULT_CONFIG = ClassificationConfig()
@@ -851,20 +854,23 @@ def _classify_tool_rejection_mismatch(
 ) -> ClassificationDecision | None:
     """Classify tasks where rejected tools were likely needed for success."""
 
-    del config
     if not analysis.rejected_tool_count:
         return None
-    # Collect all rejected tool names across the task
+    # Collect all rejected tool names across the task, excluding expected ones
     rejected_names: set[str] = set()
     for step in task.steps:
         if step.tools and step.tools.rejected_tools:
-            rejected_names.update(step.tools.rejected_tools)
+            rejected_names.update(
+                t for t in step.tools.rejected_tools
+                if t not in config.expected_rejections
+            )
     if not rejected_names:
         return None
-    # Check if rejection is significant (rejected in >50% of steps)
+    # Count steps with *surprising* rejections (excluding expected)
     steps_with_rejection = sum(
         1 for step in task.steps
         if step.tools and step.tools.rejected_tools
+        and any(t not in config.expected_rejections for t in step.tools.rejected_tools)
     )
     rejection_rate = steps_with_rejection / max(1, len(task.steps))
     if rejection_rate < 0.3:
@@ -873,6 +879,8 @@ def _classify_tool_rejection_mismatch(
         f"tools rejected in {steps_with_rejection}/{len(task.steps)} steps ({rejection_rate:.0%})",
         f"rejected tools: {', '.join(sorted(rejected_names))}",
     ]
+    if config.expected_rejections:
+        evidence.append(f"expected rejections excluded: {', '.join(sorted(config.expected_rejections))}")
     return ("tool_rejection_mismatch", "medium", evidence)
 
 
@@ -953,10 +961,10 @@ def classify_task(
     for classifier in (
         _classify_routing_bug,
         _classify_approval_block,
-        _classify_tool_rejection_mismatch,
+        _classify_spin,
         _classify_delegation_failure,
         _classify_test_failure_loop,
-        _classify_spin,
+        _classify_tool_rejection_mismatch,
         _classify_error_dominance,
         _classify_insufficient_sources,
         _classify_valid_alternative_path,
@@ -1061,6 +1069,7 @@ def _enrich_prompt_bug(
 def classify_failures(
     tasks: list[AgentTask],
     grades: list[GradeResult],
+    config: ClassificationConfig | None = None,
 ) -> list[RootCauseResult]:
     """Classify every BROKEN or WEAK task in a batch."""
 
@@ -1069,7 +1078,7 @@ def classify_failures(
     for task in tasks:
         grade = grade_by_task[task.task_id]
         # classify_task handles both BROKEN/WEAK grades AND failure outcomes
-        classification = classify_task(task, grade)
+        classification = classify_task(task, grade, config=config)
         if classification is not None:
             failures.append(classification)
     return failures

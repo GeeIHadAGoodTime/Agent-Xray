@@ -27,6 +27,7 @@ When a run goes sideways, most tracing tools tell you what happened. `agent-xray
 | Framework-agnostic | Yes |
 | Rule-based grading | Yes |
 | Root-cause heuristics | Yes |
+| Enforce mode | Yes |
 | Golden replay | Yes |
 | Optional TUI | Yes |
 
@@ -45,6 +46,7 @@ When a run goes sideways, most tracing tools tell you what happened. `agent-xray
 | Decision surface replay | Yes | No | No | No | No | No |
 | Pluggable signal detection | Yes | No | No | No | Custom evals | No |
 | Root-cause classification | Yes | No | No | No | No | No |
+| Enforce mode (agent referee) | Yes | No | No | No | No | No |
 | Golden fixture regression | Yes | Dataset comparison | No | No | Dataset comparison | No |
 | Interactive TUI | Yes | Web UI | Web UI | Web UI | Web UI | Web UI |
 | Model A/B comparison | Yes | Experiments | No | No | Experiments | No |
@@ -259,23 +261,162 @@ Rule files support both legacy metric syntax and the newer field/operator form:
 }
 ```
 
+## Enforce Mode
+
+Enforce mode turns `agent-xray` into an **advisor** for AI agents making code changes. It enforces one-change-at-a-time discipline, runs A/B testing against baseline, detects gaming patterns, and recommends commit-or-revert on every iteration — with evidence.
+
+### Why enforce mode?
+
+AI agents left to fix failing tests will often game them: weaken assertions, insert hardcoded values, swallow exceptions, or add special-case branches. Enforce mode catches this automatically and reverts bad changes before they accumulate.
+
+### Quick start
+
+```bash
+# Initialize a session (captures baseline test results)
+agent-xray enforce init --test-cmd "pytest tests/ -q"
+
+# Agent makes a change, then checks in
+agent-xray enforce check
+
+# Adversarial audit of all iterations so far
+agent-xray enforce challenge
+
+# View current session status
+agent-xray enforce status
+
+# Generate a full report (text, json, or markdown)
+agent-xray enforce report --format markdown
+
+# Reset and start over
+agent-xray enforce reset
+```
+
+### The enforce loop
+
+Each `enforce check` iteration:
+
+1. Captures the git diff and parses it into `DiffHunk`s
+2. Runs the test suite and compares results against baseline
+3. Detects gaming signals (8 heuristic detectors)
+4. Classifies change quality (productive, refactor, test-only, mixed, suspicious)
+5. Flags changes that exceed size limits (max files and diff lines per change)
+6. Checks project-specific rules if a rules file is configured
+7. Surfaces likely root causes for any regressions with evidence
+8. Reports a decision recommendation: **COMMIT** (clear improvement), **REVERT** (regression or gaming detected), or **REJECTED** (size/rule violation)
+
+The decision is a recommendation with evidence. The calling agent or user decides whether to act on it.
+
+### Gaming detection
+
+Eight heuristic detectors catch common gaming patterns:
+
+| Detector | What it catches |
+| --- | --- |
+| `detect_test_file_modification` | Agent edits test files to make them pass |
+| `detect_hardcoded_values` | Hardcoded return values that bypass real logic |
+| `detect_special_case_branching` | `if test_mode` or `if x == expected_value` branches |
+| `detect_mock_insertion` | Mock objects added to bypass real dependencies |
+| `detect_assertion_weakening` | Replacing strict assertions with permissive ones |
+| `detect_exception_swallowing` | Broad `except: pass` blocks hiding failures |
+| `detect_early_return` | Short-circuit returns before real logic executes |
+| `detect_import_removal` | Removing imports to silence import errors |
+
+Combined confidence: **VALID** (<0.3), **SUSPICIOUS** (0.3-0.6), **GAMING** (>0.6). A GAMING verdict recommends revert with specific evidence of which detectors fired.
+
+### Adversarial challenges
+
+`enforce challenge` runs 9 cross-iteration checks:
+
+- **Flip-flop detection**: same file toggling between states
+- **Dependency risk**: changes concentrated in high-coupling files
+- **Coverage gap**: improvements that don't touch test files
+- **Cumulative gaming**: gaming signals aggregated across the full diff
+- **Assertion erosion**: weakening assertions across iterations
+- **Diminishing returns**: progress plateaus (3+ trailing zero-improvement iterations)
+- **Persistent failures**: same tests keep failing across iterations
+- **Scope creep**: later iterations more wasteful than earlier ones
+
+### Hypothesis tracking
+
+```bash
+# Plan a hypothesis before making changes
+agent-xray enforce plan --hypothesis "timeout is caused by missing await"
+
+# Guard: verify the change matches the hypothesis
+agent-xray enforce guard
+```
+
+With `--require-hypothesis`, every `enforce check` requires a registered hypothesis. After the change, agent-xray compares predicted test improvements against actual results and scores prediction accuracy.
+
+### Auto mode
+
+```bash
+# Run the full loop with an AI agent command
+agent-xray enforce auto --agent-cmd "codex exec '{hypothesis}'" --max-iter 20
+```
+
+Template variables available in `--agent-cmd`: `{failing_tests}`, `{fail_count}`, `{pass_count}`, `{total_count}`, `{iteration}`, `{last_error}`, `{hypothesis}`.
+
+### Session grading
+
+Every session gets an A-F grade based on:
+- Reverted iterations (-5 each)
+- Gaming detections (-15 each)
+- Wasted iterations with no improvement (-3 each)
+- Good commits (+2 each)
+- Net regression from baseline (-10)
+- All tests passing at end (+10)
+
+### Library usage
+
+```python
+from agent_xray import (
+    EnforceConfig, enforce_init, enforce_check, enforce_challenge,
+    build_enforce_report, format_enforce_text
+)
+
+config = EnforceConfig(
+    test_command="pytest tests/ -q",
+    max_files_per_change=5,
+    max_diff_lines=200,
+)
+
+session = enforce_init(config)
+# ... agent makes changes ...
+result = enforce_check(session)
+print(result.decision)  # COMMIT, REVERT, or REJECTED (recommendation with evidence)
+
+report = build_enforce_report(session)
+print(format_enforce_text(report))
+```
+
 ## Root Cause Classification
 
-When a task grades poorly, `agent-xray` classifies the most likely failure mode:
+When a task grades poorly, `agent-xray` classifies the most likely failure mode using a 19-category cascade classifier:
 
 | Root Cause | What it means |
 | --- | --- |
 | `routing_bug` | The task never got the right tool exposure |
 | `approval_block` | Policy or permission gates blocked progress |
+| `delegation_failure` | Multi-agent workflow failed at delegation boundary |
+| `test_failure_loop` | Agent kept rerunning failing tests without changing approach |
 | `spin` | The same action repeated without forward movement |
+| `environment_drift` | The target environment changed underneath the agent |
+| `tool_bug` | A tool call failed or returned unusable output |
+| `insufficient_sources` | Research task answered before gathering enough evidence |
+| `valid_alternative_path` | Goal achieved through an unexpected but valid path |
+| `consultative_success` | Well-reasoned consultative answer without browser interaction |
 | `tool_selection_bug` | The right tool existed, but the model chose poorly |
 | `early_abort` | The run ended before enough work was attempted |
 | `stuck_loop` | The run kept acting without meaningful state progress |
-| `tool_bug` | A tool call failed or returned unusable output |
-| `environment_drift` | The target environment changed underneath the agent |
+| `memory_overload` | Context pressure degraded the agent's later reasoning |
 | `reasoning_bug` | Strategy was wrong even with adequate tools |
+| `tool_rejection_mismatch` | A needed tool was actively rejected by policy |
 | `prompt_bug` | Instructions likely nudged the model toward failure |
 | `model_limit` | The task appears to exceed model capability |
+| `unclassified` | No specific root cause identified from available evidence |
+
+The classifier also detects **soft errors** — logical failures in tool results (e.g., "NOT ON A PAYMENT PAGE") even when the tool reported success.
 
 ## Library Usage
 
@@ -305,17 +446,20 @@ if grade.grade in {"WEAK", "BROKEN"}:
 
 ```text
 JSONL / framework trace files
-  -> adapters/         normalize source formats into AgentStep
-  -> schema.py         AgentStep / AgentTask / typed contexts
-  -> signals/          detector packs for commerce, coding, and research
-  -> analyzer.py       task metrics, cost tracking, and site extraction
-  -> grader.py         configurable JSON rules
-  -> surface.py        decision-surface replay, reasoning chain, tree, diff
-  -> root_cause.py     failure classification
-  -> capture.py        sanitized golden fixtures
-  -> replay.py         fixture-vs-run comparison
-  -> flywheel.py       end-to-end quality loop and baseline comparison
-  -> comparison.py     model-vs-model divergence analysis
+  -> adapters/            normalize source formats into AgentStep
+  -> schema.py            AgentStep / AgentTask / typed contexts
+  -> signals/             detector packs for commerce, coding, and research
+  -> analyzer.py          task metrics, cost tracking, soft-error detection
+  -> grader.py            configurable JSON rules
+  -> surface.py           decision-surface replay, reasoning chain, tree, diff
+  -> root_cause.py        19-category failure classifier with cascade ordering
+  -> capture.py           sanitized golden fixtures
+  -> replay.py            fixture-vs-run comparison
+  -> flywheel.py          end-to-end quality loop and baseline comparison
+  -> comparison.py        model-vs-model divergence analysis
+  -> enforce.py           controlled experiment loop (session, check, auto)
+  -> enforce_audit.py     gaming detection and adversarial challenges
+  -> enforce_report.py    enforce session reports (text, JSON, markdown)
 ```
 
 ## Badge Placeholders

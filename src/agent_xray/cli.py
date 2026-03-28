@@ -67,7 +67,7 @@ from .reports import (
     report_tools_data,
     report_tools_markdown,
 )
-from .root_cause import classify_failures
+from .root_cause import ClassificationConfig, classify_failures
 from .schema import AgentTask
 from .surface import (
     diff_tasks,
@@ -206,6 +206,29 @@ def _grade_distribution(grades: list[Any]) -> dict[str, int]:
     return {label: counts.get(label, 0) for label in GRADE_LABELS}
 
 
+def _classification_config_from_args(
+    args: argparse.Namespace | CliSettings | None,
+) -> ClassificationConfig | None:
+    expected_rejections = getattr(args, "expected_rejections", None) if args is not None else None
+    if not expected_rejections:
+        return None
+    return ClassificationConfig(expected_rejections=frozenset(str(name) for name in expected_rejections))
+
+
+def _add_root_cause_config_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--expected-rejection",
+        dest="expected_rejections",
+        action="append",
+        default=[],
+        metavar="TOOL",
+        help=(
+            "Tool rejection to treat as intentional policy rather than a mismatch. "
+            "Repeat to allow multiple tool names."
+        ),
+    )
+
+
 def _format_grade_summary(
     tasks: list[AgentTask],
     rules_name: str,
@@ -232,6 +255,55 @@ def _colorize_report_headers(text: str, args: argparse.Namespace | CliSettings |
     if len(lines) > 1 and lines[1].strip() and set(lines[1].strip()) <= {"=", "-"}:
         lines[1] = _paint(lines[1], "header", args)
     return "\n".join(lines)
+
+
+def _select_enforce_reason(decision: str, reasons: list[str]) -> str:
+    """Pick the most relevant human-facing reason for an enforce decision."""
+    if not reasons:
+        return ""
+
+    preferred_terms = {
+        "REJECTED": ("change too large", "guidance:"),
+        "REVERTED": ("gaming detected", "regressions detected", "net negative improvement"),
+        "COMMITTED": ("validated", "no gaming", "no gaming signals detected"),
+    }.get(decision, ())
+
+    lowered = [(reason, reason.lower()) for reason in reasons]
+    for term in preferred_terms:
+        for reason, lowered_reason in lowered:
+            if term in lowered_reason:
+                return reason
+
+    for reason, lowered_reason in lowered:
+        if "no enforce_plan" in lowered_reason:
+            continue
+        return reason
+    return reasons[0]
+
+
+def _format_enforce_check_summary(record: Any) -> str:
+    """Format a clear one-line summary for `enforce check`."""
+    primary_reason = _select_enforce_reason(record.decision, record.audit_reasons)
+    if record.decision == "COMMITTED" and not primary_reason:
+        primary_reason = f"{record.audit_verdict} ({record.net_improvement:+d} tests)"
+    elif record.decision == "COMMITTED" and "no gaming" in primary_reason.lower():
+        primary_reason = f"{record.audit_verdict} ({record.net_improvement:+d} tests)"
+    elif record.decision == "REJECTED":
+        guidance = next(
+            (reason for reason in record.audit_reasons if reason.lower().startswith("guidance:")),
+            "",
+        )
+        if guidance:
+            guidance_text = guidance.split(":", 1)[1].strip()
+            if primary_reason and primary_reason != guidance:
+                primary_reason = f"{primary_reason}; {guidance_text}"
+            else:
+                primary_reason = guidance_text
+
+    summary = f"Iteration {record.iteration}: {record.decision}"
+    if primary_reason:
+        summary += f" - {primary_reason}"
+    return summary
 
 
 def _run_command(args: argparse.Namespace, action: Callable[[], int]) -> int:
@@ -668,7 +740,11 @@ def cmd_grade(args: argparse.Namespace) -> int:
         grades = grade_tasks(tasks, rules)
         if not args.json:
             print("Done.", file=sys.stderr, flush=True)
-        failures = classify_failures(tasks, grades)
+        failures = classify_failures(
+            tasks,
+            grades,
+            config=_classification_config_from_args(args),
+        )
         distribution = _grade_distribution(grades)
         summary = {
             "tasks": len(tasks),
@@ -1049,7 +1125,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             "coding": lambda: report_coding(tasks, analyses),
             "research": lambda: report_research(tasks, analyses),
             "cost": lambda: report_cost(tasks, analyses),
-            "fixes": lambda: report_fixes(tasks, grades, analyses),
+            "fixes": lambda: report_fixes(
+                tasks,
+                grades,
+                analyses,
+                classification_config=_classification_config_from_args(args),
+            ),
             "timeline": lambda: report_timeline(tasks, grades, analyses, bucket_minutes),
             "spins": lambda: report_spins(tasks, analyses),
         }
@@ -1064,7 +1145,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             "coding": lambda: report_coding_data(tasks, analyses),
             "research": lambda: report_research_data(tasks, analyses),
             "cost": lambda: report_cost_data(tasks, analyses),
-            "fixes": lambda: report_fixes_data(tasks, grades, analyses),
+            "fixes": lambda: report_fixes_data(
+                tasks,
+                grades,
+                analyses,
+                classification_config=_classification_config_from_args(args),
+            ),
             "timeline": lambda: report_timeline_data(tasks, grades, analyses, bucket_minutes),
             "spins": lambda: report_spins_data(tasks, analyses),
         }
@@ -1079,7 +1165,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             "coding": lambda: report_coding_markdown(tasks, analyses),
             "research": lambda: report_research_markdown(tasks, analyses),
             "cost": lambda: report_cost_markdown(tasks, analyses),
-            "fixes": lambda: report_fixes_markdown(tasks, grades, analyses),
+            "fixes": lambda: report_fixes_markdown(
+                tasks,
+                grades,
+                analyses,
+                classification_config=_classification_config_from_args(args),
+            ),
             "timeline": lambda: report_timeline_markdown(tasks, grades, analyses, bucket_minutes),
             "spins": lambda: report_spins_markdown(tasks, analyses),
         }
@@ -1235,7 +1326,11 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             return 0
         rules = load_rules(getattr(args, "rules", "default"))
         grades = grade_tasks(tasks, rules)
-        classifications = classify_failures(tasks, grades)
+        classifications = classify_failures(
+            tasks,
+            grades,
+            config=_classification_config_from_args(args),
+        )
         plan = build_fix_plan(classifications)
         project_root = getattr(args, "project_root", None) or os.environ.get(
             "AGENT_XRAY_PROJECT_ROOT"
@@ -1875,6 +1970,206 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_enforce(args: argparse.Namespace) -> int:
+    """Manage enforcement sessions."""
+    def _action() -> int:
+        from .enforce import (
+            EnforceConfig,
+            build_enforce_report,
+            enforce_auto,
+            enforce_challenge,
+            enforce_check,
+            enforce_guard,
+            enforce_init,
+            enforce_plan,
+            enforce_reset,
+            enforce_status,
+        )
+        from .enforce_report import (
+            format_enforce_json,
+            format_enforce_markdown,
+            format_enforce_text,
+        )
+
+        subcmd = getattr(args, "enforce_command", None)
+        use_json = getattr(args, "json", False)
+
+        if subcmd == "init":
+            test_cmd = getattr(args, "test", None)
+            if not test_cmd:
+                _emit("Error: --test is required for enforce init", args, final=True)
+                return 1
+            config = EnforceConfig(
+                test_command=test_cmd,
+                max_iterations=getattr(args, "max_iterations", 50),
+                challenge_every=getattr(args, "challenge_every", 5),
+                require_improvement=not getattr(args, "no_require_improvement", False),
+                allow_test_modification=getattr(args, "allow_test_modification", False),
+                git_auto_commit=not getattr(args, "no_git_commit", False),
+                git_auto_revert=not getattr(args, "no_git_revert", False),
+                project_root=getattr(args, "project_root", None) or ".",
+                max_files_per_change=getattr(args, "max_files_per_change", 5),
+                max_diff_lines=getattr(args, "max_diff_lines", 200),
+                rules_file=getattr(args, "rules_file", None),
+            )
+            baseline, sd = enforce_init(config)
+            if use_json:
+                _dump({
+                    "session_dir": str(sd),
+                    "baseline": baseline.to_dict(),
+                })
+            else:
+                _emit(
+                    f"Enforcement session initialized in {sd}\n"
+                    f"Baseline: {baseline.passed} passed, {baseline.failed} failed "
+                    f"({baseline.total} total)",
+                    args,
+                    final=True,
+                )
+            return 0
+
+        if subcmd == "check":
+            project_root = getattr(args, "project_root", None) or "."
+            hypothesis = getattr(args, "hypothesis", "") or ""
+            record = enforce_check(hypothesis, project_root=project_root)
+            if use_json:
+                _dump(record.to_dict())
+            else:
+                _emit(_format_enforce_check_summary(record), args, final=True)
+            return 0
+
+        if subcmd == "status":
+            project_root = getattr(args, "project_root", None) or "."
+            status = enforce_status(project_root)
+            if use_json:
+                _dump(status)
+            else:
+                lines = [
+                    f"Session active: {status['session_active']}",
+                    f"Iterations: {status['iterations']} / {status['max_iterations']}",
+                    f"Committed: {status['committed']}",
+                    f"Reverted: {status['reverted']}",
+                    f"Gaming detected: {status['gaming_detected']}",
+                    f"Baseline: {status['baseline']['passed']} passed, "
+                    f"{status['baseline']['failed']} failed",
+                ]
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        if subcmd == "challenge":
+            project_root = getattr(args, "project_root", None) or "."
+            result = enforce_challenge(project_root)
+            if use_json:
+                _dump(result.to_dict())
+            else:
+                lines = [
+                    f"Challenge: iterations {result.iteration_range[0]}-{result.iteration_range[1]}",
+                    f"Reviewed: {result.changes_reviewed}",
+                ]
+                if result.vetoed:
+                    lines.append(f"Vetoed: {result.vetoed}")
+                for f in result.findings:
+                    lines.append(f"  - {f}")
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        if subcmd == "report":
+            project_root = getattr(args, "project_root", None) or "."
+            report = build_enforce_report(project_root)
+            fmt = "json" if use_json else getattr(args, "report_format", "text") or "text"
+            if getattr(args, "markdown", False):
+                fmt = "markdown"
+            ui = _settings(args)
+            if fmt == "json":
+                _emit(format_enforce_json(report), args, final=True)
+            elif fmt == "markdown":
+                _emit(format_enforce_markdown(report), args, final=True)
+            else:
+                _emit(format_enforce_text(report, color=ui.color), args, final=True)
+            return 0
+
+        if subcmd == "reset":
+            project_root = getattr(args, "project_root", None) or "."
+            if enforce_reset(project_root):
+                _emit("Enforcement session reset.", args, final=True)
+            else:
+                _emit("No active enforcement session found.", args, final=True)
+            return 0
+
+        if subcmd == "auto":
+            test_cmd = getattr(args, "test", None)
+            agent_cmd = getattr(args, "agent_cmd", None)
+            if not test_cmd:
+                _emit("Error: --test is required for enforce auto", args, final=True)
+                return 1
+            if not agent_cmd:
+                _emit("Error: --agent-cmd is required for enforce auto", args, final=True)
+                return 1
+            config = EnforceConfig(
+                test_command=test_cmd,
+                max_iterations=getattr(args, "max_iterations", 50),
+                challenge_every=getattr(args, "challenge_every", 5),
+                require_improvement=not getattr(args, "no_require_improvement", False),
+                allow_test_modification=getattr(args, "allow_test_modification", False),
+                git_auto_commit=not getattr(args, "no_git_commit", False),
+                git_auto_revert=not getattr(args, "no_git_revert", False),
+                project_root=getattr(args, "project_root", None) or ".",
+                max_files_per_change=getattr(args, "max_files_per_change", 5),
+                max_diff_lines=getattr(args, "max_diff_lines", 200),
+                rules_file=getattr(args, "rules_file", None),
+            )
+            report = enforce_auto(config, agent_cmd)
+            fmt = "json" if use_json else getattr(args, "report_format", "text") or "text"
+            ui = _settings(args)
+            if fmt == "json":
+                _emit(format_enforce_json(report), args, final=True)
+            elif fmt == "markdown":
+                _emit(format_enforce_markdown(report), args, final=True)
+            else:
+                _emit(format_enforce_text(report, color=ui.color), args, final=True)
+            return 0
+
+        if subcmd == "plan":
+            project_root = getattr(args, "project_root", None) or "."
+            hypothesis = getattr(args, "hypothesis", "") or ""
+            expected_str = getattr(args, "expected_tests", "") or ""
+            expected_tests = [t.strip() for t in expected_str.split(",") if t.strip()] if expected_str else []
+            result = enforce_plan(hypothesis, expected_tests, project_root=project_root)
+            if use_json:
+                _dump(result)
+            else:
+                _emit(
+                    f"Plan registered: {hypothesis}\n"
+                    f"Expected tests: {', '.join(expected_tests) if expected_tests else '(none)'}",
+                    args,
+                    final=True,
+                )
+            return 0
+
+        if subcmd == "guard":
+            project_root = getattr(args, "project_root", None) or "."
+            result = enforce_guard(project_root=project_root)
+            if use_json:
+                _dump(result)
+            else:
+                lines = [f"Status: {result['status']}"]
+                for w in result.get("warnings", []):
+                    lines.append(f"  WARNING: {w}")
+                if not result.get("warnings"):
+                    lines.append("  No uncommitted changes outside enforce pipeline.")
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        _emit(
+            "Usage: agent-xray enforce {init,check,status,challenge,report,reset,auto,plan,guard}",
+            args,
+            final=True,
+        )
+        return 1
+
+    return _run_command(args, _action)
+
+
 def _add_subparser(
     subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
@@ -1991,6 +2286,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_option(p_grade)
     _add_pattern_option(p_grade)
     _add_filter_options(p_grade)
+    _add_root_cause_config_options(p_grade)
     p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
     p_grade.set_defaults(func=cmd_grade)
 
@@ -2132,6 +2428,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_option(p_report)
     _add_pattern_option(p_report)
     _add_filter_options(p_report)
+    _add_root_cause_config_options(p_report)
     p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
     p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
     p_report.add_argument(
@@ -2167,6 +2464,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_option(p_diagnose)
     _add_pattern_option(p_diagnose)
     _add_filter_options(p_diagnose)
+    _add_root_cause_config_options(p_diagnose)
     p_diagnose.add_argument("--json", action="store_true", help="Output results as JSON")
     p_diagnose.add_argument(
         "--project-root",
@@ -2498,6 +2796,219 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Default: show help when no sub-subcommand given
     p_golden.set_defaults(func=lambda args: (p_golden.print_help(), 0)[1])
+
+    # Enforcement mode subcommands
+    p_enforce = _add_subparser(
+        sub,
+        "enforce",
+        help_text="Controlled experiment loop for disciplined, incremental agent changes",
+        example="agent-xray enforce init --test 'pytest tests/ -x'",
+    )
+    enforce_sub = p_enforce.add_subparsers(dest="enforce_command")
+
+    p_enf_init = enforce_sub.add_parser(
+        "init", help="Initialize an enforcement session (captures baseline)"
+    )
+    p_enf_init.add_argument(
+        "--test", required=True,
+        help="Shell command to run tests (e.g. 'pytest tests/ -x')",
+    )
+    p_enf_init.add_argument(
+        "--project-root", default=".",
+        help="Project root for git operations (default: .)",
+    )
+    p_enf_init.add_argument(
+        "--max-iterations", type=int, default=50,
+        help="Stop after N iterations (default: 50)",
+    )
+    p_enf_init.add_argument(
+        "--challenge-every", type=int, default=5,
+        help="Adversarial review interval (default: 5)",
+    )
+    p_enf_init.add_argument(
+        "--allow-test-modification", action="store_true",
+        help="Allow changes to test files without flagging as gaming",
+    )
+    p_enf_init.add_argument(
+        "--no-require-improvement", action="store_true",
+        help="Don't revert changes that don't improve test results",
+    )
+    p_enf_init.add_argument(
+        "--no-git-commit", action="store_true",
+        help="Don't auto-commit verified changes",
+    )
+    p_enf_init.add_argument(
+        "--no-git-revert", action="store_true",
+        help="Don't auto-revert failed changes",
+    )
+    p_enf_init.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_init.set_defaults(func=cmd_enforce)
+
+    p_enf_check = enforce_sub.add_parser(
+        "check", help="Check current state after an agent made a change"
+    )
+    p_enf_check.add_argument(
+        "--hypothesis",
+        help="What the agent expected this change to fix",
+    )
+    p_enf_check.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_check.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_check.set_defaults(func=cmd_enforce)
+
+    p_enf_status = enforce_sub.add_parser(
+        "status", help="Show current session status"
+    )
+    p_enf_status.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_status.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_status.set_defaults(func=cmd_enforce)
+
+    p_enf_challenge = enforce_sub.add_parser(
+        "challenge", help="Run adversarial review on changes so far"
+    )
+    p_enf_challenge.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_challenge.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_challenge.set_defaults(func=cmd_enforce)
+
+    p_enf_report = enforce_sub.add_parser(
+        "report", help="Generate final enforcement report"
+    )
+    p_enf_report.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_report.add_argument(
+        "--format", dest="report_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Report format (default: text)",
+    )
+    p_enf_report.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_report.add_argument("--markdown", action="store_true", help="Output as Markdown")
+    p_enf_report.set_defaults(func=cmd_enforce)
+
+    p_enf_reset = enforce_sub.add_parser(
+        "reset", help="Reset/abandon the enforcement session"
+    )
+    p_enf_reset.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_reset.set_defaults(func=cmd_enforce)
+
+    # GAP 1: Autonomous loop
+    p_enf_auto = enforce_sub.add_parser(
+        "auto", help="Run autonomous enforcement loop (init + check + commit/revert in a loop)"
+    )
+    p_enf_auto.add_argument(
+        "--test", required=True,
+        help="Shell command to run tests (e.g. 'pytest tests/ -x')",
+    )
+    p_enf_auto.add_argument(
+        "--agent-cmd", required=True,
+        help=(
+            "Shell command to invoke the agent for one change. "
+            "Template vars: {failing_tests}, {fail_count}, {pass_count}, "
+            "{total_count}, {iteration}, {last_error}, {hypothesis}"
+        ),
+    )
+    p_enf_auto.add_argument(
+        "--project-root", default=".",
+        help="Project root for git operations (default: .)",
+    )
+    p_enf_auto.add_argument(
+        "--max-iterations", type=int, default=50,
+        help="Stop after N iterations (default: 50)",
+    )
+    p_enf_auto.add_argument(
+        "--challenge-every", type=int, default=5,
+        help="Adversarial review interval (default: 5)",
+    )
+    p_enf_auto.add_argument(
+        "--allow-test-modification", action="store_true",
+        help="Allow changes to test files without flagging as gaming",
+    )
+    p_enf_auto.add_argument(
+        "--no-require-improvement", action="store_true",
+        help="Don't revert changes that don't improve test results",
+    )
+    p_enf_auto.add_argument(
+        "--no-git-commit", action="store_true",
+        help="Don't auto-commit verified changes",
+    )
+    p_enf_auto.add_argument(
+        "--no-git-revert", action="store_true",
+        help="Don't auto-revert failed changes",
+    )
+    p_enf_auto.add_argument(
+        "--max-files-per-change", type=int, default=5,
+        help="Reject changes modifying more than N files (default: 5)",
+    )
+    p_enf_auto.add_argument(
+        "--max-diff-lines", type=int, default=200,
+        help="Reject changes with more than N diff lines (default: 200)",
+    )
+    p_enf_auto.add_argument(
+        "--rules-file",
+        help="Path to project rules JSON for convention checking",
+    )
+    p_enf_auto.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_auto.set_defaults(func=cmd_enforce)
+
+    # GAP 8: Pre-change plan
+    p_enf_plan = enforce_sub.add_parser(
+        "plan", help="Register a hypothesis and expected tests before making changes"
+    )
+    p_enf_plan.add_argument(
+        "--hypothesis", required=True,
+        help="What the agent expects this change to fix",
+    )
+    p_enf_plan.add_argument(
+        "--expected-tests",
+        help="Comma-separated list of test names expected to improve",
+    )
+    p_enf_plan.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_plan.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_plan.set_defaults(func=cmd_enforce)
+
+    # GAP 10: Guard check
+    p_enf_guard = enforce_sub.add_parser(
+        "guard", help="Check if uncommitted changes exist outside the enforce pipeline"
+    )
+    p_enf_guard.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_guard.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_guard.set_defaults(func=cmd_enforce)
+
+    # Also add new config flags to init
+    p_enf_init.add_argument(
+        "--max-files-per-change", type=int, default=5,
+        help="Reject changes modifying more than N files (default: 5)",
+    )
+    p_enf_init.add_argument(
+        "--max-diff-lines", type=int, default=200,
+        help="Reject changes with more than N diff lines (default: 200)",
+    )
+    p_enf_init.add_argument(
+        "--rules-file",
+        help="Path to project rules JSON for convention checking",
+    )
+
+    # Default: show help when no sub-subcommand given
+    p_enforce.set_defaults(func=cmd_enforce)
 
     return parser
 

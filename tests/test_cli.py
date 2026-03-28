@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from agent_xray import __version__
+from agent_xray.enforce import ChangeRecord, TestResult
 from agent_xray.cli import (
     build_parser,
     cmd_analyze,
     cmd_compare,
+    cmd_enforce,
     cmd_diff,
     cmd_flywheel,
     cmd_grade,
@@ -286,3 +288,142 @@ def test_cmd_quickstart_runs_and_creates_demo(
     demo_dir = Path(match.group(1).strip())
     assert demo_dir.exists()
     assert any(demo_dir.glob("*.jsonl"))
+
+
+def _enforce_result(
+    *,
+    decision: str,
+    audit_verdict: str = "VALID",
+    audit_reasons: list[str] | None = None,
+    net_improvement: int = 0,
+) -> ChangeRecord:
+    before = TestResult(
+        exit_code=1,
+        passed=4,
+        failed=1,
+        errors=0,
+        skipped=0,
+        total=5,
+        duration_seconds=1.0,
+        output="before",
+    )
+    after = TestResult(
+        exit_code=0 if decision == "COMMITTED" else 1,
+        passed=5 if decision == "COMMITTED" else 4,
+        failed=0 if decision == "COMMITTED" else 1,
+        errors=0,
+        skipped=0,
+        total=5,
+        duration_seconds=1.0,
+        output="after",
+    )
+    return ChangeRecord(
+        iteration=1,
+        before=before,
+        after=after,
+        decision=decision,
+        audit_verdict=audit_verdict,
+        audit_reasons=audit_reasons or [],
+        net_improvement=net_improvement,
+    )
+
+
+def test_cmd_enforce_check_shows_rejected_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_check",
+        lambda hypothesis, project_root=None: _enforce_result(
+            decision="REJECTED",
+            audit_reasons=[
+                "No gaming signals detected",
+                "Change too large: 37 files exceeds limit of 5 -- break into smaller iterations",
+                "Guidance: Split this change into smaller iterations touching fewer files.",
+            ],
+        ),
+    )
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="check",
+            json=False,
+            project_root=".",
+            hypothesis="",
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Iteration 1: REJECTED -" in captured.out
+    assert "37 files exceeds limit of 5" in captured.out
+    assert "Split this change into smaller iterations touching fewer files." in captured.out
+
+
+def test_cmd_enforce_check_shows_reverted_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_check",
+        lambda hypothesis, project_root=None: _enforce_result(
+            decision="REVERTED",
+            audit_verdict="GAMING",
+            audit_reasons=["Gaming detected -- auto-reverting"],
+        ),
+    )
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="check",
+            json=False,
+            project_root=".",
+            hypothesis="",
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Iteration 1: REVERTED - Gaming detected" in captured.out
+
+
+def test_cmd_enforce_check_shows_committed_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_check",
+        lambda hypothesis, project_root=None: _enforce_result(
+            decision="COMMITTED",
+            audit_verdict="VALID",
+            audit_reasons=["No gaming signals detected"],
+            net_improvement=3,
+        ),
+    )
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="check",
+            json=False,
+            project_root=".",
+            hypothesis="",
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Iteration 1: COMMITTED - VALID (+3 tests)" in captured.out
+
+
+def test_enforce_auto_help_mentions_template_variables(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["enforce", "auto", "--help"])
+    help_text = capsys.readouterr().out
+    assert "{failing_tests}" in help_text
+    assert "{last_error}" in help_text

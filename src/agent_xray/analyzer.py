@@ -4,7 +4,7 @@ import json
 import re
 import warnings
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -59,6 +59,8 @@ class TaskAnalysis:
         timeout_like: Whether the run ended like a timeout or max-iteration stop.
         task_completed: Whether the task outcome indicates successful completion.
         error_kinds: Error counts bucketed by classifier label.
+        soft_errors: Number of logical failures inferred from ``tool_result``.
+        soft_error_kinds: Soft-error counts bucketed by classifier label.
         total_cost_usd: Sum of per-step costs in US dollars.
         avg_cost_per_step: Average step cost in US dollars.
         signal_metrics: Per-detector metrics returned by signal detectors.
@@ -84,6 +86,8 @@ class TaskAnalysis:
     total_cost_usd: float
     avg_cost_per_step: float
     signal_metrics: dict[str, dict[str, Any]]
+    soft_errors: int = 0
+    soft_error_kinds: dict[str, int] = field(default_factory=dict)
     # New metrics — defaults preserve backward compat with manual construction
     task_failed: bool = False
     rejected_tool_count: int = 0
@@ -111,6 +115,10 @@ class TaskAnalysis:
     @property
     def task_id(self) -> str:
         return self.task.task_id
+
+    def __post_init__(self) -> None:
+        if self.soft_error_kinds is None:
+            self.soft_error_kinds = {}
 
     @property
     def is_spin(self) -> bool:
@@ -175,6 +183,8 @@ class TaskAnalysis:
             "total_duration_ms": self.total_duration_ms,
             "site_name": self.site_name,
             "final_url": self.final_url,
+            "soft_errors": self.soft_errors,
+            "soft_error_kinds": dict(self.soft_error_kinds),
             "total_cost_usd": self.total_cost_usd,
             "avg_cost_per_step": self.avg_cost_per_step,
             # Exclusive spin tiers (only one is True)
@@ -212,13 +222,147 @@ class TaskAnalysis:
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
-            # Explicit failure outcome
-            "task_failed": self.task_failed,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics
             metrics.update(detector_metrics)
         return metrics
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "task": self.task.to_dict(),
+            "unique_urls": list(self.unique_urls),
+            "unique_url_paths": list(self.unique_url_paths),
+            "unique_tools": list(self.unique_tools),
+            "tool_sequence": list(self.tool_sequence),
+            "max_repeat_tool": self.max_repeat_tool,
+            "max_repeat_count": self.max_repeat_count,
+            "errors": self.errors,
+            "error_rate": self.error_rate,
+            "total_duration_ms": self.total_duration_ms,
+            "hallucinated_tools": self.hallucinated_tools,
+            "no_tools_steps": self.no_tools_steps,
+            "site_name": self.site_name,
+            "final_url": self.final_url,
+            "timeout_like": self.timeout_like,
+            "task_completed": self.task_completed,
+            "error_kinds": dict(self.error_kinds),
+            "soft_errors": self.soft_errors,
+            "soft_error_kinds": dict(self.soft_error_kinds),
+            "total_cost_usd": self.total_cost_usd,
+            "avg_cost_per_step": self.avg_cost_per_step,
+            "signal_metrics": {
+                name: dict(metrics) for name, metrics in self.signal_metrics.items()
+            },
+            "task_failed": self.task_failed,
+            "rejected_tool_count": self.rejected_tool_count,
+            "timed_out_flag": self.timed_out_flag,
+            "suspicious_short_flag": self.suspicious_short_flag,
+            "final_answer_length": self.final_answer_length,
+            "has_final_answer": self.has_final_answer,
+            "max_context_usage_pct": self.max_context_usage_pct,
+            "cache_read_tokens_total": self.cache_read_tokens_total,
+            "cache_creation_tokens_total": self.cache_creation_tokens_total,
+            "max_step_gap_ms": self.max_step_gap_ms,
+            "avg_step_duration_ms": self.avg_step_duration_ms,
+            "step_duration_trend": self.step_duration_trend,
+            "has_frustration_context": self.has_frustration_context,
+            "has_delivery_address": self.has_delivery_address,
+            "has_user_model": self.has_user_model,
+            "system_context_field_count": self.system_context_field_count,
+            "final_answer_empty_but_success": self.final_answer_empty_but_success,
+            "element_ref_mismatches": self.element_ref_mismatches,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TaskAnalysis:
+        def _int(value: Any, default: int = 0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _bool(value: Any, default: bool = False) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return default
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"true", "1", "yes", "y"}:
+                    return True
+                if lowered in {"false", "0", "no", "n"}:
+                    return False
+            return bool(value)
+
+        def _counts(value: Any) -> dict[str, int]:
+            if not isinstance(value, dict):
+                return {}
+            return {str(key): _int(item) for key, item in value.items()}
+
+        task_payload = payload.get("task")
+        if isinstance(task_payload, AgentTask):
+            task = task_payload
+        elif isinstance(task_payload, dict):
+            task = AgentTask.from_dict(task_payload)
+        else:
+            task = AgentTask(task_id=str(payload.get("task_id", "")), steps=[])
+
+        signal_metrics_raw = payload.get("signal_metrics")
+        signal_metrics: dict[str, dict[str, Any]] = {}
+        if isinstance(signal_metrics_raw, dict):
+            for name, metrics in signal_metrics_raw.items():
+                signal_metrics[str(name)] = dict(metrics) if isinstance(metrics, dict) else {}
+
+        return cls(
+            task=task,
+            unique_urls=[str(item) for item in payload.get("unique_urls", [])],
+            unique_url_paths=[str(item) for item in payload.get("unique_url_paths", [])],
+            unique_tools=[str(item) for item in payload.get("unique_tools", [])],
+            tool_sequence=[str(item) for item in payload.get("tool_sequence", [])],
+            max_repeat_tool=str(payload.get("max_repeat_tool", "")),
+            max_repeat_count=_int(payload.get("max_repeat_count")),
+            errors=_int(payload.get("errors")),
+            error_rate=_float(payload.get("error_rate")),
+            total_duration_ms=_int(payload.get("total_duration_ms")),
+            hallucinated_tools=_int(payload.get("hallucinated_tools")),
+            no_tools_steps=_int(payload.get("no_tools_steps")),
+            site_name=str(payload.get("site_name", "")),
+            final_url=str(payload.get("final_url", "")),
+            timeout_like=_bool(payload.get("timeout_like")),
+            task_completed=_bool(payload.get("task_completed")),
+            error_kinds=_counts(payload.get("error_kinds")),
+            soft_errors=_int(payload.get("soft_errors")),
+            soft_error_kinds=_counts(payload.get("soft_error_kinds")),
+            total_cost_usd=_float(payload.get("total_cost_usd")),
+            avg_cost_per_step=_float(payload.get("avg_cost_per_step")),
+            signal_metrics=signal_metrics,
+            task_failed=_bool(payload.get("task_failed")),
+            rejected_tool_count=_int(payload.get("rejected_tool_count")),
+            timed_out_flag=_bool(payload.get("timed_out_flag")),
+            suspicious_short_flag=_bool(payload.get("suspicious_short_flag")),
+            final_answer_length=_int(payload.get("final_answer_length")),
+            has_final_answer=_bool(payload.get("has_final_answer")),
+            max_context_usage_pct=_float(payload.get("max_context_usage_pct")),
+            cache_read_tokens_total=_int(payload.get("cache_read_tokens_total")),
+            cache_creation_tokens_total=_int(payload.get("cache_creation_tokens_total")),
+            max_step_gap_ms=_int(payload.get("max_step_gap_ms")),
+            avg_step_duration_ms=_float(payload.get("avg_step_duration_ms")),
+            step_duration_trend=str(payload.get("step_duration_trend", "stable")),
+            has_frustration_context=_bool(payload.get("has_frustration_context")),
+            has_delivery_address=_bool(payload.get("has_delivery_address")),
+            has_user_model=_bool(payload.get("has_user_model")),
+            system_context_field_count=_int(payload.get("system_context_field_count")),
+            final_answer_empty_but_success=_bool(payload.get("final_answer_empty_but_success")),
+            element_ref_mismatches=_int(payload.get("element_ref_mismatches")),
+        )
 
 
 def normalize_site_label(label: str) -> str:
@@ -299,6 +443,31 @@ def classify_error(error: str | None) -> str:
         if re.search(pattern, lowered):
             return name
     return "other"
+
+
+# Patterns indicating a logical failure inside tool_result even when error is None.
+# Each tuple is (compiled regex, soft-error category name).
+_SOFT_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"not on a payment page|no payment form", re.IGNORECASE), "soft_not_on_page"),
+    (re.compile(r"element not found|selector not found|no (?:such )?element", re.IGNORECASE), "soft_element_missing"),
+    (re.compile(r"timed?\s*out|deadline exceeded", re.IGNORECASE), "soft_timeout"),
+    (re.compile(r"access denied|unauthorized|forbidden|403", re.IGNORECASE), "soft_access_denied"),
+    (re.compile(r"rate limit|too many requests|429", re.IGNORECASE), "soft_rate_limit"),
+    (re.compile(r"could not|unable to|failed to|cannot", re.IGNORECASE), "soft_failure"),
+]
+
+
+def classify_soft_error(tool_result: str | None) -> str:
+    """Classify logical failures in tool_result content (no error field set).
+
+    Returns a soft-error category or empty string.
+    """
+    if not tool_result:
+        return ""
+    for pattern, name in _SOFT_ERROR_PATTERNS:
+        if pattern.search(tool_result):
+            return name
+    return ""
 
 
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
@@ -392,6 +561,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
     repeat_tool, repeat_count = _max_consecutive_repeat(tool_sequence)
     errors = sum(1 for step in task.steps if step.error)
     error_kinds: Counter[str] = Counter()
+    soft_error_kinds: Counter[str] = Counter()
     no_tools_steps = 0
     hallucinated_tools = 0
     for step in task.sorted_steps:
@@ -402,6 +572,11 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
             error_kinds[error_kind] += 1
         if error_kind == "unknown_tool":
             hallucinated_tools += 1
+        # Detect logical failures in tool_result content (no error field)
+        if not step.error:
+            soft_kind = classify_soft_error(step.tool_result)
+            if soft_kind:
+                soft_error_kinds[soft_kind] += 1
     total_cost = sum(_step_cost(step, pricing_data) for step in task.steps)
     # Consume rejected_tools across all steps
     rejected_tool_count = sum(
@@ -557,6 +732,8 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
             in {"failed", "llm_error", "early_abort"}
         ),
         "error_kinds": dict(error_kinds),
+        "soft_errors": sum(soft_error_kinds.values()),
+        "soft_error_kinds": dict(soft_error_kinds),
         "total_cost_usd": float(total_cost),
         "avg_cost_per_step": (float(total_cost) / len(task.steps)) if task.steps else 0.0,
         "rejected_tool_count": rejected_tool_count,
@@ -707,12 +884,58 @@ def load_adapted_tasks(
     if not root.exists():
         raise FileNotFoundError(f"log path does not exist: {root}")
     tasks: dict[str, AgentTask] = {}
-    for path in _iter_jsonl_files(root, days=days):
+    files = list(_iter_jsonl_files(root, days=days))
+    for path in files:
         for adapted_task in tasks_from_steps(adapt(path, format=format), source_path=path):
             task = tasks.setdefault(adapted_task.task_id, AgentTask(task_id=adapted_task.task_id))
             if task.day is None:
                 task.day = adapted_task.day
             task.steps.extend(adapted_task.steps)
+
+    # Recover task outcomes from raw JSONL.  Adapters only emit AgentStep
+    # records (lines with tool_name), so task_complete / outcome-only lines
+    # are silently dropped.  This second pass restores them.
+    for path in files:
+        try:
+            with path.open(encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    task_id = str(payload.get("task_id") or "")
+                    if not task_id:
+                        continue
+                    is_outcome = (
+                        payload.get("event") == "task_complete"
+                        or (
+                            payload.get("outcome") is not None
+                            and payload.get("tool_name") in (None, "")
+                        )
+                    )
+                    if not is_outcome:
+                        continue
+                    task = tasks.get(task_id)
+                    if task is None:
+                        # Outcome-only task (no steps were parsed by adapter)
+                        task = AgentTask(task_id=task_id)
+                        task.day = _extract_day(path, payload)
+                        tasks[task_id] = task
+                    if task.outcome is None:
+                        task.outcome = TaskOutcome.from_dict(payload)
+                        task.metadata.update(task.outcome.metadata)
+                    if payload.get("user_text") and not task.task_text:
+                        task.task_text = str(payload["user_text"])
+                    if payload.get("task_category") and not task.task_category:
+                        task.task_category = str(payload["task_category"])
+        except OSError:
+            continue
+
     return [tasks[key] for key in sorted(tasks)]
 
 

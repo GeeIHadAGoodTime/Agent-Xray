@@ -3,8 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_xray.grader import GradeResult, grade_task, load_rules
-from agent_xray.root_cause import ClassificationConfig, RootCauseResult, classify_task
-from agent_xray.schema import AgentStep, AgentTask
+from agent_xray.root_cause import (
+    ClassificationConfig,
+    RootCauseResult,
+    classify_failures,
+    classify_task,
+)
+from agent_xray.schema import AgentStep, AgentTask, ToolContext
 
 RULES_PATH = Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules" / "default.json"
 
@@ -18,12 +23,19 @@ def _step(
     error: str | None = None,
     page_url: str | None = None,
     tools_available: list[str] | None = None,
+    rejected_tools: list[str] | None = None,
     llm_reasoning: str | None = None,
     context_usage_pct: float | None = None,
     context_window: int | None = None,
     compaction_count: int | None = None,
     output_tokens: int | None = None,
 ) -> AgentStep:
+    tools = None
+    if rejected_tools is not None:
+        tools = ToolContext(
+            tools_available=tools_available,
+            rejected_tools=rejected_tools,
+        )
     return AgentStep(
         task_id="task-1",
         step=step,
@@ -32,7 +44,8 @@ def _step(
         tool_result=tool_result,
         error=error,
         page_url=page_url,
-        tools_available=tools_available,
+        tools=tools,
+        tools_available=None if tools is not None else tools_available,
         llm_reasoning=llm_reasoning,
         context_usage_pct=context_usage_pct,
         context_window=context_window,
@@ -385,6 +398,94 @@ def test_classification_config_customization() -> None:
     )
     assert cause is not None
     assert cause.root_cause == "early_abort"
+
+
+def test_expected_rejections_excludes_policy_tools() -> None:
+    task = _task(
+        [
+            _step(1, "respond", rejected_tools=["ask_user"]),
+            _step(2, "respond", rejected_tools=["ask_user"]),
+            _step(3, "respond", rejected_tools=["ask_user"]),
+            _step(4, "respond", rejected_tools=["ask_user"]),
+        ]
+    )
+
+    default_cause = classify_task(task, _failing_grade(task))
+    assert default_cause is not None
+    assert default_cause.root_cause == "tool_rejection_mismatch"
+
+    allowlisted_cause = classify_task(
+        task,
+        _failing_grade(task),
+        config=ClassificationConfig(expected_rejections=frozenset({"ask_user"})),
+    )
+    assert allowlisted_cause is not None
+    assert allowlisted_cause.root_cause != "tool_rejection_mismatch"
+
+
+def test_expected_rejections_partial() -> None:
+    task = _task(
+        [
+            _step(1, "respond", rejected_tools=["ask_user", "browser_click"]),
+            _step(2, "respond", rejected_tools=["ask_user", "browser_click"]),
+            _step(3, "respond", rejected_tools=["ask_user", "browser_click"]),
+            _step(4, "respond", rejected_tools=["ask_user", "browser_click"]),
+        ]
+    )
+
+    cause = classify_task(
+        task,
+        _failing_grade(task),
+        config=ClassificationConfig(expected_rejections=frozenset({"ask_user"})),
+    )
+    assert cause is not None
+    assert cause.root_cause == "tool_rejection_mismatch"
+    assert any("browser_click" in evidence for evidence in cause.evidence)
+    assert not any(
+        "rejected tools:" in evidence and "ask_user" in evidence
+        for evidence in cause.evidence
+    )
+
+
+def test_expected_rejections_empty_default() -> None:
+    task = _task(
+        [
+            _step(1, "respond", rejected_tools=["browser_click"]),
+            _step(2, "respond", rejected_tools=["browser_click"]),
+            _step(3, "respond", rejected_tools=["browser_click"]),
+            _step(4, "respond", rejected_tools=["browser_click"]),
+        ]
+    )
+
+    default_cause = classify_task(task, _failing_grade(task))
+    explicit_default_cause = classify_task(
+        task,
+        _failing_grade(task),
+        config=ClassificationConfig(),
+    )
+    assert default_cause is not None
+    assert explicit_default_cause is not None
+    assert default_cause.root_cause == "tool_rejection_mismatch"
+    assert explicit_default_cause.root_cause == "tool_rejection_mismatch"
+
+
+def test_classify_failures_passes_expected_rejections_config() -> None:
+    task = _task(
+        [
+            _step(1, "respond", rejected_tools=["ask_user"]),
+            _step(2, "respond", rejected_tools=["ask_user"]),
+            _step(3, "respond", rejected_tools=["ask_user"]),
+            _step(4, "respond", rejected_tools=["ask_user"]),
+        ]
+    )
+
+    failures = classify_failures(
+        [task],
+        [_failing_grade(task)],
+        config=ClassificationConfig(expected_rejections=frozenset({"ask_user"})),
+    )
+    assert len(failures) == 1
+    assert failures[0].root_cause != "tool_rejection_mismatch"
 
 
 def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:
