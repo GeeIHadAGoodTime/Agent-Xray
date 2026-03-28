@@ -5,12 +5,16 @@ from .completeness import CompletenessReport, CompletenessWarning, check_complet
 from .comparison import ModelComparisonResult, compare_model_runs, format_model_comparison
 from .diagnose import (
     DefaultTargetResolver,
+    FIX_TARGETS,
     FixPlanEntry,
+    INVESTIGATION_HINTS,
     TargetResolver,
     build_fix_plan,
     format_fix_plan_text,
     get_target_resolver,
+    list_all_targets,
     register_target_resolver,
+    validate_fix_targets,
 )
 from .grader import (
     GradeResult,
@@ -117,12 +121,16 @@ __all__ = [
     "summarize_root_causes",
     # Diagnosis / fix plan
     "DefaultTargetResolver",
+    "FIX_TARGETS",
     "FixPlanEntry",
+    "INVESTIGATION_HINTS",
     "TargetResolver",
     "build_fix_plan",
     "format_fix_plan_text",
     "get_target_resolver",
+    "list_all_targets",
     "register_target_resolver",
+    "validate_fix_targets",
     # Surface / diff / tree
     "surface_for_task",
     "reasoning_for_task",
@@ -166,4 +174,4 @@ __all__ = [
     "run_detection",
 ]
 
-__version__ = "1.2.6"
+__version__ = "1.3.0"

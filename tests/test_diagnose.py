@@ -50,7 +50,7 @@ def test_fix_plan_targets_exist():
     plan = build_fix_plan([_result("t1", "tool_bug", -3)])
     assert len(plan) == 1
     assert len(plan[0].targets) > 0
-    assert "tool handler" in plan[0].targets[0].lower()
+    assert "tool handler" in plan[0].targets[0].lower() or "tool" in plan[0].targets[0].lower()
 
 
 def test_custom_target_resolver_registration():
@@ -132,6 +132,8 @@ def test_fix_plan_to_dict():
     assert "priority" in d
     assert d["severity"] == 2
     assert "targets" in d
+    assert "investigate" in d
+    assert d["targets"] == d["investigate"]
     assert d["verify_command"] == "agent-xray reasoning t1 | grep -i success"
     assert "low_confidence" in d
 
@@ -227,3 +229,75 @@ def test_fix_plan_new_root_causes_have_targets():
         assert len(plan) == 1
         assert len(plan[0].targets) > 0
         assert plan[0].severity == 0
+
+
+# ---------------------------------------------------------------------------
+# Investigation hints philosophy tests
+# ---------------------------------------------------------------------------
+
+
+def test_default_resolver_returns_concepts_not_file_paths():
+    """Default resolver should return conceptual search terms, never file paths."""
+    from agent_xray.diagnose import INVESTIGATION_HINTS
+
+    for cause, hints in INVESTIGATION_HINTS.items():
+        for hint in hints:
+            assert "/" not in hint, (
+                f"INVESTIGATION_HINTS[{cause!r}] contains a slash: {hint!r} "
+                "-- default hints should be concepts, not file paths"
+            )
+            assert not hint.endswith(".py"), (
+                f"INVESTIGATION_HINTS[{cause!r}] ends with .py: {hint!r} "
+                "-- default hints should be concepts, not file paths"
+            )
+
+
+def test_fix_plan_to_dict_has_investigate_alias():
+    """to_dict() should emit both 'targets' and 'investigate' keys with the same value."""
+    plan = build_fix_plan([_result("t1", "spin", -3)])
+    d = plan[0].to_dict()
+    assert "targets" in d
+    assert "investigate" in d
+    assert d["targets"] == d["investigate"]
+
+
+def test_format_fix_plan_text_shows_search_your_codebase():
+    """Output should say 'Search your codebase for:' instead of 'Targets:'."""
+    plan = build_fix_plan([_result("t1", "spin", -5)])
+    text = format_fix_plan_text(plan)
+    assert "Search your codebase for:" in text
+    assert "Targets:" not in text
+
+
+def test_format_fix_plan_text_shows_what_happened():
+    """Output should include a 'What happened:' line from evidence."""
+    plan = build_fix_plan([_result("t1", "spin", -5, evidence=["browser_click_ref repeated 11 times"])])
+    text = format_fix_plan_text(plan)
+    assert "What happened:" in text
+    assert "browser_click_ref repeated 11 times" in text
+
+
+def test_format_fix_plan_text_shows_root_cause_description():
+    """Output should include a 'Root cause:' line."""
+    plan = build_fix_plan([_result("t1", "spin", -5)])
+    text = format_fix_plan_text(plan)
+    assert "Root cause:" in text
+
+
+def test_novviola_resolver_returns_file_paths():
+    """NovviolaTargetResolver should still return file paths (plugin behavior preserved)."""
+    from agent_xray.contrib.novviola import NovviolaTargetResolver
+
+    resolver = NovviolaTargetResolver()
+    targets = resolver.resolve("routing_bug", ["3 step(s) exposed zero tools"])
+    # At least one target should contain a slash or end with .py
+    assert any("/" in t or t.endswith(".py") for t in targets), (
+        f"NovviolaTargetResolver should return file paths, got: {targets}"
+    )
+
+
+def test_investigation_hints_backward_compat_alias():
+    """FIX_TARGETS should be a backward-compatible alias for INVESTIGATION_HINTS."""
+    from agent_xray.diagnose import FIX_TARGETS, INVESTIGATION_HINTS
+
+    assert FIX_TARGETS is INVESTIGATION_HINTS

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from .root_cause import ROOT_CAUSES, RootCauseResult
@@ -12,108 +13,116 @@ _UNKNOWN_ROOT_CAUSE = {
     "fix_hint": "Investigate manually.",
 }
 
-FIX_TARGETS: dict[str, list[str]] = {
+INVESTIGATION_HINTS: dict[str, list[str]] = {
     "routing_bug": [
-        "tool registry / tool-routing rules",
-        "approval or permission policy (ensure tool is authorized)",
-        "tool server registration (ensure tool handler is wired)",
+        "tool registration or tool-routing logic",
+        "tool authorization or permission gate that controls tool visibility",
+        "handler wiring that connects tool names to implementations",
     ],
     "approval_block": [
-        "approval policy / tool permission configuration",
-        "tool risk level or trust classification",
-        "auto-approval rules for common low-risk tools",
+        "tool approval policy or confirmation gate configuration",
+        "tool risk classification or trust level assignment",
+        "auto-approval rules for low-risk tool categories",
     ],
     "spin": [
-        "loop/spin detector thresholds (max_retries, max_consecutive)",
-        "recovery instructions in system prompt",
-        "intervention message content after spin detected",
+        "spin detection threshold or max consecutive retry count",
+        "recovery logic after repeated tool failures",
+        "intervention or circuit-breaker when same tool fails repeatedly",
     ],
     "environment_drift": [
-        "browser runner timeouts and retry logic",
-        "CSS/ARIA selector strategy (selectors may have changed)",
-        "page load wait conditions",
+        "timeout and retry logic for external interactions",
+        "selector strategy or element identification approach",
+        "wait conditions for page or environment readiness",
     ],
     "tool_bug": [
-        "tool handler implementation (the tool itself is broken)",
-        "tool result formatting (result may be unparseable by LLM)",
-        "tool input validation (bad inputs not caught early)",
+        "tool handler implementation where the tool produces errors",
+        "tool result format that the LLM must parse",
+        "tool input validation that should reject malformed requests",
     ],
     "tool_selection_bug": [
-        "tool descriptions (make the right tools more prominent)",
-        "tool-choice examples in prompt",
-        "tool set scoping (wrong tool set exposed for this task type)",
+        "tool descriptions that guide the LLM toward correct tool choice",
+        "tool-choice examples or priority ordering in the prompt",
+        "tool set scoping that controls which tools are exposed per task type",
     ],
     "early_abort": [
-        "stop conditions / success criteria",
-        "minimum step count before allowing completion",
-        "continuation_nudge logic",
+        "stop conditions or success criteria that trigger task completion",
+        "minimum step count before the agent is allowed to finish",
+        "continuation logic that nudges the agent to keep going",
     ],
     "stuck_loop": [
-        "progress detection in browser prompt section",
-        "reassessment prompts after N steps on same page",
-        "navigation guidance (when to try a different approach)",
+        "progress detection that identifies when the agent is stuck",
+        "reassessment prompt triggered after repeated actions on the same state",
+        "guidance for when to abandon the current approach and try another",
     ],
     "reasoning_bug": [
-        "prompt examples for this task type",
-        "decision heuristics and strategy guidance",
-        "few-shot examples corpus",
+        "prompt examples or few-shot demonstrations for this task type",
+        "decision heuristics or strategy guidance in the system prompt",
+        "examples corpus that teaches correct reasoning patterns",
     ],
     "prompt_bug": [
-        "prompt builder / task-specific prompt sections",
-        "see prompt_section field for which section to edit",
+        "prompt builder or task-specific prompt sections",
+        "prompt section referenced in the prompt_section evidence field",
     ],
     "model_limit": [
-        "task decomposition into subtasks",
-        "model choice (try a more capable model)",
-        "context window management",
+        "task decomposition logic that breaks complex tasks into subtasks",
+        "model selection or routing to a more capable model",
+        "context window management or token budget allocation",
     ],
     "memory_overload": [
-        "context window management / compaction strategy",
-        "long-context task decomposition",
-        "summarization before context fills",
+        "context compaction or summarization strategy",
+        "task decomposition for long-running interactions",
+        "message trimming or eviction policy before context fills",
     ],
     "delegation_failure": [
-        "delegation routing rules (which tasks get delegated)",
-        "sub-agent tool availability and permissions",
-        "delegation response handling",
+        "delegation routing that decides which tasks get delegated",
+        "sub-agent tool availability and permission configuration",
+        "delegation error handling and response parsing",
     ],
     "test_failure_loop": [
-        "test runner exit conditions",
-        "max retry limits for failing tests",
-        "error pattern detection to abort early",
+        "test runner exit conditions or max retry limits",
+        "failure triage logic that decides whether to retry or change approach",
+        "error pattern detection that aborts repeated identical failures",
     ],
     "tool_rejection_mismatch": [
-        "tool approval / permission policy",
-        "tool risk classification (rejected tools may be safe)",
-        "focused tool set routing (ensure required tools are available)",
+        "tool approval or rejection policy configuration",
+        "tool risk classification where rejected tools may actually be safe",
+        "focused tool set routing that ensures required tools are available",
     ],
     "insufficient_sources": [
-        "search tool configuration and availability",
-        "minimum source count requirements",
-        "source diversity guidance in prompt",
+        "search tool configuration and availability for research tasks",
+        "minimum source count or diversity requirements before synthesis",
+        "source gathering guidance in the research prompt",
     ],
     "valid_alternative_path": [
-        "task expectation configuration (accept non-browser paths)",
-        "grading rules for alternative completion paths",
+        "task expectation or grading configuration that accepts non-browser paths",
+        "alternative completion path recognition in the evaluation rules",
     ],
     "consultative_success": [
-        "task expectation configuration (accept consultative answers)",
-        "grading rules for consultative completions",
+        "task expectation or grading configuration that accepts consultative answers",
+        "consultative completion recognition in the evaluation rules",
     ],
     "unclassified": [
-        "task surface and reasoning chain (manual investigation)",
-        "step log analysis for unusual patterns",
+        "task surface and reasoning chain for manual pattern identification",
+        "step log analysis for unusual sequences or error patterns",
     ],
 }
-"""Default investigation targets keyed by root cause for the built-in target resolver."""
+"""Default investigation hints keyed by root cause for the built-in resolver.
 
-# Maps prompt_section values to specific file/component targets
+These are CONCEPTS to search for in your codebase, not file paths.  Agent-xray
+is a trace analyzer -- it knows WHAT happened and WHY, but it has never read
+your source code and cannot reliably tell you WHERE to fix it.
+"""
+
+# Backward-compatible alias
+FIX_TARGETS = INVESTIGATION_HINTS
+
+# Maps prompt_section values to conceptual investigation areas
 PROMPT_SECTION_TARGETS = {
-    "research": ["research prompt section", "search vs browse tool priority"],
-    "tools": ["tool descriptions and autonomy guardrails", "TOOL_PRIORITY ordering"],
-    "browser": ["browser navigation prompt section", "progress detection instructions"],
-    "payment": ["payment fill instructions", "form field identification guidance"],
-    "planning": ["task planning prompt section", "multi-step strategy guidance"],
+    "research": ["research prompt section or search-vs-browse priority", "source gathering and synthesis instructions"],
+    "tools": ["tool descriptions and autonomy guardrails", "tool priority ordering or selection guidance"],
+    "browser": ["browser navigation prompt section", "progress detection or stuck-page instructions"],
+    "payment": ["payment fill instructions or form field identification guidance", "payment gate or checkout handling logic"],
+    "planning": ["task planning prompt section", "multi-step strategy or decomposition guidance"],
 }
 
 
@@ -141,7 +150,12 @@ SEVERITY_BY_ROOT_CAUSE = {
 
 
 class TargetResolver(Protocol):
-    """Resolve likely fix targets for a root cause from its summarized evidence."""
+    """Resolve investigation hints for a root cause from its summarized evidence.
+
+    The default resolver returns conceptual search terms (not file paths).
+    Plugin implementations MAY return file paths but should validate them
+    against the target project, since paths go stale when codebases refactor.
+    """
 
     def resolve(self, root_cause: str, evidence: list[str]) -> list[str]:
         """Return investigation targets for the given root cause and evidence."""
@@ -159,11 +173,15 @@ def _extract_prompt_sections(evidence: list[str]) -> list[str]:
 
 
 class DefaultTargetResolver:
-    """Resolve fix targets from the built-in root-cause and prompt-section mappings."""
+    """Resolve investigation hints from the built-in root-cause and prompt-section mappings.
+
+    Returns conceptual search terms derived from trace evidence, not file paths.
+    These are things to search for in your codebase, not files to open.
+    """
 
     def resolve(self, root_cause: str, evidence: list[str]) -> list[str]:
-        """Return default targets, with prompt-section enrichment for prompt bugs."""
-        targets = list(FIX_TARGETS.get(root_cause, ["prompt builder"]))
+        """Return investigation concepts, with prompt-section enrichment for prompt bugs."""
+        targets = list(INVESTIGATION_HINTS.get(root_cause, ["prompt builder"]))
         if root_cause != "prompt_bug":
             return targets
         section_targets: list[str] = []
@@ -254,7 +272,10 @@ class FixPlanEntry:
         impact: Heuristic impact score used for ranking.
         severity: Root-cause severity score from the built-in heuristics.
         investigate_task: Representative task id to inspect first.
-        targets: Suggested systems, prompt sections, or components to review.
+        targets: Conceptual search terms for what to investigate in your codebase.
+            These are concepts derived from trace evidence, not file paths.
+            Plugin resolvers may return file paths, but the default resolver
+            returns generic concepts that apply to any codebase.
         fix_hint: Human-readable fix hint for the grouped failures.
         verify_command: Suggested CLI command for validating the fix.
         evidence: Sample evidence strings taken from the worst task.
@@ -283,6 +304,7 @@ class FixPlanEntry:
             "severity": self.severity,
             "investigate_task": self.investigate_task,
             "targets": self.targets,
+            "investigate": self.targets,
             "fix_hint": self.fix_hint,
             "verify_command": self.verify_command,
             "evidence": self.evidence,
@@ -350,6 +372,77 @@ def build_fix_plan(
     return plan
 
 
+CODE_EXTENSIONS = {".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".cfg", ".md"}
+"""File extensions recognized as code paths during target validation."""
+
+
+def validate_fix_targets(
+    plan: list[FixPlanEntry],
+    project_root: str | Path | None = None,
+) -> list[FixPlanEntry]:
+    """Check that file path targets in the fix plan actually exist on disk.
+
+    For each target that looks like a file path (contains ``/`` and ends with
+    a code extension like ``.py``, ``.json``, ``.js``, ``.ts``), check if it
+    exists relative to *project_root*.  If not found, add a warning to the
+    entry's evidence.
+
+    Args:
+        plan: Fix plan entries to validate.
+        project_root: Root directory of the target project.  If ``None``,
+            skip validation.
+
+    Returns:
+        The same plan entries, with stale path warnings added to evidence.
+    """
+    if project_root is None:
+        return plan
+    root = Path(project_root)
+    if not root.is_dir():
+        return plan
+
+    for entry in plan:
+        stale_targets: list[str] = []
+        for target in entry.targets:
+            # Only validate targets that look like file paths
+            if "/" not in target:
+                continue
+            # Check if it ends with a code extension
+            suffix = Path(target).suffix
+            if suffix not in CODE_EXTENSIONS:
+                continue
+            full_path = root / target
+            if not full_path.exists():
+                stale_targets.append(target)
+
+        if stale_targets:
+            for target in stale_targets:
+                entry.evidence.append(
+                    f"STALE_TARGET: '{target}' not found on disk"
+                    " \u2014 file may have been renamed or removed"
+                )
+    return plan
+
+
+def list_all_targets(resolver: TargetResolver | None = None) -> dict[str, list[str]]:
+    """Get all targets for all known root causes from a resolver.
+
+    Args:
+        resolver: Resolver to query.  Uses the active default when ``None``.
+
+    Returns:
+        Mapping of root cause label to its resolved target list.
+    """
+    if resolver is None:
+        resolver = get_target_resolver()
+    result: dict[str, list[str]] = {}
+    for cause in ROOT_CAUSES:
+        targets = resolver.resolve(cause, [])
+        if targets:
+            result[cause] = targets
+    return result
+
+
 def format_fix_plan_text(plan: list[FixPlanEntry]) -> str:
     """Render a fix plan as concise terminal-friendly text.
 
@@ -364,16 +457,30 @@ def format_fix_plan_text(plan: list[FixPlanEntry]) -> str:
     lines = ["FIX PLAN", "=" * 60, ""]
     for entry in plan:
         confidence_tag = " [LOW CONFIDENCE]" if entry.low_confidence else ""
+        cause_meta = ROOT_CAUSES.get(entry.root_cause, _UNKNOWN_ROOT_CAUSE)
         lines.append(
             f"Priority #{entry.priority}: {entry.root_cause} "
             f"(severity={entry.severity}/5, {entry.count} task(s), impact={entry.impact})"
             f"{confidence_tag}"
         )
-        lines.append(f"  Targets: {', '.join(entry.targets)}")
-        lines.append(f"  Fix hint: {entry.fix_hint}")
+        # Show what happened from evidence
+        non_stale = [e for e in entry.evidence if not e.startswith(("STALE_TARGET:", "LOW_CONFIDENCE:"))]
+        if non_stale:
+            lines.append(f"  What happened: {non_stale[0]}")
+        # Show root cause description
+        lines.append(f"  Root cause: {cause_meta['description']}")
+        # Show investigation hints as search terms
+        lines.append(f"  Search your codebase for: {', '.join(entry.targets)}")
+        # Surface stale target warnings prominently
+        stale_warnings = [e for e in entry.evidence if e.startswith("STALE_TARGET:")]
+        for warning in stale_warnings:
+            # Extract the path from the STALE_TARGET message
+            path_part = warning.split("'")[1] if "'" in warning else warning
+            lines.append(
+                f"  \u26a0 STALE TARGET: {path_part} not found"
+                " \u2014 update your resolver"
+            )
         lines.append(f"  Investigate task: {entry.investigate_task}")
         lines.append(f"  Verify: {entry.verify_command}")
-        if entry.evidence:
-            lines.append(f"  Evidence: {'; '.join(entry.evidence)}")
         lines.append("")
     return "\n".join(lines)

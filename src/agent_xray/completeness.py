@@ -37,6 +37,7 @@ DIMENSION_DESCRIPTIONS = {
     "system_context": "System context components (frustration, user model, etc.)",
     "llm_reasoning": "Agent reasoning/decision text",
     "step_data_loss": "Step count consistency (outcome vs actual steps)",
+    "target_validity": "Fix-plan target paths exist on disk",
 }
 
 
@@ -94,11 +95,20 @@ class CompletenessReport:
         return "\n".join(lines)
 
 
-def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
+def check_completeness(
+    tasks: list[AgentTask],
+    *,
+    project_root: str | None = None,
+) -> CompletenessReport:
     """Analyze tasks for missing observability dimensions.
 
     Returns a report with warnings about data gaps that could cause
     false confidence in grading or root-cause classification.
+
+    Args:
+        tasks: Agent tasks to check.
+        project_root: Optional project root for target_validity dimension.
+            When provided, fix-plan targets are validated against the filesystem.
     """
     if not tasks:
         return CompletenessReport(dimensions_checked=0, dimensions_ok=0)
@@ -391,6 +401,41 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
         ))
     else:
         ok_dims += 1
+
+    # 14. Target validity (optional — only when project_root is provided)
+    if project_root is not None:
+        from pathlib import Path
+
+        from .diagnose import CODE_EXTENSIONS, get_target_resolver, list_all_targets
+
+        root = Path(project_root)
+        if root.is_dir():
+            total_dims += 1
+            all_dimensions.append("target_validity")
+            all_targets = list_all_targets(get_target_resolver())
+            stale_count = 0
+            path_count = 0
+            for _cause, targets in all_targets.items():
+                for target in targets:
+                    if "/" not in target:
+                        continue
+                    if Path(target).suffix not in CODE_EXTENSIONS:
+                        continue
+                    path_count += 1
+                    if not (root / target).exists():
+                        stale_count += 1
+            if path_count > 0 and stale_count > 0:
+                warnings.append(CompletenessWarning(
+                    dimension="target_validity",
+                    severity="high",
+                    message=f"{stale_count}/{path_count} fix-plan target paths are stale "
+                            f"(files not found in project root).",
+                    affected_pct=stale_count / path_count * 100,
+                    fix_hint="Run 'agent-xray validate-targets --project-root <path>' "
+                             "and update your TargetResolver.",
+                ))
+            else:
+                ok_dims += 1
 
     return CompletenessReport(
         warnings=warnings,

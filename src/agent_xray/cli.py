@@ -1223,7 +1223,7 @@ def cmd_completeness(args: argparse.Namespace) -> int:
 def cmd_diagnose(args: argparse.Namespace) -> int:
     """Classify failures and build a prioritized fix plan."""
     def _action() -> int:
-        from .diagnose import build_fix_plan, format_fix_plan_text
+        from .diagnose import build_fix_plan, format_fix_plan_text, validate_fix_targets
         from .root_cause import classify_failures
         tasks = _load_tasks_with_format(
             args.log_dir, days=args.days, format_name=args.format,
@@ -1237,12 +1237,76 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         grades = grade_tasks(tasks, rules)
         classifications = classify_failures(tasks, grades)
         plan = build_fix_plan(classifications)
+        project_root = getattr(args, "project_root", None) or os.environ.get(
+            "AGENT_XRAY_PROJECT_ROOT"
+        )
+        if project_root:
+            validate_fix_targets(plan, project_root)
         if args.json:
             _dump([entry.to_dict() for entry in plan])
         else:
             _emit(format_fix_plan_text(plan), args, final=True)
         return 0
     return _run_command(args, _action)
+
+
+def cmd_validate_targets(args: argparse.Namespace) -> int:
+    """Validate that fix-plan target paths resolve to existing files."""
+    from .diagnose import (
+        CODE_EXTENSIONS,
+        get_target_resolver,
+        list_all_targets,
+    )
+
+    project_root = getattr(args, "project_root", None) or os.environ.get(
+        "AGENT_XRAY_PROJECT_ROOT"
+    )
+    if not project_root:
+        print("Error: --project-root is required (or set AGENT_XRAY_PROJECT_ROOT).")
+        return 1
+
+    root = Path(project_root)
+    if not root.is_dir():
+        print(f"Error: project root not found: {project_root}")
+        return 1
+
+    resolver_name = getattr(args, "resolver", None)
+    resolver = get_target_resolver(resolver_name)
+    all_targets = list_all_targets(resolver)
+
+    total = 0
+    valid = 0
+    stale_details: list[str] = []
+    lines = [f"TARGET VALIDATION (project root: {root})", "=" * 60]
+
+    for cause in sorted(all_targets):
+        targets = all_targets[cause]
+        lines.append(f"  {cause}:")
+        for target in targets:
+            is_path = "/" in target and Path(target).suffix in CODE_EXTENSIONS
+            if not is_path:
+                # Non-path targets are always considered valid (descriptions)
+                lines.append(f"    [OK]   {target}")
+                total += 1
+                valid += 1
+                continue
+            total += 1
+            full_path = root / target
+            if full_path.exists():
+                lines.append(f"    [OK]   {target}")
+                valid += 1
+            else:
+                lines.append(f"    [STALE] {target}  \u2190 NOT FOUND")
+                stale_details.append(f"{cause}: {target}")
+
+    stale = total - valid
+    lines.append("")
+    lines.append(f"Summary: {valid}/{total} targets valid, {stale} stale")
+    if stale:
+        lines.append("  Stale targets need updating in your TargetResolver.")
+
+    print("\n".join(lines))
+    return 1 if stale else 0
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -2104,7 +2168,27 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pattern_option(p_diagnose)
     _add_filter_options(p_diagnose)
     p_diagnose.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_diagnose.add_argument(
+        "--project-root",
+        help="Project root to validate fix target paths against (env: AGENT_XRAY_PROJECT_ROOT)",
+    )
     p_diagnose.set_defaults(func=cmd_diagnose)
+
+    p_validate_targets = _add_subparser(
+        sub,
+        "validate-targets",
+        help_text="Validate fix-plan target paths against a project directory",
+        example="agent-xray validate-targets --project-root /path/to/project",
+    )
+    p_validate_targets.add_argument(
+        "--project-root",
+        help="Project root to validate fix target paths against (env: AGENT_XRAY_PROJECT_ROOT)",
+    )
+    p_validate_targets.add_argument(
+        "--resolver",
+        help="Named target resolver to use (default: active resolver)",
+    )
+    p_validate_targets.set_defaults(func=cmd_validate_targets)
 
     p_search = _add_subparser(
         sub,

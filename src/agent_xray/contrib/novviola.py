@@ -1,8 +1,18 @@
 """NOVVIOLA-specific TargetResolver plugin for agent-xray.
 
-Maps all 15 agent-xray root causes to exact NOVVIOLA file paths, derived from
-the production fix-target mappings in diagnose_and_fix.py and the NOVVIOLA
-codebase layout.
+WARNING: MANUAL MAINTENANCE REQUIRED
+-------------------------------------
+This plugin returns PROJECT-SPECIFIC FILE PATHS, not generic concepts.  Unlike
+the default resolver (which returns codebase-agnostic search terms), this
+resolver maps root causes to exact NOVVIOLA files.  These paths go stale when
+the codebase refactors.  The NOVVIOLA team must keep NOVVIOLA_FIX_TARGETS and
+PROMPT_BUG_PATTERNS up to date manually, or run ``agent-xray validate-targets``
+to detect drift.
+
+This is opt-in project-specific knowledge.  The default agent-xray resolver
+returns conceptual investigation hints that work for any codebase without
+maintenance.  Only register this plugin if you want NOVVIOLA file paths in
+your diagnose output and accept the maintenance burden.
 
 Usage:
     from agent_xray.contrib.novviola import register
@@ -25,7 +35,8 @@ from agent_xray.diagnose import register_target_resolver
 # ROOT CAUSE -> NOVVIOLA FILE PATH MAPPING
 # ======================================================================
 # Every root cause from agent-xray's ROOT_CAUSES maps to concrete files
-# in the NOVVIOLA codebase. Sourced from diagnose_and_fix.py FIX_TARGETS.
+# in the NOVVIOLA codebase.  These paths require manual maintenance --
+# run ``agent-xray validate-targets --project-root .`` to check for drift.
 
 NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
     "routing_bug": [
@@ -227,6 +238,14 @@ def _extract_prompt_section_files(evidence: list[str]) -> list[str]:
 
 class NovviolaTargetResolver:
     """Resolve agent-xray root causes to NOVVIOLA-specific file paths.
+
+    .. warning::
+
+       This resolver returns **file paths** that require manual maintenance.
+       Unlike the default resolver (which returns codebase-agnostic concepts),
+       these paths go stale when the NOVVIOLA codebase refactors.  Run
+       ``agent-xray validate-targets --project-root .`` regularly to detect
+       drift.
 
     Implements the ``TargetResolver`` protocol from ``agent_xray.diagnose``.
     Maps every root cause to exact file paths in the NOVVIOLA codebase,

@@ -45,7 +45,7 @@ ROOT_CAUSES = {
         "description": (
             "The environment or target page changed in ways the runner could not handle."
         ),
-        "fix_hint": "Inspect selectors, retries, and timeout handling in the runner.",
+        "fix_hint": "Inspect selectors, retries, and timeout handling in the environment interaction layer.",
     },
     "tool_bug": {
         "label": "Tool Bug",

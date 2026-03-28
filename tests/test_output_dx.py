@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agent_xray.completeness import check_completeness
-from agent_xray.diagnose import FIX_TARGETS, SEVERITY_BY_ROOT_CAUSE, build_fix_plan
+from agent_xray.diagnose import FIX_TARGETS, INVESTIGATION_HINTS, SEVERITY_BY_ROOT_CAUSE, build_fix_plan
 from agent_xray.grader import grade_tasks, load_rules
 from agent_xray.root_cause import ROOT_CAUSES, RootCauseResult, classify_task
 from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
@@ -290,6 +290,8 @@ class TestUnclassifiedFallback:
         assert ROOT_CAUSES["unclassified"]["label"] == "Unclassified"
 
     def test_unclassified_in_fix_targets(self) -> None:
+        assert "unclassified" in INVESTIGATION_HINTS
+        # Backward-compatible alias still works
         assert "unclassified" in FIX_TARGETS
 
     def test_unclassified_in_severity_map(self) -> None:
