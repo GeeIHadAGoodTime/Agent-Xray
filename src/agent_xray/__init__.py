@@ -6,8 +6,11 @@ from .comparison import ModelComparisonResult, compare_model_runs, format_model_
 from .diagnose import (
     DefaultTargetResolver,
     FixPlanEntry,
+    TargetResolver,
     build_fix_plan,
     format_fix_plan_text,
+    get_target_resolver,
+    register_target_resolver,
 )
 from .grader import (
     GradeResult,
@@ -91,8 +94,11 @@ __all__ = [
     # Diagnosis / fix plan
     "DefaultTargetResolver",
     "FixPlanEntry",
+    "TargetResolver",
     "build_fix_plan",
     "format_fix_plan_text",
+    "get_target_resolver",
+    "register_target_resolver",
     # Surface / diff / tree
     "surface_for_task",
     "reasoning_for_task",

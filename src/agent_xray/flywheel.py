@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -18,6 +20,107 @@ from .signals import SignalDetector
 PASSING_GRADES = {"GOLDEN", "GOOD"}
 FAILING_GRADES = {"WEAK", "BROKEN"}
 DetectorHook = Callable[..., RootCauseResult | None]
+
+
+@dataclass(slots=True)
+class IntegrityLock:
+    """A file integrity record for drift detection during flywheel runs.
+
+    Attributes:
+        file_path: Path to the file being tracked.
+        expected_hash: SHA-256 hash recorded at flywheel start.
+        actual_hash: SHA-256 hash recorded at verification time.
+    """
+
+    file_path: str
+    expected_hash: str
+    actual_hash: str
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file's contents."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sha256_of_source(module: Any) -> str:
+    """Compute the SHA-256 hex digest of a module's source code."""
+    source = inspect.getsource(module)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _build_integrity_locks(
+    *,
+    rules_path: Path | None = None,
+    task_bank_paths: list[Path] | None = None,
+) -> list[IntegrityLock]:
+    """Build integrity locks for evaluator files at flywheel start."""
+    from . import grader as grader_module
+    from . import replay as replay_module
+
+    locks: list[IntegrityLock] = []
+
+    # Hash rules file
+    if rules_path is not None and rules_path.exists():
+        h = _sha256_of_file(rules_path)
+        locks.append(IntegrityLock(file_path=str(rules_path), expected_hash=h, actual_hash=h))
+
+    # Hash task bank files
+    for tb_path in task_bank_paths or []:
+        if tb_path.exists():
+            h = _sha256_of_file(tb_path)
+            locks.append(IntegrityLock(file_path=str(tb_path), expected_hash=h, actual_hash=h))
+
+    # Hash grader.py source
+    grader_hash = _sha256_of_source(grader_module)
+    locks.append(IntegrityLock(
+        file_path="agent_xray.grader",
+        expected_hash=grader_hash,
+        actual_hash=grader_hash,
+    ))
+
+    # Hash replay.py source
+    replay_hash = _sha256_of_source(replay_module)
+    locks.append(IntegrityLock(
+        file_path="agent_xray.replay",
+        expected_hash=replay_hash,
+        actual_hash=replay_hash,
+    ))
+
+    return locks
+
+
+def check_integrity(locks: list[IntegrityLock]) -> list[IntegrityLock]:
+    """Re-hash files and return any locks where the hash has changed.
+
+    Args:
+        locks: Integrity locks recorded at flywheel start.
+
+    Returns:
+        list[IntegrityLock]: Locks whose actual_hash no longer matches
+        expected_hash.  Empty list means no drift.
+    """
+    from . import grader as grader_module
+    from . import replay as replay_module
+
+    module_hashes = {
+        "agent_xray.grader": _sha256_of_source(grader_module),
+        "agent_xray.replay": _sha256_of_source(replay_module),
+    }
+
+    violated: list[IntegrityLock] = []
+    for lock in locks:
+        if lock.file_path in module_hashes:
+            current = module_hashes[lock.file_path]
+        else:
+            path = Path(lock.file_path)
+            if not path.exists():
+                current = ""
+            else:
+                current = _sha256_of_file(path)
+        lock.actual_hash = current
+        if current != lock.expected_hash:
+            violated.append(lock)
+    return violated
 
 
 @dataclass(slots=True)
@@ -187,9 +290,19 @@ def run_flywheel(
     baseline_path: Path | str | None = None,
     output_path: Path | str | None = None,
     detectors: list[SignalDetector] | list[DetectorHook] | None = None,
+    task_bank_paths: list[Path | str] | None = None,
 ) -> FlywheelResult:
     tasks = load_tasks(log_dir)
     rules = load_rules(rules_path)
+
+    # Build integrity locks at flywheel start
+    resolved_rules_path = Path(rules_path) if rules_path is not None else None
+    resolved_bank_paths = [Path(p) for p in (task_bank_paths or [])]
+    integrity_locks = _build_integrity_locks(
+        rules_path=resolved_rules_path,
+        task_bank_paths=resolved_bank_paths,
+    )
+
     signal_detectors = [
         detector for detector in (detectors or []) if isinstance(detector, SignalDetector)
     ]
@@ -197,6 +310,15 @@ def run_flywheel(
         task.task_id: analyze_task(task, detectors=signal_detectors or None) for task in tasks
     }
     grades = [grade_task(task, rules, analysis=analyses[task.task_id]) for task in tasks]
+
+    # Check integrity before grading phase (classification + fix plan)
+    violated = check_integrity(integrity_locks)
+    if violated:
+        changed = ", ".join(lock.file_path for lock in violated)
+        raise RuntimeError(
+            f"EVALUATION_DRIFT: evaluator files modified during flywheel run: {changed}"
+        )
+
     root_causes = _classify_failures_with_hooks(tasks, grades, analyses, detectors)
 
     current_distribution = _distribution(

@@ -64,7 +64,36 @@ def find_best_match(fixture: dict[str, Any], tasks: list[AgentTask]) -> AgentTas
     return best_match if best_score >= 0.4 else None
 
 
-def compare_fixture_to_task(fixture: dict[str, Any], task: AgentTask) -> dict[str, Any]:
+def _check_integrity_hashes(integrity_hashes: dict[str, str] | None) -> list[str]:
+    """Verify integrity hashes and return list of drifted file descriptions."""
+    if not integrity_hashes:
+        return []
+    from .flywheel import IntegrityLock, check_integrity
+
+    locks = [
+        IntegrityLock(file_path=path, expected_hash=h, actual_hash=h)
+        for path, h in integrity_hashes.items()
+    ]
+    violated = check_integrity(locks)
+    return [lock.file_path for lock in violated]
+
+
+def compare_fixture_to_task(
+    fixture: dict[str, Any],
+    task: AgentTask,
+    *,
+    integrity_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    # Check for evaluation drift before comparing
+    drifted = _check_integrity_hashes(integrity_hashes)
+    if drifted:
+        return {
+            "fixture_task_id": fixture.get("task_id"),
+            "current_task_id": task.task_id,
+            "verdict": "EVALUATION_DRIFT",
+            "detail": f"evaluator files changed during run: {', '.join(drifted)}",
+        }
+
     analysis = analyze_task(task)
     current_milestones = task_milestones(task)
     golden_milestones = [str(item) for item in fixture.get("milestones_reached", [])]
@@ -100,7 +129,12 @@ def compare_fixture_to_task(fixture: dict[str, Any], task: AgentTask) -> dict[st
     }
 
 
-def replay_fixture(fixture_path: str | Path, tasks: list[AgentTask]) -> dict[str, Any]:
+def replay_fixture(
+    fixture_path: str | Path,
+    tasks: list[AgentTask],
+    *,
+    integrity_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
     fixture = load_fixture(fixture_path)
     task = find_best_match(fixture, tasks)
     if task is None:
@@ -109,7 +143,7 @@ def replay_fixture(fixture_path: str | Path, tasks: list[AgentTask]) -> dict[str
             "verdict": "UNMATCHED",
             "detail": "no suitable task found in the current log selection",
         }
-    return compare_fixture_to_task(fixture, task)
+    return compare_fixture_to_task(fixture, task, integrity_hashes=integrity_hashes)
 
 
 def format_replay_text(result: dict[str, Any]) -> str:

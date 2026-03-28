@@ -391,3 +391,165 @@ def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:
     grade = grade_task(golden_task, load_rules(RULES_PATH))
     assert grade.grade == "GOLDEN"
     assert classify_task(golden_task, grade) is None
+
+
+def test_classify_valid_alternative_path() -> None:
+    """Task completed with diverse tools, no browser, enough steps -> valid_alternative_path."""
+    from agent_xray.schema import TaskOutcome
+
+    task = _task(
+        [
+            _step(1, "web_search", tool_input={"query": "LLC formation requirements"}),
+            _step(2, "read_url", tool_input={"url": "https://law.example.test/llc"}),
+            _step(3, "web_search", tool_input={"query": "registered agent services"}),
+            _step(
+                4,
+                "respond",
+                tool_result="Here is a comprehensive guide to forming an LLC...",
+            ),
+        ]
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="success",
+        total_steps=4,
+        total_duration_s=10.0,
+        final_answer="Detailed LLC guide.",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "valid_alternative_path"
+    assert cause.confidence == "high"
+    assert any("no browser tools" in e for e in cause.evidence)
+
+
+def test_valid_alternative_path_requires_completion() -> None:
+    """Incomplete tasks should NOT be classified as valid_alternative_path."""
+    task = _task(
+        [
+            _step(1, "web_search", tool_input={"query": "test"}),
+            _step(2, "read_url", tool_input={"url": "https://a.example.test"}),
+            _step(3, "web_search", tool_input={"query": "more"}),
+            _step(4, "respond", tool_result="partial"),
+        ]
+    )
+    # No outcome -> task_completed = False
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause != "valid_alternative_path"
+
+
+def test_valid_alternative_path_not_when_browser_used() -> None:
+    """Tasks using browser tools should not be valid_alternative_path."""
+    from agent_xray.schema import TaskOutcome
+
+    task = _task(
+        [
+            _step(1, "web_search", tool_input={"query": "test"}),
+            _step(2, "browser_navigate", tool_input={"url": "https://a.example.test"}),
+            _step(3, "read_url", tool_input={"url": "https://b.example.test"}),
+            _step(4, "respond", tool_result="done"),
+        ]
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="success",
+        total_steps=4,
+        total_duration_s=10.0,
+        final_answer="Done.",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause != "valid_alternative_path"
+
+
+def test_classify_consultative_success() -> None:
+    """Task completed with a long final answer -> consultative_success."""
+    from agent_xray.schema import TaskOutcome
+
+    long_answer = "A" * 250
+    # Use non-search tools to avoid triggering insufficient_sources
+    task = _task(
+        [
+            _step(1, "think", tool_input={"thought": "Analyzing LLC requirements"}),
+            _step(2, "respond", tool_result=long_answer),
+        ]
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="success",
+        total_steps=2,
+        total_duration_s=5.0,
+        final_answer=long_answer,
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "consultative_success"
+    assert cause.confidence == "high"
+    assert any("consultative" in e for e in cause.evidence)
+
+
+def test_consultative_success_requires_long_answer() -> None:
+    """Short answers should NOT be consultative_success."""
+    from agent_xray.schema import TaskOutcome
+
+    task = _task(
+        [
+            _step(1, "respond", tool_result="Yes."),
+        ]
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="success",
+        total_steps=1,
+        total_duration_s=1.0,
+        final_answer="Yes.",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause != "consultative_success"
+
+
+def test_valid_alternative_path_before_tool_selection_bug() -> None:
+    """valid_alternative_path should win over tool_selection_bug when task succeeded."""
+    from agent_xray.schema import TaskOutcome
+
+    task = _task(
+        [
+            _step(
+                1,
+                "web_search",
+                tool_input={"query": "checkout flow"},
+                tools_available=["web_search", "browser_navigate", "browser_click"],
+            ),
+            _step(
+                2,
+                "read_url",
+                tool_input={"url": "https://docs.example.test/guide"},
+                tools_available=["web_search", "browser_navigate", "browser_click"],
+            ),
+            _step(
+                3,
+                "web_search",
+                tool_input={"query": "payment page"},
+                tools_available=["web_search", "browser_navigate", "browser_click"],
+            ),
+            _step(
+                4,
+                "respond",
+                tool_result="Here is a comprehensive analysis.",
+                tools_available=["web_search", "browser_navigate", "browser_click"],
+            ),
+        ]
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="success",
+        total_steps=4,
+        total_duration_s=10.0,
+        final_answer="Comprehensive analysis.",
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    # Should be valid_alternative_path, not tool_selection_bug
+    assert cause.root_cause == "valid_alternative_path"

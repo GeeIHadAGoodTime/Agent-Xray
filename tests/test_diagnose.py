@@ -133,3 +133,97 @@ def test_fix_plan_to_dict():
     assert d["severity"] == 2
     assert "targets" in d
     assert d["verify_command"] == "agent-xray reasoning t1 | grep -i success"
+    assert "low_confidence" in d
+
+
+def test_fix_plan_low_confidence_flag_default():
+    """Root causes with fewer than 3 tasks (default min_sample_size) get low_confidence."""
+    results = [_result("t1", "spin", -5)]
+    plan = build_fix_plan(results)
+    assert len(plan) == 1
+    assert plan[0].low_confidence is True
+    assert any("LOW_CONFIDENCE" in e for e in plan[0].evidence)
+
+
+def test_fix_plan_low_confidence_above_threshold():
+    """Root causes meeting min_sample_size should NOT be low_confidence."""
+    results = [
+        _result("t1", "spin", -5),
+        _result("t2", "spin", -3),
+        _result("t3", "spin", -2),
+    ]
+    plan = build_fix_plan(results)
+    spin_entry = next(e for e in plan if e.root_cause == "spin")
+    assert spin_entry.low_confidence is False
+    assert not any("LOW_CONFIDENCE" in e for e in spin_entry.evidence)
+
+
+def test_fix_plan_custom_min_sample_size():
+    """Custom min_sample_size of 5 should flag groups with < 5 tasks."""
+    results = [
+        _result("t1", "spin", -5),
+        _result("t2", "spin", -3),
+        _result("t3", "spin", -2),
+    ]
+    plan = build_fix_plan(results, min_sample_size=5)
+    spin_entry = next(e for e in plan if e.root_cause == "spin")
+    assert spin_entry.low_confidence is True
+    assert any("LOW_CONFIDENCE" in e for e in spin_entry.evidence)
+
+
+def test_fix_plan_mixed_confidence():
+    """Groups above and below threshold should be flagged independently."""
+    results = [
+        _result("t1", "spin", -5),
+        _result("t2", "spin", -3),
+        _result("t3", "spin", -2),
+        _result("t4", "routing_bug", -1),
+    ]
+    plan = build_fix_plan(results)
+    spin_entry = next(e for e in plan if e.root_cause == "spin")
+    routing_entry = next(e for e in plan if e.root_cause == "routing_bug")
+    assert spin_entry.low_confidence is False
+    assert routing_entry.low_confidence is True
+
+
+def test_fix_plan_min_sample_size_one():
+    """min_sample_size=1 should never flag low_confidence."""
+    results = [_result("t1", "spin", -5)]
+    plan = build_fix_plan(results, min_sample_size=1)
+    assert plan[0].low_confidence is False
+
+
+def test_fix_plan_to_dict_includes_low_confidence():
+    """to_dict should include the low_confidence field."""
+    results = [_result("t1", "spin", -5)]
+    plan = build_fix_plan(results)
+    d = plan[0].to_dict()
+    assert d["low_confidence"] is True
+
+
+def test_format_fix_plan_text_shows_low_confidence():
+    """Low-confidence entries should show [LOW CONFIDENCE] in text output."""
+    plan = build_fix_plan([_result("t1", "spin", -5)])
+    text = format_fix_plan_text(plan)
+    assert "[LOW CONFIDENCE]" in text
+
+
+def test_format_fix_plan_text_no_low_confidence_tag():
+    """High-confidence entries should NOT show [LOW CONFIDENCE] in text output."""
+    results = [
+        _result("t1", "spin", -5),
+        _result("t2", "spin", -3),
+        _result("t3", "spin", -2),
+    ]
+    plan = build_fix_plan(results)
+    text = format_fix_plan_text(plan)
+    assert "[LOW CONFIDENCE]" not in text
+
+
+def test_fix_plan_new_root_causes_have_targets():
+    """valid_alternative_path and consultative_success should have targets."""
+    for cause in ("valid_alternative_path", "consultative_success"):
+        plan = build_fix_plan([_result("t1", cause, -1)])
+        assert len(plan) == 1
+        assert len(plan[0].targets) > 0
+        assert plan[0].severity == 0

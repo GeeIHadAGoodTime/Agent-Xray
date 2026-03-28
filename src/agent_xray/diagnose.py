@@ -92,6 +92,14 @@ FIX_TARGETS: dict[str, list[str]] = {
         "minimum source count requirements",
         "source diversity guidance in prompt",
     ],
+    "valid_alternative_path": [
+        "task expectation configuration (accept non-browser paths)",
+        "grading rules for alternative completion paths",
+    ],
+    "consultative_success": [
+        "task expectation configuration (accept consultative answers)",
+        "grading rules for consultative completions",
+    ],
 }
 """Default investigation targets keyed by root cause for the built-in target resolver."""
 
@@ -122,6 +130,8 @@ SEVERITY_BY_ROOT_CAUSE = {
     "test_failure_loop": 3,
     "tool_rejection_mismatch": 5,
     "insufficient_sources": 2,
+    "valid_alternative_path": 0,
+    "consultative_success": 0,
 }
 
 
@@ -221,6 +231,8 @@ def _verify_command_for(root_cause: str, task_id: str) -> str:
         "test_failure_loop": f"agent-xray surface {task_id} | grep test",
         "tool_rejection_mismatch": f"agent-xray surface {task_id} | grep rejected",
         "insufficient_sources": f"agent-xray surface {task_id} | grep search",
+        "valid_alternative_path": f"agent-xray surface {task_id} | grep tool_name",
+        "consultative_success": f"agent-xray reasoning {task_id}",
     }
     return commands.get(root_cause, f"agent-xray reasoning {task_id}")
 
@@ -240,6 +252,7 @@ class FixPlanEntry:
         fix_hint: Human-readable fix hint for the grouped failures.
         verify_command: Suggested CLI command for validating the fix.
         evidence: Sample evidence strings taken from the worst task.
+        low_confidence: Whether the sample size is below the minimum threshold.
     """
 
     priority: int
@@ -252,6 +265,7 @@ class FixPlanEntry:
     fix_hint: str
     verify_command: str
     evidence: list[str]
+    low_confidence: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the fix-plan entry into JSON-friendly data."""
@@ -266,6 +280,7 @@ class FixPlanEntry:
             "fix_hint": self.fix_hint,
             "verify_command": self.verify_command,
             "evidence": self.evidence,
+            "low_confidence": self.low_confidence,
         }
 
 
@@ -273,6 +288,7 @@ def build_fix_plan(
     results: list[RootCauseResult],
     *,
     target_resolver: str | TargetResolver | None = None,
+    min_sample_size: int = 3,
 ) -> list[FixPlanEntry]:
     """Build a prioritized fix plan from grouped root-cause classifications.
 
@@ -280,6 +296,9 @@ def build_fix_plan(
         results: Root-cause results to group into plan entries.
         target_resolver: Optional resolver name or resolver instance used to map
             root causes to investigation targets.
+        min_sample_size: Minimum number of tasks for a root cause to be
+            considered high confidence.  Groups below this threshold receive
+            a ``low_confidence`` flag and a warning in their evidence.
 
     Returns:
         list[FixPlanEntry]: Ranked fix-plan entries sorted by impact and
@@ -296,6 +315,13 @@ def build_fix_plan(
         if worst.prompt_section:
             resolver_evidence.append(f"prompt_section={worst.prompt_section}")
         targets = _resolve_targets(cause, resolver_evidence, target_resolver)
+        is_low_confidence = len(items) < min_sample_size
+        evidence = list(worst.evidence[:3])
+        if is_low_confidence:
+            evidence.append(
+                f"LOW_CONFIDENCE: only {len(items)} task(s) "
+                f"— verify on more examples before acting"
+            )
         plan.append(
             FixPlanEntry(
                 priority=0,
@@ -308,7 +334,8 @@ def build_fix_plan(
                 fix_hint=worst.prompt_fix_hint
                 or ROOT_CAUSES.get(cause, _UNKNOWN_ROOT_CAUSE)["fix_hint"],
                 verify_command=_verify_command_for(cause, worst.task_id),
-                evidence=worst.evidence[:3],
+                evidence=evidence,
+                low_confidence=is_low_confidence,
             )
         )
     plan.sort(key=lambda entry: (-entry.impact, -entry.severity))
@@ -330,9 +357,11 @@ def format_fix_plan_text(plan: list[FixPlanEntry]) -> str:
         return "No BROKEN or WEAK tasks found. Nothing to diagnose."
     lines = ["FIX PLAN", "=" * 60, ""]
     for entry in plan:
+        confidence_tag = " [LOW CONFIDENCE]" if entry.low_confidence else ""
         lines.append(
             f"Priority #{entry.priority}: {entry.root_cause} "
             f"(severity={entry.severity}/5, {entry.count} task(s), impact={entry.impact})"
+            f"{confidence_tag}"
         )
         lines.append(f"  Targets: {', '.join(entry.targets)}")
         lines.append(f"  Fix hint: {entry.fix_hint}")

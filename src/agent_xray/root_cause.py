@@ -57,6 +57,16 @@ ROOT_CAUSES = {
         "description": "A research task answered before gathering enough independent evidence.",
         "fix_hint": "Require more source gathering before synthesis and enforce source diversity.",
     },
+    "valid_alternative_path": {
+        "label": "Valid Alternative Path",
+        "description": "The task achieved its goal through a non-browser path (e.g., consultative research).",
+        "fix_hint": "No fix needed — reclassify task expectations to accept this path.",
+    },
+    "consultative_success": {
+        "label": "Consultative Success",
+        "description": "The task provided a well-reasoned consultative answer without browser interaction.",
+        "fix_hint": "No fix needed — task was answered consultatively with sufficient detail.",
+    },
     "tool_selection_bug": {
         "label": "Tool Selection Bug",
         "description": "The agent avoided the right tool despite having it.",
@@ -666,6 +676,50 @@ def _classify_insufficient_sources(
     return ("insufficient_sources", "high", evidence)
 
 
+def _classify_valid_alternative_path(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify tasks that achieved their goal through a non-browser path."""
+
+    del config
+    if not analysis.task_completed:
+        return None
+    if len(analysis.unique_tools) < 3:
+        return None
+    if analysis.step_count < 4:
+        return None
+    if _used_browser_tool(task):
+        return None
+    evidence = [
+        f"task completed with {len(analysis.unique_tools)} unique tools and {analysis.step_count} steps",
+        "no browser tools used — goal achieved through alternative path",
+    ]
+    return ("valid_alternative_path", "high", evidence)
+
+
+def _classify_consultative_success(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify tasks that provided a well-reasoned consultative answer."""
+
+    del task, config
+    if not analysis.task_completed:
+        return None
+    if not analysis.has_final_answer:
+        return None
+    if analysis.final_answer_length <= 200:
+        return None
+    evidence = [
+        f"task completed with final answer of {analysis.final_answer_length} characters",
+        "consultative answer provided with sufficient detail",
+    ]
+    return ("consultative_success", "high", evidence)
+
+
 def _classify_tool_selection_from_search_bias(
     task: AgentTask,
     analysis: TaskAnalysis,
@@ -900,6 +954,8 @@ def classify_task(
         _classify_spin,
         _classify_error_dominance,
         _classify_insufficient_sources,
+        _classify_valid_alternative_path,
+        _classify_consultative_success,
         _classify_tool_selection_from_search_bias,
         _classify_memory_overload,
         _classify_prompt_confusion,
