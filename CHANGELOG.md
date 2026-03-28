@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.4] - 2026-03-28
+
+### Fixed
+- **CRITICAL**: `task_failed` field added to `_compute_core_metrics()` in v1.2.2 but never added to `TaskAnalysis` dataclass, causing `TypeError` crash on any call to `analyze_task()` (affects all CLI commands and API usage)
+- `task_failed_penalty` rule in `default.json` was dead code (could never fire) due to the above crash; now operational
+- Completeness dimension count updated from 12 to 13 in tests to match the step-data-loss dimension added in v1.2.2
+
 ## [0.2.0] - 2026-03-27
 
 ### Added
