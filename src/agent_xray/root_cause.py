@@ -82,6 +82,11 @@ ROOT_CAUSES = {
         "description": "The task progressed, but the strategy or next action was still wrong.",
         "fix_hint": "Add a concrete example to the prompt or examples corpus.",
     },
+    "tool_rejection_mismatch": {
+        "label": "Tool Rejection Mismatch",
+        "description": "A needed tool was actively rejected by policy, preventing task completion.",
+        "fix_hint": "Review tool rejection policies and focused_set routing for this task type.",
+    },
     "prompt_bug": {
         "label": "Prompt Bug",
         "description": "The most likely remaining issue is misleading or incomplete instructions.",
@@ -747,6 +752,38 @@ def _classify_stuck_loop(
     return None
 
 
+def _classify_tool_rejection_mismatch(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify tasks where rejected tools were likely needed for success."""
+
+    del config
+    if not analysis.rejected_tool_count:
+        return None
+    # Collect all rejected tool names across the task
+    rejected_names: set[str] = set()
+    for step in task.steps:
+        if step.tools and step.tools.rejected_tools:
+            rejected_names.update(step.tools.rejected_tools)
+    if not rejected_names:
+        return None
+    # Check if rejection is significant (rejected in >50% of steps)
+    steps_with_rejection = sum(
+        1 for step in task.steps
+        if step.tools and step.tools.rejected_tools
+    )
+    rejection_rate = steps_with_rejection / max(1, len(task.steps))
+    if rejection_rate < 0.3:
+        return None
+    evidence = [
+        f"tools rejected in {steps_with_rejection}/{len(task.steps)} steps ({rejection_rate:.0%})",
+        f"rejected tools: {', '.join(sorted(rejected_names))}",
+    ]
+    return ("tool_rejection_mismatch", "medium", evidence)
+
+
 def _classify_early_abort(
     task: AgentTask,
     analysis: TaskAnalysis,
@@ -821,6 +858,7 @@ def classify_task(
     for classifier in (
         _classify_routing_bug,
         _classify_approval_block,
+        _classify_tool_rejection_mismatch,
         _classify_delegation_failure,
         _classify_test_failure_loop,
         _classify_spin,
@@ -847,7 +885,7 @@ def classify_task(
 
     _enrich_prompt_bug(result, task, analysis)
     result.evidence.append("fallback classification after excluding stronger operational causes")
-    result.confidence_score = _score_confidence("medium", result.evidence)
+    result.confidence_score = _score_confidence("low", result.evidence)
     result.confidence = _confidence_label_from_score(result.confidence_score)
     return result
 

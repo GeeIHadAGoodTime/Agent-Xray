@@ -36,6 +36,9 @@ MODEL_FIELD_NAMES = {
     "compaction_count",
     "input_tokens",
     "output_tokens",
+    "total_tokens",
+    "cache_read_tokens",
+    "cache_creation_tokens",
     "cost_usd",
     "compaction_method",
     "compaction_messages_before",
@@ -188,6 +191,9 @@ class ModelContext:
     compaction_count: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    total_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
     cost_usd: float | None = None
     compaction_method: str | None = None
     compaction_messages_before: int | None = None
@@ -280,6 +286,9 @@ MODEL_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
     "compaction_count": _coerce_optional_int,
     "input_tokens": _coerce_optional_int,
     "output_tokens": _coerce_optional_int,
+    "total_tokens": _coerce_optional_int,
+    "cache_read_tokens": _coerce_optional_int,
+    "cache_creation_tokens": _coerce_optional_int,
     "cost_usd": _coerce_optional_float,
     "compaction_method": _coerce_optional_str,
     "compaction_messages_before": _coerce_optional_int,
@@ -673,12 +682,15 @@ class AgentStep:
         if "llm_usage" in payload and isinstance(payload["llm_usage"], dict):
             usage = payload["llm_usage"]
             model_data = context_payloads.get("model", {})
-            if "input_tokens" not in model_data and "input_tokens" in usage:
-                model_data["input_tokens"] = usage["input_tokens"]
-            if "output_tokens" not in model_data and "output_tokens" in usage:
-                model_data["output_tokens"] = usage["output_tokens"]
-            if "total_tokens" not in model_data and "total_tokens" in usage:
-                model_data["total_tokens"] = usage["total_tokens"]
+            for token_field in (
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            ):
+                if token_field not in model_data and token_field in usage:
+                    model_data[token_field] = usage[token_field]
             context_payloads["model"] = model_data
 
         if (

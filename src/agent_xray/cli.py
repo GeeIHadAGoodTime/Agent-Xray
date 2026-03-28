@@ -669,14 +669,11 @@ def cmd_grade(args: argparse.Namespace) -> int:
                 parts = [f"{n} ({e}/{t}={e*100//t}%)" for n, e, t in broken_tools[:5]]
                 sections.append(f"Broken tools: {', '.join(parts)}")
 
-            # Data coverage warning
-            no_outcome = sum(1 for t in tasks if t.outcome is None)
-            if no_outcome > len(tasks) * 0.3:
-                pct = no_outcome * 100 // len(tasks)
-                sections.append(
-                    f"\nNote: {pct}% of tasks have no outcome record"
-                    " — add outcome events for better scoring."
-                )
+            # Data completeness analysis
+            from .completeness import check_completeness
+            completeness = check_completeness(tasks)
+            if completeness.warnings:
+                sections.append(f"\n{completeness.format_text()}")
 
             # Hints — use relative path when shorter
             try:
@@ -1055,6 +1052,37 @@ def cmd_record(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_completeness(args: argparse.Namespace) -> int:
+    """Check data completeness of agent traces."""
+    def _action() -> int:
+        from .completeness import check_completeness
+        tasks = _load_tasks_with_format(
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
+        )
+        report = check_completeness(tasks)
+        if args.json:
+            _dump({
+                "score_pct": report.score_pct,
+                "dimensions_checked": report.dimensions_checked,
+                "dimensions_ok": report.dimensions_ok,
+                "warnings": [
+                    {
+                        "dimension": w.dimension,
+                        "severity": w.severity,
+                        "message": w.message,
+                        "affected_pct": w.affected_pct,
+                        "fix_hint": w.fix_hint,
+                    }
+                    for w in report.warnings
+                ],
+            })
+        else:
+            _emit(report.format_text(), args, final=True)
+        return 0
+    return _run_command(args, _action)
+
+
 def cmd_rules_list(args: argparse.Namespace) -> int:
     """List available built-in rulesets."""
     from importlib.resources import files as pkg_files
@@ -1368,6 +1396,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--json", action="store_true", help="Output results as JSON")
     p_report.add_argument("--markdown", action="store_true", help="Output results as Markdown")
     p_report.set_defaults(func=cmd_report)
+
+    p_completeness = _add_subparser(
+        sub,
+        "completeness",
+        help_text="Check data completeness of agent traces",
+        example="agent-xray completeness ./traces --json",
+    )
+    p_completeness.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
+    p_completeness.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_format_option(p_completeness)
+    _add_pattern_option(p_completeness)
+    p_completeness.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_completeness.set_defaults(func=cmd_completeness)
 
     p_tui = _add_subparser(
         sub,

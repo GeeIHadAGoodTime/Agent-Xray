@@ -84,6 +84,15 @@ class TaskAnalysis:
     total_cost_usd: float
     avg_cost_per_step: float
     signal_metrics: dict[str, dict[str, Any]]
+    # New metrics — defaults preserve backward compat with manual construction
+    rejected_tool_count: int = 0
+    timed_out_flag: bool = False
+    suspicious_short_flag: bool = False
+    final_answer_length: int = 0
+    has_final_answer: bool = False
+    max_context_usage_pct: float = 0.0
+    cache_read_tokens_total: int = 0
+    cache_creation_tokens_total: int = 0
 
     @property
     def task_id(self) -> str:
@@ -166,6 +175,15 @@ class TaskAnalysis:
             # Tokens
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
+            # Data from production flags
+            "rejected_tool_count": self.rejected_tool_count,
+            "timed_out_flag": self.timed_out_flag,
+            "suspicious_short_flag": self.suspicious_short_flag,
+            "final_answer_length": self.final_answer_length,
+            "has_final_answer": self.has_final_answer,
+            "max_context_usage_pct": self.max_context_usage_pct,
+            "cache_read_tokens_total": self.cache_read_tokens_total,
+            "cache_creation_tokens_total": self.cache_creation_tokens_total,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics
@@ -337,6 +355,48 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         if error_kind == "unknown_tool":
             hallucinated_tools += 1
     total_cost = sum(_step_cost(step) for step in task.steps)
+    # Consume rejected_tools across all steps
+    rejected_tool_count = sum(
+        len(step.tools.rejected_tools or [])
+        for step in task.steps
+        if step.tools
+    )
+    # Consume production outcome flags
+    outcome_meta = task.outcome.metadata if task.outcome else {}
+    timed_out_flag = bool(outcome_meta.get("timed_out", False))
+    suspicious_short_flag = bool(outcome_meta.get("suspicious_short", False))
+    # Final answer analysis
+    final_answer = (task.outcome.final_answer or "") if task.outcome else ""
+    final_answer_length = len(final_answer.strip())
+    has_final_answer = final_answer_length > 0
+    # Context usage peak
+    context_usages = [
+        step.model.context_usage_pct
+        for step in task.steps
+        if step.model and step.model.context_usage_pct is not None
+    ]
+    # Also check final_context_usage_pct from outcome
+    final_ctx = outcome_meta.get("final_context_usage_pct")
+    if final_ctx is not None:
+        try:
+            context_usages.append(float(final_ctx))
+        except (TypeError, ValueError):
+            pass
+    max_context_usage_pct = max(context_usages) if context_usages else 0.0
+    # Normalize to percentage if in 0-1 range
+    if 0.0 < max_context_usage_pct <= 1.0:
+        max_context_usage_pct *= 100.0
+    # Cache token totals
+    cache_read_tokens_total = sum(
+        step.model.cache_read_tokens or 0
+        for step in task.steps
+        if step.model
+    )
+    cache_creation_tokens_total = sum(
+        step.model.cache_creation_tokens or 0
+        for step in task.steps
+        if step.model
+    )
     return {
         "unique_urls": urls,
         "unique_url_paths": url_paths,
@@ -351,7 +411,7 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "no_tools_steps": no_tools_steps,
         "site_name": extract_site_name(task),
         "final_url": urls[-1] if urls else "",
-        "timeout_like": (
+        "timeout_like": timed_out_flag or (
             task.outcome is not None
             and task.outcome.status
             in {"timeout", "max_iterations", "spin_terminated", "early_abort", "failed"}
@@ -363,6 +423,14 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "error_kinds": dict(error_kinds),
         "total_cost_usd": float(total_cost),
         "avg_cost_per_step": (float(total_cost) / len(task.steps)) if task.steps else 0.0,
+        "rejected_tool_count": rejected_tool_count,
+        "timed_out_flag": timed_out_flag,
+        "suspicious_short_flag": suspicious_short_flag,
+        "final_answer_length": final_answer_length,
+        "has_final_answer": has_final_answer,
+        "max_context_usage_pct": max_context_usage_pct,
+        "cache_read_tokens_total": cache_read_tokens_total,
+        "cache_creation_tokens_total": cache_creation_tokens_total,
     }
 
 

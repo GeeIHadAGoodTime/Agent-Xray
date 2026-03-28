@@ -21,6 +21,7 @@ from .schema import (
     TaskOutcome,
     ToolContext,
 )
+from .completeness import CompletenessReport, CompletenessWarning, check_completeness
 from .signals import SignalDetector, discover_detectors, run_detection
 from .surface import reasoning_for_task, surface_for_task
 
@@ -50,6 +51,9 @@ __all__ = [
     "load_rules",
     "normalize_score",
     "validate_rules",
+    "CompletenessReport",
+    "CompletenessWarning",
+    "check_completeness",
     "classify_task",
     "classify_failures",
     "surface_for_task",
@@ -58,4 +62,4 @@ __all__ = [
     "run_detection",
 ]
 
-__version__ = "1.0.8"
+__version__ = "1.1.0"
