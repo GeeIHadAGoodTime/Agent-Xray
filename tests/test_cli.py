@@ -35,6 +35,41 @@ def test_cmd_analyze_returns_output(tmp_trace_dir, capsys: pytest.CaptureFixture
     assert "Analyzed 4 task(s)" in captured.out
 
 
+def test_cmd_analyze_shows_task_bank_hint_when_not_provided(
+    tmp_trace_dir, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = cmd_analyze(
+        Namespace(log_dir=tmp_trace_dir, days=None, rules=None, format="auto", json=False)
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Tip: provide a task bank with --task-bank" in captured.out
+
+
+def test_cmd_analyze_no_task_bank_hint_when_provided(
+    tmp_trace_dir, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bank = tmp_path / "task_bank.json"
+    bank.write_text(json.dumps([{"task_id": "golden-task", "criteria": []}]), encoding="utf-8")
+    result = cmd_analyze(
+        Namespace(
+            log_dir=tmp_trace_dir,
+            days=None,
+            rules=None,
+            format="auto",
+            json=False,
+            task_bank=str(bank),
+            verbose=False,
+            quiet=False,
+            no_color=True,
+            pattern=None,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "--task-bank" not in captured.out
+
+
 def test_cmd_analyze_json_flag(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
     result = cmd_analyze(
         Namespace(log_dir=tmp_trace_dir, days=None, rules=None, format="auto", json=True)
@@ -113,6 +148,65 @@ def test_cmd_surface_task(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> 
     assert result == 0
     assert payload["task_id"] == "golden-task"
     assert payload["steps"][0]["tool_name"] == "browser_navigate"
+
+
+def test_cmd_surface_defaults_to_text(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
+    """BUG #7: Surface should default to text, not JSON."""
+    result = cmd_surface(
+        Namespace(
+            task_id="golden-task",
+            log_dir_opt=tmp_trace_dir,
+            days=None,
+            format="auto",
+            json=False,
+            output_format=None,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    # Text output should contain the human-readable header
+    assert "AGENT XRAY SURFACE:" in captured.out
+    assert "golden-task" in captured.out
+    # Should NOT be valid JSON
+    try:
+        json.loads(captured.out)
+        assert False, "Default output should be text, not JSON"
+    except json.JSONDecodeError:
+        pass  # Expected: text output is not JSON
+
+
+def test_cmd_surface_output_format_json(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
+    """BUG #7: --output-format json should produce JSON output."""
+    result = cmd_surface(
+        Namespace(
+            task_id="golden-task",
+            log_dir_opt=tmp_trace_dir,
+            days=None,
+            format="auto",
+            json=False,
+            output_format="json",
+        )
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["task_id"] == "golden-task"
+
+
+def test_cmd_surface_json_flag_still_works(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
+    """BUG #7: Legacy --json flag should still produce JSON output."""
+    result = cmd_surface(
+        Namespace(
+            task_id="golden-task",
+            log_dir_opt=tmp_trace_dir,
+            days=None,
+            format="auto",
+            json=True,
+            output_format=None,
+        )
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["task_id"] == "golden-task"
 
 
 def test_cmd_tree_output(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
@@ -508,13 +602,14 @@ def test_cmd_enforce_diff_outputs_preview(
 ) -> None:
     monkeypatch.setattr(
         "agent_xray.enforce.enforce_diff",
-        lambda project_root=".": {
+        lambda project_root=".", full=False: {
             "files": ["src/foo.py"],
             "file_count": 1,
             "diff_lines": ["+new line"],
             "diff_line_count": 1,
             "would_reject": False,
             "reject_reason": "",
+            "truncated": False,
         },
     )
 
@@ -523,6 +618,7 @@ def test_cmd_enforce_diff_outputs_preview(
             enforce_command="diff",
             json=False,
             project_root=".",
+            full=False,
             verbose=False,
             quiet=False,
             no_color=True,

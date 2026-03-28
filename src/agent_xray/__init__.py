@@ -118,6 +118,7 @@ except ImportError:
     mcp_main = None
     mcp_server = None
 from .surface import (
+    SimilarityBreakdown,
     diff_tasks,
     enriched_tree_for_tasks,
     format_diff_summary,
@@ -184,6 +185,7 @@ __all__ = [
     "register_target_resolver",
     "validate_fix_targets",
     # Surface / diff / tree
+    "SimilarityBreakdown",
     "surface_for_task",
     "reasoning_for_task",
     "diff_tasks",

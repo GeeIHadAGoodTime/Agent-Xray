@@ -1445,6 +1445,24 @@ def _cost_summary(tasks: list[AgentTask], analyses: dict[str, TaskAnalysis]) -> 
     }
 
 
+def _cost_data_unavailable(data: dict[str, Any]) -> bool:
+    """Return True when logs contain no model/token fields."""
+    summary = data["summary"]
+    return (
+        summary["tokens_in"] == 0
+        and summary["tokens_out"] == 0
+        and summary["cost_usd"] == 0.0
+        and summary["tasks"] > 0
+    )
+
+
+_COST_UNAVAILABLE_MSG = (
+    "Cost data unavailable — logs don't contain model/token fields.\n"
+    "To enable cost tracking, ensure your agent logs include "
+    "model_name, input_tokens, and output_tokens per step."
+)
+
+
 def report_cost(
     tasks: list[AgentTask],
     analyses: dict[str, TaskAnalysis],
@@ -1459,6 +1477,8 @@ def report_cost(
         A text report describing token and cost distribution.
     """
     data = _cost_summary(tasks, analyses)
+    if _cost_data_unavailable(data):
+        return f"COST ANALYSIS\n{'=' * 60}\n\n  {_COST_UNAVAILABLE_MSG}"
     summary = data["summary"]
     coverage = data["pricing_coverage"]
     lines = ["COST ANALYSIS", "=" * 60, ""]
@@ -1572,6 +1592,8 @@ def report_cost_markdown(
         A Markdown cost-analysis report.
     """
     data = _cost_summary(tasks, analyses)
+    if _cost_data_unavailable(data):
+        return f"## Cost Analysis\n\n{_COST_UNAVAILABLE_MSG}"
     summary = data["summary"]
     coverage = data["pricing_coverage"]
     coverage_line = (

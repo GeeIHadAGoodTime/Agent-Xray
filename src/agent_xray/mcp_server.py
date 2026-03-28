@@ -53,6 +53,7 @@ def enforce_init(
     Use this first, before any code change, when you want repeatable before/after evidence.
     Prerequisites: a git repo, a deterministic test command, and the correct project root.
     Common mistakes: using ad-hoc manual checks, pointing at flaky tests, or initializing after edits already exist.
+    Next step: call `enforce_plan` to register your hypothesis, then make one small edit and call `enforce_check`.
     """
     try:
         from agent_xray.enforce import EnforceConfig, enforce_init as run_enforce_init
@@ -83,6 +84,7 @@ def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
     Use this after exactly one small edit, ideally after `enforce_plan`, to measure real before/after movement.
     Prerequisites: an active session from `enforce_init` and the same deterministic test setup used for baseline.
     Common mistakes: batching unrelated edits, changing tests to make progress look better, or skipping hypothesis tracking.
+    Next step: if COMMITTED, call `enforce_plan` for the next hypothesis. If REVERTED, revise your approach and call `enforce_plan` again. After several iterations, call `enforce_challenge` to audit for gaming.
     """
     try:
         from agent_xray.enforce import enforce_check as run_enforce_check
@@ -97,9 +99,10 @@ def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
 def enforce_diff(project_root: str = ".") -> str:
     """Preview the current diff and whether enforce would reject it for scope before you spend a test run.
 
-    Use this between `plan` and `check` when you want to confirm the change still fits one-change-at-a-time discipline.
+    Use this between `enforce_plan` and `enforce_check` when you want to confirm the change still fits one-change-at-a-time discipline.
     Prerequisites: an enforce session is recommended, and `project_root` must point at the repo you are editing.
     Common mistakes: assuming a large multi-file diff is still a clean experiment or using this instead of `enforce_check`.
+    Next step: if the diff looks clean, call `enforce_check` to measure the change. If too large, split your edit first.
     """
     try:
         from agent_xray.enforce import enforce_diff as run_enforce_diff
@@ -120,6 +123,7 @@ def enforce_plan(
     Use this immediately after `enforce_init` or after a previous iteration is resolved, before touching files.
     Prerequisites: an active enforce session and a concrete, falsifiable hypothesis for one change.
     Common mistakes: vague hypotheses, predicting unrelated tests, or treating plan as optional when you want disciplined iteration history.
+    Next step: make exactly one small edit, optionally call `enforce_diff` to preview scope, then call `enforce_check` to measure the result.
     """
     try:
         from agent_xray.enforce import enforce_plan as run_enforce_plan
@@ -142,6 +146,7 @@ def enforce_guard(project_root: str = ".") -> str:
     Use this when an agent resumes work or before `enforce_check` if you suspect stray edits.
     Prerequisites: the target repo must be reachable via `project_root`.
     Common mistakes: assuming the working tree is clean because tests pass or ignoring edits created outside the tracked hypothesis.
+    Next step: if stray edits are found, revert or commit them before calling `enforce_plan` for your next hypothesis.
     """
     try:
         from agent_xray.enforce import enforce_guard as run_enforce_guard
@@ -158,6 +163,7 @@ def enforce_status(project_root: str = ".") -> str:
     Use this to rehydrate context before the next iteration or to inspect where the session currently stands.
     Prerequisites: an existing session under the target project root.
     Common mistakes: treating status as evidence of improvement instead of running `enforce_check`.
+    Next step: call `enforce_plan` to register your next hypothesis, or call `enforce_challenge` to audit cumulative progress.
     """
     try:
         from agent_xray.enforce import enforce_status as run_enforce_status
@@ -174,6 +180,7 @@ def enforce_challenge(project_root: str = ".") -> str:
     Use this after one or more checks to catch gaming, scope creep, repeated hot-file churn, and other cumulative failure modes.
     Prerequisites: an active session with recorded iterations.
     Common mistakes: relying on per-iteration checks alone or using challenge before any enforce history exists.
+    Next step: if clean, call `enforce_report` for a shareable summary. If gaming detected, revert suspect iterations and re-plan.
     """
     try:
         from agent_xray.enforce import enforce_challenge as run_enforce_challenge
@@ -191,6 +198,7 @@ def enforce_reset(project_root: str = ".") -> str:
     Use this only when you intentionally want to discard the current experiment and start a new baseline.
     Prerequisites: an existing session under the target project root.
     Common mistakes: resetting when you really wanted `challenge`, `status`, or a new `check` on the same experiment.
+    Next step: call `enforce_init` to start a fresh session with a new baseline.
     """
     try:
         from agent_xray.enforce import enforce_reset as run_enforce_reset
@@ -207,6 +215,7 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
     Use this after a session has real history and you want a shareable summary of baseline, iterations, gaming signals, and outcomes.
     Prerequisites: an existing enforce session and a valid format of `text`, `json`, or `markdown`.
     Common mistakes: calling it before initializing a session or treating the report as a substitute for per-iteration checks.
+    Next step: this is typically the last enforce action. Call `enforce_reset` if you want to start a new experiment.
     """
     try:
         from agent_xray.enforce import build_enforce_report
@@ -233,11 +242,12 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
 
 @server.tool()
 def analyze(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
-    """Load traces, analyze every task, and return per-task analysis plus grade summary.
+    """Start here. Analyze agent traces to get grade distribution, root causes, and a fix plan.
 
-    Use this near the start of trace triage when you want the broad picture before drilling into surfaces or root causes.
+    Use this near the start of trace triage when you want the broad picture before drilling into individual tasks.
     Prerequisites: a readable trace directory or JSONL file and, optionally, a valid ruleset name or path.
     Common mistakes: using analysis output as a substitute for deterministic task evaluation or forgetting to choose the correct trace format.
+    Next step: call `grade` for scored per-task details, then call `root_cause` to classify failures. Use `completeness` to verify trace quality if results look suspicious.
     """
     try:
         from agent_xray.analyzer import analyze_tasks
@@ -279,6 +289,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto") -> str:
     Use this after `analyze` when you need a scored view of which tasks are golden, weak, or broken.
     Prerequisites: a readable trace selection and a ruleset that matches the task domain.
     Common mistakes: grading the wrong task set, mixing incomparable runs, or assuming grades explain root cause by themselves.
+    Next step: call `root_cause` on the same traces to classify why tasks are failing. For individual task deep-dives, inspect specific task_ids from the results.
     """
     try:
         from agent_xray.grader import grade_tasks, load_rules
@@ -308,9 +319,10 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto") -> str:
 def root_cause(log_dir: str, rules: str = "default", format: str = "auto") -> str:
     """Classify weak or broken tasks into likely root causes and return grouped plus per-task results.
 
-    Use this after grading when you want an evidence-backed shortlist of likely failure modes to investigate next.
+    Use this after `grade` when you want an evidence-backed shortlist of likely failure modes to investigate next.
     Prerequisites: trace data that grades poorly enough to classify and a ruleset appropriate for the task domain.
     Common mistakes: skipping surface inspection on critical tasks or treating the classifier as ground truth instead of a ranked heuristic.
+    Next step: use the classified root causes to prioritize fixes. Call `completeness` if you suspect missing trace data is skewing results.
     """
     try:
         from agent_xray.grader import grade_tasks, load_rules
@@ -342,6 +354,7 @@ def completeness(log_dir: str, format: str = "auto") -> str:
     Use this before trusting grades, root-cause labels, or decision-surface output from a new integration.
     Prerequisites: a readable trace directory or JSONL file.
     Common mistakes: debugging agent behavior before confirming that prompt, tool, reasoning, and outcome data were actually captured.
+    Next step: if completeness is low, fix instrumentation gaps before re-running `analyze`. If completeness is high, proceed to `grade` and `root_cause` with confidence.
     """
     try:
         from agent_xray.completeness import check_completeness

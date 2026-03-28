@@ -521,6 +521,98 @@ class TestEnforceDiff:
         assert "diff lines exceeds limit of 1" in result["reject_reason"]
         assert "+new line" in result["diff_lines"]
 
+    def test_diff_truncates_large_output(self, tmp_path: Path):
+        cfg = EnforceConfig(test_command="pytest", project_root=str(tmp_path))
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        # Generate a diff with 80 lines (above the default 50 limit)
+        diff_body = "\n".join(f"+line {i}" for i in range(80))
+        diff_content = (
+            "diff --git a/big.py b/big.py\n"
+            "--- a/big.py\n"
+            "+++ b/big.py\n"
+            "@@ -1 +1,80 @@\n"
+            + diff_body
+        )
+
+        result = enforce_diff(
+            project_root=str(tmp_path),
+            _git_names_fn=lambda cwd: ["big.py"],
+            _git_diff_content_fn=lambda cwd: diff_content,
+        )
+
+        # Should truncate to 50 lines + truncation message
+        assert result["truncated"] is True
+        assert len(result["diff_lines"]) == 51  # 50 shown + 1 truncation msg
+        assert "[truncated" in result["diff_lines"][-1]
+        assert "more lines]" in result["diff_lines"][-1]
+
+    def test_diff_no_truncation_for_small_output(self, tmp_path: Path):
+        cfg = EnforceConfig(test_command="pytest", project_root=str(tmp_path))
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        result = enforce_diff(
+            project_root=str(tmp_path),
+            _git_names_fn=lambda cwd: ["small.py"],
+            _git_diff_content_fn=lambda cwd: (
+                "diff --git a/small.py b/small.py\n"
+                "+added\n"
+            ),
+        )
+
+        assert result["truncated"] is False
+        assert "[truncated" not in str(result["diff_lines"])
+
+    def test_diff_full_flag_disables_truncation(self, tmp_path: Path):
+        cfg = EnforceConfig(test_command="pytest", project_root=str(tmp_path))
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        diff_body = "\n".join(f"+line {i}" for i in range(80))
+        diff_content = (
+            "diff --git a/big.py b/big.py\n"
+            "--- a/big.py\n"
+            "+++ b/big.py\n"
+            "@@ -1 +1,80 @@\n"
+            + diff_body
+        )
+
+        result = enforce_diff(
+            project_root=str(tmp_path),
+            full=True,
+            _git_names_fn=lambda cwd: ["big.py"],
+            _git_diff_content_fn=lambda cwd: diff_content,
+        )
+
+        assert result["truncated"] is False
+        assert "[truncated" not in str(result["diff_lines"])
+        # All lines present: 4 header lines + 80 diff lines
+        assert len(result["diff_lines"]) == 84
+
+    def test_diff_custom_max_display_lines(self, tmp_path: Path):
+        cfg = EnforceConfig(test_command="pytest", project_root=str(tmp_path))
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        diff_body = "\n".join(f"+line {i}" for i in range(20))
+        diff_content = (
+            "diff --git a/med.py b/med.py\n"
+            "--- a/med.py\n"
+            "+++ b/med.py\n"
+            "@@ -1 +1,20 @@\n"
+            + diff_body
+        )
+
+        result = enforce_diff(
+            project_root=str(tmp_path),
+            max_display_lines=10,
+            _git_names_fn=lambda cwd: ["med.py"],
+            _git_diff_content_fn=lambda cwd: diff_content,
+        )
+
+        assert result["truncated"] is True
+        assert len(result["diff_lines"]) == 11  # 10 shown + 1 truncation msg
+        omitted = 24 - 10  # 4 header + 20 body = 24 total lines
+        assert f"[truncated — {omitted} more lines]" == result["diff_lines"][-1]
+
 
 # ---------------------------------------------------------------------------
 # enforce_status

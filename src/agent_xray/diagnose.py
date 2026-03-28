@@ -236,13 +236,14 @@ def _severity_for_root_cause(root_cause: str) -> int:
     return SEVERITY_BY_ROOT_CAUSE.get(root_cause, 2)
 
 
-def _verify_command_for(root_cause: str, task_id: str) -> str:
+def _verify_command_for(root_cause: str, task_id: str, log_dir: str | None = None) -> str:
+    dir_placeholder = log_dir if log_dir else "<dir>"
     commands = {
         "approval_block": f"agent-xray surface {task_id} | grep approval",
         "environment_drift": f"agent-xray surface {task_id} | grep page_url",
         "routing_bug": f"agent-xray surface {task_id} | grep tools_available",
         "tool_bug": f"agent-xray surface {task_id} | grep tools_available",
-        "spin": "agent-xray grade <dir> --rules default | grep SPIN",
+        "spin": f"agent-xray grade {dir_placeholder} --rules default | grep SPIN",
         "stuck_loop": f"agent-xray surface {task_id} | grep page_url",
         "tool_selection_bug": f"agent-xray surface {task_id} | grep tool_name",
         "early_abort": f"agent-xray reasoning {task_id} | grep -i success",
@@ -317,6 +318,7 @@ def build_fix_plan(
     *,
     target_resolver: str | TargetResolver | None = None,
     min_sample_size: int = 3,
+    log_dir: str | None = None,
 ) -> list[FixPlanEntry]:
     """Build a prioritized fix plan from grouped root-cause classifications.
 
@@ -327,6 +329,8 @@ def build_fix_plan(
         min_sample_size: Minimum number of tasks for a root cause to be
             considered high confidence.  Groups below this threshold receive
             a ``low_confidence`` flag and a warning in their evidence.
+        log_dir: Trace directory path.  When provided, replaces ``<dir>``
+            placeholders in generated verify commands with the actual path.
 
     Returns:
         list[FixPlanEntry]: Ranked fix-plan entries sorted by impact and
@@ -361,7 +365,7 @@ def build_fix_plan(
                 targets=targets,
                 fix_hint=worst.prompt_fix_hint
                 or ROOT_CAUSES.get(cause, _UNKNOWN_ROOT_CAUSE)["fix_hint"],
-                verify_command=_verify_command_for(cause, worst.task_id),
+                verify_command=_verify_command_for(cause, worst.task_id, log_dir=log_dir),
                 evidence=evidence,
                 low_confidence=is_low_confidence,
             )

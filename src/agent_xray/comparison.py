@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .analyzer import analyze_task, load_tasks
 from .grader import grade_task, load_rules
+from .root_cause import classify_task as classify_root_cause
 from .schema import GRADE_ORDER, AgentTask
 from .surface import surface_for_task
+
+_DATE_PATTERN = re.compile(r"(20\d{2}[-_]?\d{2}[-_]?\d{2})")
+_MODEL_PATTERN = re.compile(
+    r"(gpt[-_]?\d|claude[-_]?\d|gemini|llama|mistral|o[134][-_]|sonnet|opus|haiku)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -49,6 +57,12 @@ class ModelComparisonResult:
     right_cost: ModelCostSummary
     matched_tasks: int
     rules_name: str
+    comparison_type: str = "model"
+    comparison_header: str = ""
+    divergence_summary: dict[str, Any] = field(default_factory=dict)
+    left_root_cause_distribution: dict[str, int] = field(default_factory=dict)
+    right_root_cause_distribution: dict[str, int] = field(default_factory=dict)
+    root_cause_deltas: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -87,6 +101,97 @@ def _infer_label(tasks: list[AgentTask], fallback: str) -> str:
     if not names:
         return fallback
     return Counter(str(name) for name in names).most_common(1)[0][0]
+
+
+def _detect_comparison_type(
+    left_path: str | Path,
+    right_path: str | Path,
+    left_label: str,
+    right_label: str,
+) -> tuple[str, str]:
+    """Detect whether this is a day-vs-day or model-vs-model comparison.
+
+    Returns:
+        (comparison_type, header_string)
+    """
+    left_name = Path(left_path).name
+    right_name = Path(right_path).name
+
+    left_date = _DATE_PATTERN.search(left_name)
+    right_date = _DATE_PATTERN.search(right_name)
+    if left_date and right_date:
+        left_d = left_date.group(1).replace("_", "-")
+        right_d = right_date.group(1).replace("_", "-")
+        return "day", f"Day Comparison: {left_d} vs {right_d}"
+
+    left_model = _MODEL_PATTERN.search(left_name)
+    right_model = _MODEL_PATTERN.search(right_name)
+    if left_model and right_model:
+        return "model", f"Model Comparison: {left_label} vs {right_label}"
+
+    # Fall back: if the inferred labels look like model names, use model comparison
+    left_label_model = _MODEL_PATTERN.search(left_label)
+    right_label_model = _MODEL_PATTERN.search(right_label)
+    if left_label_model or right_label_model:
+        return "model", f"Model Comparison: {left_label} vs {right_label}"
+
+    return "run", f"Run Comparison: {left_label} vs {right_label}"
+
+
+def _build_divergence_summary(
+    left_distribution: dict[str, int],
+    right_distribution: dict[str, int],
+    grade_deltas: dict[str, int],
+    left_root_causes: dict[str, int],
+    right_root_causes: dict[str, int],
+    root_cause_deltas: dict[str, int],
+) -> dict[str, Any]:
+    """Build a summary of where the two runs diverge."""
+    summary: dict[str, Any] = {}
+
+    # Grade-level divergence
+    grade_shifts = {
+        grade: delta for grade, delta in grade_deltas.items() if delta != 0
+    }
+    has_grade_divergence = bool(grade_shifts)
+    summary["has_grade_divergence"] = has_grade_divergence
+    summary["grade_shifts"] = grade_shifts
+
+    left_total = sum(left_distribution.values())
+    right_total = sum(right_distribution.values())
+    if left_total and right_total:
+        left_golden_good = left_distribution.get("GOLDEN", 0) + left_distribution.get("GOOD", 0)
+        right_golden_good = right_distribution.get("GOLDEN", 0) + right_distribution.get("GOOD", 0)
+        left_pct = round(left_golden_good * 100 / left_total)
+        right_pct = round(right_golden_good * 100 / right_total)
+        summary["left_success_pct"] = left_pct
+        summary["right_success_pct"] = right_pct
+        summary["success_pct_delta"] = right_pct - left_pct
+
+    # Root cause divergence
+    rc_shifts = {
+        cause: delta for cause, delta in root_cause_deltas.items() if delta != 0
+    }
+    summary["has_root_cause_divergence"] = bool(rc_shifts)
+    summary["root_cause_shifts"] = rc_shifts
+
+    return summary
+
+
+def _root_cause_distribution(
+    tasks: list[AgentTask],
+    grades: dict[str, Any],
+) -> dict[str, int]:
+    """Compute root cause counts for BROKEN/WEAK tasks."""
+    counts: dict[str, int] = Counter()
+    for task in tasks:
+        grade = grades.get(task.task_id)
+        if grade is None:
+            continue
+        result = classify_root_cause(task, grade, analysis=analyze_task(task))
+        if result is not None:
+            counts[result.root_cause] += 1
+    return dict(counts)
 
 
 def _cost_summary(tasks: list[AgentTask], label: str) -> ModelCostSummary:
@@ -210,6 +315,29 @@ def compare_model_runs(
         if divergence is not None:
             divergences.append(divergence)
 
+    # BUG #9: Auto-detect comparison type from directory names
+    comparison_type, comparison_header = _detect_comparison_type(
+        left_log_dir, right_log_dir, left_label, right_label,
+    )
+
+    # BUG #5: Compute root cause distributions and divergence summary
+    left_rc_dist = _root_cause_distribution(left_tasks, left_grades)
+    right_rc_dist = _root_cause_distribution(right_tasks, right_grades)
+    all_causes = sorted(set(left_rc_dist) | set(right_rc_dist))
+    rc_deltas = {
+        cause: right_rc_dist.get(cause, 0) - left_rc_dist.get(cause, 0)
+        for cause in all_causes
+    }
+
+    divergence_summary = _build_divergence_summary(
+        left_distribution,
+        right_distribution,
+        grade_deltas,
+        left_rc_dist,
+        right_rc_dist,
+        rc_deltas,
+    )
+
     return ModelComparisonResult(
         left_label=left_label,
         right_label=right_label,
@@ -221,12 +349,20 @@ def compare_model_runs(
         right_cost=_cost_summary(right_tasks, right_label),
         matched_tasks=len(set(left_by_id) & set(right_by_id)),
         rules_name=rules.name,
+        comparison_type=comparison_type,
+        comparison_header=comparison_header,
+        divergence_summary=divergence_summary,
+        left_root_cause_distribution=left_rc_dist,
+        right_root_cause_distribution=right_rc_dist,
+        root_cause_deltas=rc_deltas,
     )
 
 
 def format_model_comparison(result: ModelComparisonResult) -> str:
+    # BUG #9: Use auto-detected header instead of always "Model Comparison"
+    header = result.comparison_header or f"Model Comparison: {result.left_label} vs {result.right_label}"
     lines = [
-        f"Model Comparison: {result.left_label} vs {result.right_label}",
+        header,
         "",
         "Grade Distribution:",
     ]
@@ -243,6 +379,47 @@ def format_model_comparison(result: ModelComparisonResult) -> str:
             f"  {grade_name:<7} {result.left_grade_distribution.get(grade_name, 0)} "
             f"-> {result.right_grade_distribution.get(grade_name, 0)} ({sign}{delta})"
         )
+
+    # BUG #5: Show divergence summary with delta values
+    ds = result.divergence_summary
+    if ds:
+        lines.extend(["", "Divergence Summary:"])
+        if ds.get("has_grade_divergence"):
+            shifts = ds.get("grade_shifts", {})
+            shift_parts = []
+            for grade, delta in shifts.items():
+                sign = "+" if delta > 0 else ""
+                shift_parts.append(f"{grade} {sign}{delta}")
+            lines.append(f"  Grade shifts: {', '.join(shift_parts)}")
+        else:
+            lines.append("  Grade distributions are identical.")
+        if "success_pct_delta" in ds:
+            delta_val = ds["success_pct_delta"]
+            sign = "+" if delta_val >= 0 else ""
+            lines.append(
+                f"  Success rate (GOLDEN+GOOD): "
+                f"{ds['left_success_pct']}% -> {ds['right_success_pct']}% ({sign}{delta_val}pp)"
+            )
+        if ds.get("has_root_cause_divergence"):
+            rc_shifts = ds.get("root_cause_shifts", {})
+            rc_parts = []
+            for cause, delta in rc_shifts.items():
+                sign = "+" if delta > 0 else ""
+                rc_parts.append(f"{cause} {sign}{delta}")
+            lines.append(f"  Root cause shifts: {', '.join(rc_parts)}")
+
+    # Root cause distribution section
+    if result.left_root_cause_distribution or result.right_root_cause_distribution:
+        lines.extend(["", "Root Cause Distribution:"])
+        all_causes = sorted(
+            set(result.left_root_cause_distribution) | set(result.right_root_cause_distribution)
+        )
+        for cause in all_causes:
+            left_count = result.left_root_cause_distribution.get(cause, 0)
+            right_count = result.right_root_cause_distribution.get(cause, 0)
+            delta = result.root_cause_deltas.get(cause, 0)
+            sign = "+" if delta >= 0 else ""
+            lines.append(f"  {cause:<25} {left_count} -> {right_count} ({sign}{delta})")
 
     lines.extend(["", "Divergence Points:"])
     if not result.divergences:

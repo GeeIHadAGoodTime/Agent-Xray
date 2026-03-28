@@ -229,3 +229,40 @@ def test_grade_tool(tmp_trace_dir: Path) -> None:
     assert payload["summary"]["tasks"] == 4
     assert payload["summary"]["distribution"]["GOLDEN"] >= 1
     assert any(task["grade"] == "BROKEN" for task in payload["tasks"])
+
+
+def test_mcp_tool_descriptions_include_flow_guidance() -> None:
+    """Every MCP tool docstring should include a 'Next step:' hint to guide analysis flow."""
+    module = importlib.import_module("agent_xray.mcp_server")
+
+    tool_names = [
+        "enforce_init",
+        "enforce_check",
+        "enforce_diff",
+        "enforce_plan",
+        "enforce_guard",
+        "enforce_status",
+        "enforce_challenge",
+        "enforce_reset",
+        "enforce_report",
+        "analyze",
+        "grade",
+        "root_cause",
+        "completeness",
+    ]
+    for name in tool_names:
+        tool_func = getattr(module, name)
+        doc = tool_func.__doc__
+        assert doc is not None, f"{name} has no docstring"
+        assert "Next step:" in doc, (
+            f"{name} docstring is missing 'Next step:' flow guidance"
+        )
+
+
+def test_analyze_description_says_start_here() -> None:
+    """The analyze tool should clearly signal it is the entry point for trace triage."""
+    module = importlib.import_module("agent_xray.mcp_server")
+
+    doc = module.analyze.__doc__
+    assert doc is not None
+    assert "Start here" in doc

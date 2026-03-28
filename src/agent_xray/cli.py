@@ -715,6 +715,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                     f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
                     " Use '--rules browser_flow' for domain-specific grading."
                 )
+            task_bank_path = getattr(args, "task_bank", None)
+            if not task_bank_path:
+                lines.append(
+                    "\nTip: provide a task bank with --task-bank for richer analysis"
+                    " (expected outcomes, known issues)."
+                )
             _emit("\n".join(lines), args, final=True)
         return 0
 
@@ -725,7 +731,8 @@ def cmd_surface(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load(args)
         data = surface_for_task(resolve_task(tasks, args.task_id))
-        if args.json:
+        output_fmt = getattr(args, "output_format", None) or ("json" if args.json else "text")
+        if output_fmt == "json":
             _dump(data)
         else:
             _emit(format_surface_text(data), args, final=True)
@@ -1461,7 +1468,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             grades,
             config=_classification_config_from_args(args),
         )
-        plan = build_fix_plan(classifications)
+        plan = build_fix_plan(classifications, log_dir=args.log_dir)
         project_root = getattr(args, "project_root", None) or os.environ.get(
             "AGENT_XRAY_PROJECT_ROOT"
         )
@@ -2281,7 +2288,8 @@ def cmd_enforce(args: argparse.Namespace) -> int:
 
         if subcmd == "diff":
             project_root = getattr(args, "project_root", None) or "."
-            result = enforce_diff(project_root=project_root)
+            full = getattr(args, "full", False)
+            result = enforce_diff(project_root=project_root, full=full)
             if use_json:
                 _dump(result)
             else:
@@ -2506,6 +2514,14 @@ def build_parser() -> argparse.ArgumentParser:
         _add_format_option(parser_)
         _add_pattern_option(parser_)
         parser_.add_argument("--json", action="store_true", help="Output results as JSON")
+        if name == "surface":
+            parser_.add_argument(
+                "--output-format",
+                dest="output_format",
+                choices=["text", "json"],
+                default=None,
+                help="Output format (default: text). Use 'json' for machine-readable output.",
+            )
         parser_.set_defaults(func=handler)
 
     p_diff = _add_subparser(
@@ -3212,6 +3228,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-root", default=".",
         help="Project root (default: .)",
     )
+    p_enf_diff.add_argument("--full", action="store_true", help="Show full diff without truncation")
     p_enf_diff.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_diff.set_defaults(func=cmd_enforce)
 

@@ -270,6 +270,8 @@ _IMPLICITLY_DOCUMENTED = {
     "FIX_TARGETS",
     "INVESTIGATION_HINTS",
     "TargetResolver",
+    # Types documented via their parent diff/comparison concepts
+    "SimilarityBreakdown",
     # Schema types documented via AgentStep/AgentTask sections
     "BrowserContext",
     "ModelContext",

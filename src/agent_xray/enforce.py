@@ -1184,30 +1184,54 @@ def enforce_plan(
     }
 
 
+DEFAULT_MAX_DISPLAY_LINES = 50
+"""Default maximum number of diff lines shown before truncation."""
+
+
 def enforce_diff(
     *,
     project_root: str | None = None,
+    max_display_lines: int = DEFAULT_MAX_DISPLAY_LINES,
+    full: bool = False,
     _git_names_fn: Any = None,
     _git_diff_content_fn: Any = None,
 ) -> dict[str, Any]:
-    """Preview the current diff against enforce change-size rules."""
+    """Preview the current diff against enforce change-size rules.
+
+    Args:
+        project_root: Project root directory.
+        max_display_lines: Maximum diff lines to include before truncating.
+            Defaults to ``DEFAULT_MAX_DISPLAY_LINES`` (50).
+        full: When ``True``, include every diff line regardless of
+            *max_display_lines*.
+    """
     config, _, _ = _load_session(project_root)
     names_fn = _git_names_fn or _git_diff_names
     diff_content_fn = _git_diff_content_fn or _git_diff_content
 
     files = names_fn(project_root)
     diff_content = diff_content_fn(project_root)
-    diff_lines = _diff_lines(diff_content)
+    all_lines = _diff_lines(diff_content)
     diff_line_count = _diff_line_count(diff_content)
     reject_reason = _change_reject_reason(config, files, diff_line_count)
+
+    truncated = False
+    if not full and len(all_lines) > max_display_lines:
+        display_lines = all_lines[:max_display_lines]
+        omitted = len(all_lines) - max_display_lines
+        display_lines.append(f"[truncated — {omitted} more lines]")
+        truncated = True
+    else:
+        display_lines = all_lines
 
     return {
         "files": files,
         "file_count": len(files),
-        "diff_lines": diff_lines,
+        "diff_lines": display_lines,
         "diff_line_count": diff_line_count,
         "would_reject": bool(reject_reason),
         "reject_reason": reject_reason,
+        "truncated": truncated,
     }
 
 

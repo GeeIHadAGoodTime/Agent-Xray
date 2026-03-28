@@ -220,7 +220,7 @@ def test_actions_empty():
     assert data["action_items"] == []
 
 
-# â”€â”€ Cost â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Cost â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 def test_cost_text_contains_header(all_tasks):
@@ -246,7 +246,56 @@ def test_cost_markdown_contains_table(all_tasks):
     assert "| Metric | Value |" in text
 
 
-# â”€â”€ Fixes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def test_cost_unavailable_when_no_tokens():
+    """BUG #13: Cost report should say 'unavailable' not show $0 tables."""
+    from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
+
+    # Create tasks with NO model/token data at all (common in production logs)
+    tasks = [
+        AgentTask(
+            task_id="no-tokens-1",
+            task_text="Do something",
+            steps=[
+                AgentStep("no-tokens-1", 1, "tool_a", {}, tool_result="ok"),
+                AgentStep("no-tokens-1", 2, "tool_b", {}, tool_result="done"),
+            ],
+            outcome=TaskOutcome(
+                task_id="no-tokens-1", status="success",
+                total_steps=2, total_duration_s=1.0,
+            ),
+        ),
+        AgentTask(
+            task_id="no-tokens-2",
+            task_text="Do another thing",
+            steps=[
+                AgentStep("no-tokens-2", 1, "tool_c", {}, tool_result="ok"),
+            ],
+            outcome=TaskOutcome(
+                task_id="no-tokens-2", status="success",
+                total_steps=1, total_duration_s=0.5,
+            ),
+        ),
+    ]
+    _, analyses = _prepare(tasks)
+
+    text = report_cost(tasks, analyses)
+    assert "unavailable" in text.lower()
+    assert "$0.00" not in text
+
+    md = report_cost_markdown(tasks, analyses)
+    assert "unavailable" in md.lower()
+    assert "$0.00" not in md
+
+
+def test_cost_available_with_tokens(all_tasks):
+    """When token data exists, cost report should show tables normally."""
+    _, analyses = _prepare(all_tasks)
+    text = report_cost(all_tasks, analyses)
+    assert "unavailable" not in text.lower() or "Pricing unavailable for" in text
+    assert "COST ANALYSIS" in text
+
+
+# â"€â"€ Fixes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 def test_fixes_text_contains_header(all_tasks):

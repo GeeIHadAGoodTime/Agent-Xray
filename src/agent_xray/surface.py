@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import difflib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from .analyzer import build_task_tree, summarize_tool_result
@@ -273,16 +273,45 @@ def _alignment_entry(
     }
 
 
+@dataclass
+class SimilarityBreakdown:
+    """Structured similarity metric for step-level task comparison.
+
+    Attributes:
+        tool_sequence_ratio: SequenceMatcher ratio on tool name sequences (0.0-1.0).
+        exact_signature_matches: Count of steps where tool_name, tool_input, page_url,
+            and error all matched exactly.
+        total_steps: Maximum step count across the two tasks.
+        tool_name_matches: Steps where the tool name matched (even if inputs differed).
+        tool_name_and_input_matches: Steps where both tool name and input matched.
+        score: Weighted composite score (0.0-1.0).
+        description: Human-readable summary of what matched.
+    """
+
+    tool_sequence_ratio: float
+    exact_signature_matches: int
+    total_steps: int
+    tool_name_matches: int
+    tool_name_and_input_matches: int
+    score: float
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def _aligned_steps(
     left_steps: list[dict[str, Any]],
     right_steps: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None, float]:
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, SimilarityBreakdown]:
     left_tool_names = [str(step.get("tool_name") or "") for step in left_steps]
     right_tool_names = [str(step.get("tool_name") or "") for step in right_steps]
     matcher = difflib.SequenceMatcher(a=left_tool_names, b=right_tool_names, autojunk=False)
     alignment: list[dict[str, Any]] = []
     divergence_point: dict[str, Any] | None = None
     exact_signature_matches = 0
+    tool_name_matches = 0
+    tool_name_and_input_matches = 0
 
     for tag, left_start, left_end, right_start, right_end in matcher.get_opcodes():
         if tag == "equal":
@@ -292,6 +321,9 @@ def _aligned_steps(
                 strict=True,
             ):
                 status = "match"
+                tool_name_matches += 1
+                if left_step.get("tool_input") == right_step.get("tool_input"):
+                    tool_name_and_input_matches += 1
                 if _step_signature(left_step) != _step_signature(right_step):
                     status = "changed"
                     if divergence_point is None:
@@ -322,9 +354,44 @@ def _aligned_steps(
             alignment.append(entry)
 
     max_steps = max(len(left_steps), len(right_steps))
-    exact_similarity = (exact_signature_matches / max_steps) if max_steps else 1.0
-    similarity_score = round((matcher.ratio() + exact_similarity) / 2, 3)
-    return alignment, divergence_point, similarity_score
+    tool_sequence_ratio = matcher.ratio()
+
+    # Weighted composite: tool sequence order matters most (50%),
+    # then exact signature matches (30%), then tool+input matches (20%).
+    if max_steps:
+        exact_ratio = exact_signature_matches / max_steps
+        name_input_ratio = tool_name_and_input_matches / max_steps
+        score = round(
+            0.5 * tool_sequence_ratio + 0.3 * exact_ratio + 0.2 * name_input_ratio,
+            3,
+        )
+    else:
+        score = 1.0
+
+    # Build human-readable description
+    if max_steps == 0:
+        description = "Both tasks have zero steps"
+    else:
+        parts = [
+            f"{exact_signature_matches} of {max_steps} steps are exact matches",
+            f"{tool_name_matches} of {max_steps} share the same tool name",
+        ]
+        if tool_name_and_input_matches != tool_name_matches:
+            parts.append(
+                f"{tool_name_and_input_matches} of {max_steps} share tool name and input"
+            )
+        description = "; ".join(parts)
+
+    breakdown = SimilarityBreakdown(
+        tool_sequence_ratio=round(tool_sequence_ratio, 3),
+        exact_signature_matches=exact_signature_matches,
+        total_steps=max_steps,
+        tool_name_matches=tool_name_matches,
+        tool_name_and_input_matches=tool_name_and_input_matches,
+        score=score,
+        description=description,
+    )
+    return alignment, divergence_point, breakdown
 
 
 def surface_for_task(
@@ -469,6 +536,17 @@ def surface_for_task(
             history.append(
                 {"role": "tool_result", "content": summarize_tool_result(step, limit=400)}
             )
+    # Summarize missing surfaces once at the task level instead of per-step noise.
+    total_steps = len(steps)
+    missing_counts: dict[str, int] = {}
+    for step_entry in steps:
+        for field in step_entry.get("missing_surfaces") or []:
+            missing_counts[field] = missing_counts.get(field, 0) + 1
+    missing_surfaces_summary = {
+        field: f"missing in {count}/{total_steps} steps"
+        for field, count in sorted(missing_counts.items())
+    }
+
     return {
         "task_id": task.task_id,
         "task_text": task.task_text,
@@ -478,6 +556,7 @@ def surface_for_task(
         "system_context_components": _system_components(task),
         "prior_conversation_summary": task.metadata.get("prior_conversation_summary"),
         "metadata": task.metadata,
+        "missing_surfaces_summary": missing_surfaces_summary,
         "steps": steps,
     }
 
@@ -547,7 +626,7 @@ def diff_tasks(
     right_surface = surface_for_task(
         right, prompt_builder=prompt_builder, tool_registry=tool_registry
     )
-    step_alignment, divergence_point, similarity_score = _aligned_steps(
+    step_alignment, divergence_point, similarity_breakdown = _aligned_steps(
         left_surface["steps"],
         right_surface["steps"],
     )
@@ -570,7 +649,9 @@ def diff_tasks(
         "right": right_surface,
         "diverged_at_step": diverged_at,
         "step_alignment": step_alignment,
-        "similarity_score": similarity_score,
+        # Keep backward-compatible float key, populated from the weighted score
+        "similarity_score": similarity_breakdown.score,
+        "similarity": similarity_breakdown.to_dict(),
         "divergence_point": divergence_point,
         "prompt_diff": prompt_diff,
     }
@@ -739,9 +820,14 @@ def format_diff_summary(diff_data: dict[str, Any]) -> str:
 
     lines.append(f"{'context_usage:':20s}{_max_context(left_steps):>18s}{_max_context(right_steps):>18s}")
 
-    similarity = diff_data.get("similarity_score")
-    if similarity is not None:
-        lines.append(f"{'similarity:':20s}{similarity:>18.3f}")
+    similarity_detail = diff_data.get("similarity")
+    if isinstance(similarity_detail, dict):
+        lines.append(f"{'similarity:':20s}{similarity_detail['score']:>18.3f}")
+        lines.append(f"  {similarity_detail['description']}")
+    else:
+        similarity = diff_data.get("similarity_score")
+        if similarity is not None:
+            lines.append(f"{'similarity:':20s}{similarity:>18.3f}")
 
     # Key differences
     differences = _detect_key_differences(diff_data)
@@ -900,16 +986,17 @@ def format_surface_text(surface: dict[str, Any]) -> str:
         lines.append("")
     if surface.get("prior_conversation_summary"):
         lines.extend(["PRIOR CONTEXT:", surface["prior_conversation_summary"], ""])
-    # Compute the common missing surfaces across all steps (show once, not per-step)
+    # Use the pre-computed task-level summary (BUG #8: summarize once, not per-step)
+    missing_summary = surface.get("missing_surfaces_summary") or {}
+    # Also compute _common_missing for per-step unique-missing display
     _all_missing: list[set[str]] = [
         set(step.get("missing_surfaces") or []) for step in surface["steps"]
     ]
     _common_missing = set.intersection(*_all_missing) if _all_missing else set()
-    if _common_missing:
-        lines.append(
-            f"Note: {len(_common_missing)} surfaces not recorded in any step: "
-            + ", ".join(sorted(_common_missing))
-        )
+    if missing_summary:
+        lines.append("MISSING SURFACES (task-level summary):")
+        for field, description in missing_summary.items():
+            lines.append(f"  {field}: {description}")
         lines.append("")
     for step in surface["steps"]:
         lines.extend(

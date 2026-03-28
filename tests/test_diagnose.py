@@ -301,3 +301,38 @@ def test_investigation_hints_backward_compat_alias():
     from agent_xray.diagnose import FIX_TARGETS, INVESTIGATION_HINTS
 
     assert FIX_TARGETS is INVESTIGATION_HINTS
+
+
+# ---------------------------------------------------------------------------
+# verify_command auto-fill (BUG #11)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_command_auto_fills_directory_when_log_dir_provided():
+    """When log_dir is passed, <dir> placeholders should be replaced."""
+    plan = build_fix_plan(
+        [_result("t1", "spin", -5)],
+        log_dir="./my_traces",
+    )
+    spin_entry = next(e for e in plan if e.root_cause == "spin")
+    assert "<dir>" not in spin_entry.verify_command
+    assert "./my_traces" in spin_entry.verify_command
+
+
+def test_verify_command_keeps_placeholder_without_log_dir():
+    """Without log_dir, <dir> placeholders should remain as-is."""
+    plan = build_fix_plan([_result("t1", "spin", -5)])
+    spin_entry = next(e for e in plan if e.root_cause == "spin")
+    assert "<dir>" in spin_entry.verify_command
+
+
+def test_verify_command_non_spin_unaffected_by_log_dir():
+    """Non-spin root causes should not gain <dir> or log_dir in their commands."""
+    plan = build_fix_plan(
+        [_result("t1", "tool_bug", -3)],
+        log_dir="/traces",
+    )
+    entry = plan[0]
+    # tool_bug uses surface command with task_id, not <dir>
+    assert "surface t1" in entry.verify_command
+    assert "<dir>" not in entry.verify_command
