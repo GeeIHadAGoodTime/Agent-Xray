@@ -150,6 +150,13 @@
       "equals": true,
       "points": -3,
       "reason": "-3 final answer explicitly reports failure"
+    },
+    {
+      "name": "consultative_response",
+      "metric": "is_consultative_response",
+      "equals": true,
+      "points": 2,
+      "reason": "+2 gave consultative response (may be incomplete if task expected action)"
     }
   ],
   "grade_thresholds": {

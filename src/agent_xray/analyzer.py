@@ -117,6 +117,23 @@ class TaskAnalysis:
     def task_id(self) -> str:
         return self.task.task_id
 
+    @property
+    def is_consultative_response(self) -> bool:
+        """True when the agent gave a short consultative answer without browser activity.
+
+        Prevents browser_flow rules from penalizing tasks where the correct
+        action was to ask a clarifying question (e.g., "file an LLC" -> "which state?").
+        """
+        if self.step_count > 3:
+            return False
+        if not self.task_completed:
+            return False
+        browser_tools = {"browser_navigate", "browser_click_ref", "browser_fill_form",
+                         "browser_snapshot", "browser_run_script", "desktop_click",
+                         "desktop_type"}
+        used_browser = any(t in browser_tools for t in self.unique_tools)
+        return not used_browser
+
     def __post_init__(self) -> None:
         if self.soft_error_kinds is None:
             self.soft_error_kinds = {}
@@ -224,6 +241,8 @@ class TaskAnalysis:
             "final_answer_indicates_failure": self.final_answer_indicates_failure,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
+            # Consultative response (no browser needed)
+            "is_consultative_response": self.is_consultative_response,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics

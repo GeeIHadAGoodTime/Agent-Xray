@@ -730,12 +730,52 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 def cmd_surface(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load(args)
-        data = surface_for_task(resolve_task(tasks, args.task_id))
+        task = resolve_task(tasks, args.task_id)
+        data = surface_for_task(task)
+
+        # Inject task bank expectations if provided
+        task_bank_path = getattr(args, "task_bank", None)
+        if task_bank_path:
+            from .analyzer import analyze_task
+            from .contrib.task_bank import (
+                evaluate_task_criteria,
+                load_task_bank,
+                match_task_to_bank,
+            )
+            bank = load_task_bank(task_bank_path)
+            analysis = analyze_task(task)
+            match = match_task_to_bank(task, bank, analysis=analysis)
+            if match:
+                criteria = match.get("success_criteria", {})
+                criterion_lines = evaluate_task_criteria(task, analysis, criteria)
+                data["task_bank_match"] = {
+                    "id": match.get("id", "unknown"),
+                    "category": match.get("category", ""),
+                    "expected_user_text": match.get("user_text", ""),
+                    "difficulty": match.get("difficulty", ""),
+                    "criteria_results": criterion_lines,
+                }
+
         output_fmt = getattr(args, "output_format", None) or ("json" if args.json else "text")
         if output_fmt == "json":
             _dump(data)
         else:
-            _emit(format_surface_text(data), args, final=True)
+            text = format_surface_text(data)
+            # Append task bank expectations if matched
+            bank_match = data.get("task_bank_match")
+            if bank_match:
+                lines = [
+                    "\n" + "=" * 72,
+                    "TASK BANK EXPECTATIONS (matched: %s)" % bank_match["id"],
+                    "=" * 72,
+                    "Expected: %s" % bank_match["expected_user_text"],
+                    "Category: %s  Difficulty: %s" % (bank_match["category"], bank_match["difficulty"]),
+                    "",
+                ]
+                for line in bank_match["criteria_results"]:
+                    lines.append("  %s" % line)
+                text += "\n".join(lines)
+            _emit(text, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -907,6 +947,12 @@ def cmd_grade(args: argparse.Namespace) -> int:
                 sections.append(
                     f"Tip: {web_count}/{len(tasks)} tasks are browser tasks."
                     " Use '--rules browser_flow' for domain-specific grading."
+                )
+            task_bank_path = getattr(args, "task_bank", None)
+            if not task_bank_path:
+                sections.append(
+                    "\nTip: provide a task bank with --task-bank for expectation-aware grading"
+                    " (checks must_reach_url, must_answer_contains, payment_fields_visible, etc.)."
                 )
             _emit("\n".join(sections), args, final=True)
         return 0
@@ -2521,6 +2567,10 @@ def build_parser() -> argparse.ArgumentParser:
                 choices=["text", "json"],
                 default=None,
                 help="Output format (default: text). Use 'json' for machine-readable output.",
+            )
+            parser_.add_argument(
+                "--task-bank",
+                help="Path to task_bank.json — shows matched expectations alongside surface data",
             )
         parser_.set_defaults(func=handler)
 

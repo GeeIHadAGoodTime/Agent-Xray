@@ -41,6 +41,14 @@ agent-xray grade traces.jsonl --rules browser_flow
 
 Applies a named rule set to the trace and produces a pass/fail verdict per rule. Use built-in rule sets (`browser_flow`, `payment_safety`, `tool_usage`) or point to your own. Grading turns a vague "it looked wrong" into a specific "rule X failed at step Y."
 
+**High-value path — expectation-aware grading:**
+
+```bash
+agent-xray grade traces.jsonl --rules browser_flow --task-bank task_bank.json
+```
+
+When you provide a task bank, grading matches each logged task to its bank entry and evaluates the defined success criteria (must_reach_url, must_answer_contains, payment_fields_visible, max_steps, etc.). This is the difference between "did the agent navigate?" (generic) and "did the agent reach the Wisconsin WDFI site and discuss registered agents?" (expectation-aware). Without `--task-bank`, you only get generic signal-based grading.
+
 ### Step 3: Root-cause analysis
 
 ```bash

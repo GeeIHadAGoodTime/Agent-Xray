@@ -283,3 +283,41 @@ def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
     assert restored.soft_error_kinds == {"soft_element_missing": 1}
     assert restored.final_answer_indicates_failure is False
     assert restored.task.task_id == analysis.task.task_id
+
+
+def test_consultative_response_detected_for_short_think_only_task() -> None:
+    """LLC-style task: 2 think steps, success, no browser tools -> consultative."""
+    task = _task(_step(0, "think"), _step(1, "think"))
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="completed",
+        final_answer="What state do you want to register the LLC in?",
+    )
+    analysis = analyze_task(task)
+    assert analysis.is_consultative_response is True
+    assert analysis.metrics()["is_consultative_response"] is True
+
+
+def test_consultative_response_false_when_browser_used() -> None:
+    """Task with browser navigation is not consultative even if short."""
+    task = _task(_step(0, "think"), _step(1, "browser_navigate"))
+    task.outcome = TaskOutcome(task_id=task.task_id, status="completed", final_answer="Done")
+    analysis = analyze_task(task)
+    assert analysis.is_consultative_response is False
+
+
+def test_consultative_response_false_when_many_steps() -> None:
+    """Long task is not consultative even without browser tools."""
+    steps = [_step(i, "think") for i in range(5)]
+    task = _task(*steps)
+    task.outcome = TaskOutcome(task_id=task.task_id, status="completed", final_answer="Done")
+    analysis = analyze_task(task)
+    assert analysis.is_consultative_response is False
+
+
+def test_consultative_response_false_when_task_failed() -> None:
+    """Failed short task is not consultative."""
+    task = _task(_step(0, "think"))
+    task.outcome = TaskOutcome(task_id=task.task_id, status="error", final_answer="Failed")
+    analysis = analyze_task(task)
+    assert analysis.is_consultative_response is False

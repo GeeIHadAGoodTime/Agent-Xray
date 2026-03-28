@@ -241,13 +241,14 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
 
 
 @server.tool()
-def analyze(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
+def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_bank: str | None = None) -> str:
     """Start here. Analyze agent traces to get grade distribution, root causes, and a fix plan.
 
     Use this near the start of trace triage when you want the broad picture before drilling into individual tasks.
     Prerequisites: a readable trace directory or JSONL file and, optionally, a valid ruleset name or path.
+    High-value path: provide task_bank (path to task_bank.json) for expectation-aware grading that checks each task against its defined success criteria.
     Common mistakes: using analysis output as a substitute for deterministic task evaluation or forgetting to choose the correct trace format.
-    Next step: call `grade` for scored per-task details, then call `root_cause` to classify failures. Use `completeness` to verify trace quality if results look suspicious.
+    Next step: call `grade` (with task_bank if available) for scored per-task details, then call `root_cause` to classify failures. Use `completeness` to verify trace quality if results look suspicious.
     """
     try:
         from agent_xray.analyzer import analyze_tasks
@@ -283,12 +284,13 @@ def analyze(log_dir: str, rules: str | None = None, format: str = "auto") -> str
 
 
 @server.tool()
-def grade(log_dir: str, rules: str = "default", format: str = "auto") -> str:
-    """Grade traces against a ruleset and return the distribution plus per-task details.
+def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
+    """Grade traces against a ruleset and return scored per-task details.
 
     Use this after `analyze` when you need a scored view of which tasks are golden, weak, or broken.
+    High-value path: provide task_bank (path to task_bank.json) for expectation-aware grading. This matches each task to its bank entry and evaluates success_criteria (must_reach_url, must_answer_contains, payment_fields_visible, etc.). Without task_bank, grading uses generic signals only.
     Prerequisites: a readable trace selection and a ruleset that matches the task domain.
-    Common mistakes: grading the wrong task set, mixing incomparable runs, or assuming grades explain root cause by themselves.
+    Common mistakes: grading without a task bank (misses expectation failures), mixing incomparable runs, or assuming grades explain root cause by themselves.
     Next step: call `root_cause` on the same traces to classify why tasks are failing. For individual task deep-dives, inspect specific task_ids from the results.
     """
     try:
@@ -296,21 +298,27 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto") -> str:
 
         tasks = _load_tasks(log_dir, format)
         rule_set = load_rules(rules)
-        grades = grade_tasks(tasks, rule_set)
+
+        if task_bank:
+            from agent_xray.contrib.task_bank import grade_with_task_bank
+            grades = grade_with_task_bank(tasks, task_bank, rule_set)
+        else:
+            grades = grade_tasks(tasks, rule_set)
+
         distribution: dict[str, int] = {}
         for result in grades:
             distribution[result.grade] = distribution.get(result.grade, 0) + 1
 
-        return _json_response(
-            {
-                "summary": {
-                    "tasks": len(tasks),
-                    "rules": rule_set.name,
-                    "distribution": distribution,
-                },
-                "tasks": [_serialize(result) for result in grades],
-            }
-        )
+        payload: dict[str, Any] = {
+            "summary": {
+                "tasks": len(tasks),
+                "rules": rule_set.name,
+                "task_bank": task_bank or "none (generic grading only)",
+                "distribution": distribution,
+            },
+            "tasks": [_serialize(result) for result in grades],
+        }
+        return _json_response(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
