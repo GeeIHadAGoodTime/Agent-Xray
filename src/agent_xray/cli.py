@@ -517,7 +517,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 pct = (count / total * 100) if total else 0.0
                 lines.append(f"  {label + ':':10s} {count:>3d}  ({pct:4.1f}%)")
             lines.append("")
-            lines.append(f"Run 'agent-xray grade {args.log_dir} --json' for per-task details.")
+            try:
+                rel = os.path.relpath(args.log_dir)
+                short_path = rel if len(rel) < len(str(args.log_dir)) else str(args.log_dir)
+            except ValueError:
+                short_path = str(args.log_dir)
+            lines.append(f"Run 'agent-xray grade {short_path} --json' for per-task details.")
             # Suggest domain-specific rules if most tasks are web/browser
             web_count = sum(
                 1 for t in tasks if t.task_category == "web"
@@ -624,7 +629,58 @@ def cmd_grade(args: argparse.Namespace) -> int:
         else:
             grade_text = _format_grade_summary(tasks, rules.name, grades, args)
             log_path = args.log_dir
-            hint = f"\nHint: Use 'agent-xray surface <task-id> --log-dir {log_path}' to inspect a specific task."
+            sections: list[str] = [grade_text]
+
+            # Root cause summary (the actionable headline)
+            if failures:
+                cause_counts = Counter(f.root_cause for f in failures)
+                top_causes = ", ".join(
+                    f"{cause} ({n})" for cause, n in cause_counts.most_common(5)
+                )
+                sections.append(f"\nTop issues: {top_causes}")
+
+            # Broken tools warning
+            tool_errors: dict[str, list[int]] = {}
+            for task in tasks:
+                for step in task.steps:
+                    name = step.tool_name
+                    if name:
+                        tool_errors.setdefault(name, [0, 0])
+                        tool_errors[name][1] += 1
+                        if step.error:
+                            tool_errors[name][0] += 1
+            broken_tools = [
+                (name, errs, total)
+                for name, (errs, total) in tool_errors.items()
+                if total >= 5 and errs / total >= 0.8
+            ]
+            if broken_tools:
+                broken_tools.sort(key=lambda x: -x[1] / x[2])
+                parts = [f"{n} ({e}/{t}={e*100//t}%)" for n, e, t in broken_tools[:5]]
+                sections.append(f"Broken tools: {', '.join(parts)}")
+
+            # Data coverage warning
+            no_outcome = sum(1 for t in tasks if t.outcome is None)
+            if no_outcome > len(tasks) * 0.3:
+                pct = no_outcome * 100 // len(tasks)
+                sections.append(
+                    f"\nNote: {pct}% of tasks have no outcome record"
+                    " — add outcome events for better scoring."
+                )
+
+            # Hints — use relative path when shorter
+            try:
+                rel = os.path.relpath(log_path)
+                short_path = rel if len(rel) < len(str(log_path)) else str(log_path)
+            except ValueError:
+                short_path = str(log_path)
+            sections.append(
+                f"\nNext: agent-xray report {short_path} actions  # what to fix first"
+            )
+            sections.append(
+                f"      agent-xray surface <task-id> {short_path}  # inspect a task"
+            )
+
             # Suggest domain-specific rules if most tasks are web/browser
             web_count = sum(
                 1 for t in tasks if t.task_category == "web"
@@ -632,11 +688,11 @@ def cmd_grade(args: argparse.Namespace) -> int:
             )
             using_default_rules = rules.name == "default"
             if web_count > len(tasks) * 0.4 and using_default_rules:
-                hint += (
-                    f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
+                sections.append(
+                    f"Tip: {web_count}/{len(tasks)} tasks are browser tasks."
                     " Use '--rules browser_flow' for domain-specific grading."
                 )
-            _emit(grade_text + hint, args, final=True)
+            _emit("\n".join(sections), args, final=True)
         return 0
 
     return _run_command(args, _action)

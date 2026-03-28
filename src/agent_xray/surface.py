@@ -608,6 +608,17 @@ def format_surface_text(surface: dict[str, Any]) -> str:
         lines.append("")
     if surface.get("prior_conversation_summary"):
         lines.extend(["PRIOR CONTEXT:", surface["prior_conversation_summary"], ""])
+    # Compute the common missing surfaces across all steps (show once, not per-step)
+    _all_missing: list[set[str]] = [
+        set(step.get("missing_surfaces") or []) for step in surface["steps"]
+    ]
+    _common_missing = set.intersection(*_all_missing) if _all_missing else set()
+    if _common_missing:
+        lines.append(
+            f"Note: {len(_common_missing)} surfaces not recorded in any step: "
+            + ", ".join(sorted(_common_missing))
+        )
+        lines.append("")
     for step in surface["steps"]:
         lines.extend(
             [
@@ -652,8 +663,10 @@ def format_surface_text(surface: dict[str, Any]) -> str:
             f"surface: completeness={step.get('completeness', 0.0):.3f} "
             f"missing={len(step.get('missing_surfaces') or [])}"
         )
-        if step.get("missing_surfaces"):
-            lines.append(f"  missing_surfaces: {', '.join(step['missing_surfaces'])}")
+        step_missing = set(step.get("missing_surfaces") or [])
+        unique_missing = step_missing - _common_missing
+        if unique_missing:
+            lines.append(f"  missing_surfaces: {', '.join(sorted(unique_missing))}")
         injections: list[str] = []
         if step.get("spin_intervention"):
             injections.append(f"SPIN: {step['spin_intervention']}")
