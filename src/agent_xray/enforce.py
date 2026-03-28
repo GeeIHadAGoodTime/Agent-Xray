@@ -801,10 +801,22 @@ def _evaluate_prediction(
     if not expected:
         return "no_prediction", [], list(improved), 0.0
 
-    correct = expected & actual_improved_set
+    # Match predicted names against actual improved using suffix matching.
+    # Users provide short names like "test_add" but pytest reports fully-qualified
+    # names like "tests/test_math.py::test_add". A predicted name matches if any
+    # actual improved name ends with it (after :: or /).
+    def _name_matches(predicted: str, actuals: set[str]) -> bool:
+        if predicted in actuals:
+            return True
+        for actual in actuals:
+            if actual.endswith("::" + predicted) or actual.endswith("/" + predicted):
+                return True
+        return False
+
+    correct = {e for e in expected if _name_matches(e, actual_improved_set)}
     match_pct = len(correct) / len(expected) * 100 if expected else 0.0
 
-    if expected == actual_improved_set:
+    if len(correct) == len(expected) and len(correct) == len(actual_improved_set):
         accuracy = "accurate"
     elif correct:
         accuracy = "partial"
@@ -1006,6 +1018,16 @@ def enforce_check(
     files_modified = diff_names_fn(project_root)
     diff_stat = diff_stat_fn(project_root)
     diff_content = diff_content_fn(project_root)
+
+    # Early return when there are no changes to evaluate
+    if not files_modified and not diff_content.strip():
+        return ChangeRecord(
+            iteration=iteration_num,
+            decision="NO_CHANGES",
+            hypothesis=hypothesis,
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     # GAP 4: Parse diff hunks
     diff_hunks = _parse_diff_hunks(diff_content)
