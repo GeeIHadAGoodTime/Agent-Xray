@@ -356,12 +356,12 @@ def test_cmd_enforce_check_shows_rejected_reason(
     )
     captured = capsys.readouterr()
     assert result == 0
-    assert "Iteration 1: REJECTED -" in captured.out
+    assert "Iteration 1: REJECTED (change too large) -" in captured.out
     assert "37 files exceeds limit of 5" in captured.out
     assert "Split this change into smaller iterations touching fewer files." in captured.out
 
 
-def test_cmd_enforce_check_shows_reverted_reason(
+def test_cmd_enforce_check_shows_gaming_reverted_reason(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -386,7 +386,35 @@ def test_cmd_enforce_check_shows_reverted_reason(
     )
     captured = capsys.readouterr()
     assert result == 0
-    assert "Iteration 1: REVERTED - Gaming detected" in captured.out
+    assert "Iteration 1: GAMING -> REVERTED - Gaming detected" in captured.out
+
+
+def test_cmd_enforce_check_shows_regression_reverted_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_check",
+        lambda hypothesis, project_root=None: _enforce_result(
+            decision="REVERTED",
+            audit_verdict="VALID",
+            audit_reasons=["Regressions detected: tests/test_api.py::test_alpha"],
+        ),
+    )
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="check",
+            json=False,
+            project_root=".",
+            hypothesis="",
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Iteration 1: REGRESSION -> REVERTED - Regressions detected" in captured.out
 
 
 def test_cmd_enforce_check_shows_committed_summary(
@@ -427,3 +455,82 @@ def test_enforce_auto_help_mentions_template_variables(
     help_text = capsys.readouterr().out
     assert "{failing_tests}" in help_text
     assert "{last_error}" in help_text
+
+
+def test_cmd_enforce_plan_accepts_space_separated_expected_tests(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_args: dict[str, object] = {}
+
+    def mock_enforce_plan(hypothesis: str, expected_tests: list[str], project_root: str = ".") -> dict[str, object]:
+        captured_args["hypothesis"] = hypothesis
+        captured_args["expected_tests"] = expected_tests
+        captured_args["project_root"] = project_root
+        return {
+            "hypothesis": hypothesis,
+            "expected_tests": expected_tests,
+            "status": "plan_registered",
+        }
+
+    monkeypatch.setattr("agent_xray.enforce.enforce_plan", mock_enforce_plan)
+
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="plan",
+            json=False,
+            project_root=".",
+            hypothesis="fix bug",
+            expected_tests=["test_foo", "test_bar,baz"],
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured_args["expected_tests"] == ["test_foo", "test_bar", "baz"]
+    assert "Expected tests: test_foo, test_bar, baz" in captured.out
+
+
+def test_enforce_plan_parser_accepts_repeated_expected_tests() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["enforce", "plan", "--hypothesis", "fix bug", "--expected-tests", "test_foo", "test_bar"]
+    )
+    assert args.expected_tests == ["test_foo", "test_bar"]
+
+
+def test_cmd_enforce_diff_outputs_preview(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_diff",
+        lambda project_root=".": {
+            "files": ["src/foo.py"],
+            "file_count": 1,
+            "diff_lines": ["+new line"],
+            "diff_line_count": 1,
+            "would_reject": False,
+            "reject_reason": "",
+        },
+    )
+
+    result = cmd_enforce(
+        Namespace(
+            enforce_command="diff",
+            json=False,
+            project_root=".",
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Files: 1" in captured.out
+    assert "Would reject: no" in captured.out
+    assert "+new line" in captured.out

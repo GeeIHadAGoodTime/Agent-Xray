@@ -78,6 +78,7 @@ from .enforce import (
     enforce_auto,
     enforce_challenge,
     enforce_check,
+    enforce_diff,
     enforce_guard,
     enforce_init,
     enforce_plan,
@@ -231,6 +232,7 @@ __all__ = [
     "EnforceReport",
     "enforce_init",
     "enforce_check",
+    "enforce_diff",
     "enforce_status",
     "enforce_challenge",
     "enforce_reset",
@@ -267,4 +269,4 @@ __all__ = [
     "mcp_main",
 ]
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"

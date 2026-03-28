@@ -55,6 +55,7 @@ class EnforceConfig:
     baseline_command: str | None = None
     project_root: str | None = None
     report_path: str | None = None
+    stash_first: bool = False
     # GAP 7: Change-size enforcement
     max_files_per_change: int = 5
     max_diff_lines: int = 200
@@ -392,12 +393,13 @@ def _run_shell(command: str, cwd: str | None = None) -> tuple[int, str]:
             command,
             shell=True,
             capture_output=True,
-            text=True,
+            text=False,
             cwd=cwd,
             timeout=600,
         )
-        output = result.stdout + result.stderr
-        return result.returncode, output
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        return result.returncode, stdout + stderr
     except subprocess.TimeoutExpired:
         return 1, "Command timed out after 600 seconds"
     except Exception as e:
@@ -419,13 +421,17 @@ def _filter_git_output_lines(output: str) -> list[str]:
 
 def _git_diff_stat(cwd: str | None = None) -> str:
     """Get git diff --stat for staged and unstaged changes."""
-    _, out = _run_shell("git diff --stat HEAD", cwd)
+    _, out = _run_shell(
+        f"git diff --stat HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+    )
     return "\n".join(_filter_git_output_lines(out))
 
 
 def _git_diff_names(cwd: str | None = None) -> list[str]:
     """Get list of modified file names."""
-    _, out = _run_shell("git diff --name-only HEAD", cwd)
+    _, out = _run_shell(
+        f"git diff --name-only HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+    )
     return _filter_git_output_lines(out)
 
 
@@ -466,9 +472,20 @@ def _git_stash_pop(cwd: str | None = None) -> bool:
     return code == 0
 
 
+def _git_has_uncommitted_changes(cwd: str | None = None) -> bool:
+    """Return True when the repo has tracked or untracked changes."""
+    _, out = _run_shell(
+        f"git status --porcelain --untracked-files=all -- . ':!{SESSION_DIR_NAME}'",
+        cwd,
+    )
+    return bool(_filter_git_output_lines(out))
+
+
 def _git_diff_content(cwd: str | None = None) -> str:
     """Get full diff content."""
-    _, out = _run_shell("git diff HEAD", cwd)
+    _, out = _run_shell(
+        f"git diff HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+    )
     return out
 
 
@@ -492,11 +509,37 @@ def _ensure_session_dir(project_root: str | None = None) -> Path:
     return d
 
 
+def _maybe_add_session_dir_to_gitignore(project_root: str | None = None) -> None:
+    """Append the session directory to .gitignore when the file already exists."""
+    root = Path(project_root) if project_root else Path.cwd()
+    gitignore_path = root / ".gitignore"
+    if not gitignore_path.exists():
+        return
+
+    content = gitignore_path.read_text(encoding="utf-8")
+    if SESSION_DIR_NAME in content:
+        return
+
+    prefix = ""
+    if content and not content.endswith(("\n", "\r")):
+        prefix = "\n"
+    gitignore_path.write_text(
+        f"{content}{prefix}{SESSION_DIR_NAME}/\n",
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Session persistence
 # ---------------------------------------------------------------------------
 
-def _save_session(config: EnforceConfig, baseline: TestResult, project_root: str | None) -> Path:
+def _save_session(
+    config: EnforceConfig,
+    baseline: TestResult,
+    project_root: str | None,
+    *,
+    stash_saved: bool = False,
+) -> Path:
     """Save session configuration and baseline."""
     sd = _ensure_session_dir(project_root)
     session_data = {
@@ -504,6 +547,7 @@ def _save_session(config: EnforceConfig, baseline: TestResult, project_root: str
         "started_at": datetime.now(timezone.utc).isoformat(),
         "iteration_count": 0,
         "head_hash_at_init": _git_head_hash(project_root),
+        "stash_saved": stash_saved,
     }
     (sd / "session.json").write_text(json.dumps(session_data, indent=2), encoding="utf-8")
     (sd / "baseline.json").write_text(json.dumps(baseline.to_dict(), indent=2), encoding="utf-8")
@@ -851,6 +895,41 @@ def compare_test_results(before: TestResult, after: TestResult) -> tuple[list[st
     return improved, regressed, unchanged
 
 
+def _diff_lines(diff_content: str) -> list[str]:
+    """Return the raw unified diff as individual lines."""
+    return diff_content.splitlines()
+
+
+def _diff_line_count(diff_content: str) -> int:
+    """Count only added/removed diff lines, excluding file headers."""
+    return len(
+        [
+            line
+            for line in diff_content.splitlines()
+            if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+        ]
+    )
+
+
+def _change_reject_reason(
+    config: EnforceConfig,
+    files_modified: list[str],
+    diff_line_count: int,
+) -> str:
+    """Return the size-based rejection reason, if any."""
+    if len(files_modified) > config.max_files_per_change:
+        return (
+            f"Change too large: {len(files_modified)} files exceeds limit of "
+            f"{config.max_files_per_change} -- break into smaller iterations"
+        )
+    if diff_line_count > config.max_diff_lines:
+        return (
+            f"Change too large: {diff_line_count} diff lines exceeds limit of "
+            f"{config.max_diff_lines} -- break into smaller iterations"
+        )
+    return ""
+
+
 def enforce_init(
     config: EnforceConfig,
     *,
@@ -863,8 +942,17 @@ def enforce_init(
     """
     project_root = config.project_root
     runner = _run_tests_fn or run_tests
+    sd = _ensure_session_dir(project_root)
+    _maybe_add_session_dir_to_gitignore(project_root)
+
+    stash_saved = False
+    if config.stash_first and _git_has_uncommitted_changes(project_root):
+        if not _git_stash(project_root):
+            raise RuntimeError("Failed to stash uncommitted changes before enforce init.")
+        stash_saved = True
+
     baseline = runner(config.baseline_command or config.test_command, project_root)
-    sd = _save_session(config, baseline, project_root)
+    _save_session(config, baseline, project_root, stash_saved=stash_saved)
     return baseline, sd
 
 
@@ -977,18 +1065,11 @@ def enforce_check(
     commit_hash = None
 
     # GAP 7: Change-size enforcement
-    diff_line_count = len([l for l in diff_content.splitlines() if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))])
-    if len(files_modified) > config.max_files_per_change:
+    diff_line_count = _diff_line_count(diff_content)
+    reject_reason = _change_reject_reason(config, files_modified, diff_line_count)
+    if reject_reason:
         decision = "REJECTED"
-        reasons.append(
-            f"Change too large: {len(files_modified)} files exceeds limit of {config.max_files_per_change} -- break into smaller iterations"
-        )
-        reasons.append("Guidance: Split this change into smaller iterations touching fewer files.")
-    elif diff_line_count > config.max_diff_lines:
-        decision = "REJECTED"
-        reasons.append(
-            f"Change too large: {diff_line_count} diff lines exceeds limit of {config.max_diff_lines} -- break into smaller iterations"
-        )
+        reasons.append(reject_reason)
         reasons.append("Guidance: Split this change into smaller iterations touching fewer files.")
     elif verdict == "GAMING":
         decision = "REVERTED"
@@ -1074,6 +1155,33 @@ def enforce_plan(
         "hypothesis": hypothesis,
         "expected_tests": expected,
         "status": "plan_registered",
+    }
+
+
+def enforce_diff(
+    *,
+    project_root: str | None = None,
+    _git_names_fn: Any = None,
+    _git_diff_content_fn: Any = None,
+) -> dict[str, Any]:
+    """Preview the current diff against enforce change-size rules."""
+    config, _, _ = _load_session(project_root)
+    names_fn = _git_names_fn or _git_diff_names
+    diff_content_fn = _git_diff_content_fn or _git_diff_content
+
+    files = names_fn(project_root)
+    diff_content = diff_content_fn(project_root)
+    diff_lines = _diff_lines(diff_content)
+    diff_line_count = _diff_line_count(diff_content)
+    reject_reason = _change_reject_reason(config, files, diff_line_count)
+
+    return {
+        "files": files,
+        "file_count": len(files),
+        "diff_lines": diff_lines,
+        "diff_line_count": diff_line_count,
+        "would_reject": bool(reject_reason),
+        "reject_reason": reject_reason,
     }
 
 
@@ -1190,6 +1298,11 @@ def enforce_reset(project_root: str | None = None) -> bool:
     """Reset/abandon the enforcement session."""
     sd = _session_dir(project_root)
     if sd.exists():
+        session_path = sd / "session.json"
+        if session_path.exists():
+            session_data = json.loads(session_path.read_text(encoding="utf-8"))
+            if session_data.get("stash_saved") and not _git_stash_pop(project_root):
+                raise RuntimeError("Failed to restore stashed changes during enforce reset.")
         shutil.rmtree(sd)
         return True
     return False

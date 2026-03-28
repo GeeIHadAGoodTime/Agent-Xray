@@ -263,7 +263,7 @@ def _select_enforce_reason(decision: str, reasons: list[str]) -> str:
         return ""
 
     preferred_terms = {
-        "REJECTED": ("change too large", "guidance:"),
+        "REJECTED": ("change too large", "rule_violation", "rule violation", "guidance:"),
         "REVERTED": ("gaming detected", "regressions detected", "net negative improvement"),
         "COMMITTED": ("validated", "no gaming", "no gaming signals detected"),
     }.get(decision, ())
@@ -300,10 +300,36 @@ def _format_enforce_check_summary(record: Any) -> str:
             else:
                 primary_reason = guidance_text
 
-    summary = f"Iteration {record.iteration}: {record.decision}"
+    summary_label = record.decision
+    if record.decision == "REJECTED":
+        if any("rule_violation" in reason.lower() or "rule violation" in reason.lower() for reason in record.audit_reasons):
+            summary_label = "REJECTED (rule violation)"
+        elif any("change too large" in reason.lower() for reason in record.audit_reasons):
+            summary_label = "REJECTED (change too large)"
+    elif record.decision == "REVERTED" and record.audit_verdict == "GAMING":
+        summary_label = "GAMING -> REVERTED"
+    elif record.decision == "REVERTED":
+        summary_label = "REGRESSION -> REVERTED"
+
+    summary = f"Iteration {record.iteration}: {summary_label}"
     if primary_reason:
         summary += f" - {primary_reason}"
     return summary
+
+
+def _normalize_expected_tests(value: Any) -> list[str]:
+    """Normalize `--expected-tests` input from argparse into a flat test list."""
+    if not value:
+        return []
+
+    raw_items = [value] if isinstance(value, str) else list(value)
+    expected: list[str] = []
+    for item in raw_items:
+        for part in str(item).split(","):
+            name = part.strip()
+            if name and name not in expected:
+                expected.append(name)
+    return expected
 
 
 def _run_command(args: argparse.Namespace, action: Callable[[], int]) -> int:
@@ -1979,6 +2005,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
             enforce_auto,
             enforce_challenge,
             enforce_check,
+            enforce_diff,
             enforce_guard,
             enforce_init,
             enforce_plan,
@@ -2008,6 +2035,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 git_auto_commit=not getattr(args, "no_git_commit", False),
                 git_auto_revert=not getattr(args, "no_git_revert", False),
                 project_root=getattr(args, "project_root", None) or ".",
+                stash_first=getattr(args, "stash_first", False),
                 max_files_per_change=getattr(args, "max_files_per_change", 5),
                 max_diff_lines=getattr(args, "max_diff_lines", 200),
                 rules_file=getattr(args, "rules_file", None),
@@ -2036,6 +2064,27 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 _dump(record.to_dict())
             else:
                 _emit(_format_enforce_check_summary(record), args, final=True)
+            return 0
+
+        if subcmd == "diff":
+            project_root = getattr(args, "project_root", None) or "."
+            result = enforce_diff(project_root=project_root)
+            if use_json:
+                _dump(result)
+            else:
+                lines = [
+                    f"Files: {result['file_count']}",
+                    f"Diff lines: {result['diff_line_count']}",
+                    f"Would reject: {'yes' if result['would_reject'] else 'no'}",
+                ]
+                if result["reject_reason"]:
+                    lines.append(f"Reason: {result['reject_reason']}")
+                if result["files"]:
+                    lines.append(f"Modified files: {', '.join(result['files'])}")
+                if result["diff_lines"]:
+                    lines.append("")
+                    lines.extend(result["diff_lines"])
+                _emit("\n".join(lines), args, final=True)
             return 0
 
         if subcmd == "status":
@@ -2132,8 +2181,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
         if subcmd == "plan":
             project_root = getattr(args, "project_root", None) or "."
             hypothesis = getattr(args, "hypothesis", "") or ""
-            expected_str = getattr(args, "expected_tests", "") or ""
-            expected_tests = [t.strip() for t in expected_str.split(",") if t.strip()] if expected_str else []
+            expected_tests = _normalize_expected_tests(getattr(args, "expected_tests", None))
             result = enforce_plan(hypothesis, expected_tests, project_root=project_root)
             if use_json:
                 _dump(result)
@@ -2841,6 +2889,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-git-revert", action="store_true",
         help="Don't auto-revert failed changes",
     )
+    p_enf_init.add_argument(
+        "--stash-first", action="store_true",
+        help="Temporarily stash uncommitted changes before capturing the baseline",
+    )
     p_enf_init.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_init.set_defaults(func=cmd_enforce)
 
@@ -2857,6 +2909,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_enf_check.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_check.set_defaults(func=cmd_enforce)
+
+    p_enf_diff = enforce_sub.add_parser(
+        "diff", help="Preview the current diff against enforce change-size limits"
+    )
+    p_enf_diff.add_argument(
+        "--project-root", default=".",
+        help="Project root (default: .)",
+    )
+    p_enf_diff.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_diff.set_defaults(func=cmd_enforce)
 
     p_enf_status = enforce_sub.add_parser(
         "status", help="Show current session status"
@@ -2973,7 +3035,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_enf_plan.add_argument(
         "--expected-tests",
-        help="Comma-separated list of test names expected to improve",
+        nargs="*",
+        help="Space-separated test names expected to improve; comma-separated values also work",
     )
     p_enf_plan.add_argument(
         "--project-root", default=".",

@@ -44,6 +44,7 @@ def enforce_init(
     test_command: str,
     project_root: str = ".",
     max_iterations: int = 50,
+    stash_first: bool = False,
     max_files_per_change: int = 5,
     max_diff_lines: int = 200,
 ) -> str:
@@ -55,6 +56,7 @@ def enforce_init(
             test_command=test_command,
             project_root=project_root,
             max_iterations=max_iterations,
+            stash_first=stash_first,
             max_files_per_change=max_files_per_change,
             max_diff_lines=max_diff_lines,
         )
@@ -77,6 +79,17 @@ def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
 
         record = run_enforce_check(hypothesis=hypothesis, project_root=project_root)
         return _json_response(_serialize(record))
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def enforce_diff(project_root: str = ".") -> str:
+    """Preview the current working-tree diff and whether enforce would reject it for size."""
+    try:
+        from agent_xray.enforce import enforce_diff as run_enforce_diff
+
+        return _json_response(run_enforce_diff(project_root=project_root))
     except Exception as e:
         return _json_response({"error": str(e)})
 

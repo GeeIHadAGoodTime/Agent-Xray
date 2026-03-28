@@ -150,6 +150,66 @@ def test_enforce_check_tool(tmp_path: Path) -> None:
     assert payload["commit_hash"]
 
 
+def test_enforce_init_tool_passes_stash_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_xray.mcp_server as mcp_server
+    from agent_xray.enforce import TestResult
+
+    captured: dict[str, object] = {}
+
+    def mock_enforce_init(config):
+        captured["stash_first"] = config.stash_first
+        return (
+            TestResult(
+                exit_code=0,
+                passed=1,
+                failed=0,
+                errors=0,
+                skipped=0,
+                total=1,
+                duration_seconds=0.1,
+                output="ok",
+            ),
+            Path("session-dir"),
+        )
+
+    monkeypatch.setattr("agent_xray.enforce.enforce_init", mock_enforce_init)
+
+    payload = json.loads(
+        mcp_server.enforce_init(
+            test_command="pytest",
+            project_root=".",
+            stash_first=True,
+        )
+    )
+
+    assert captured["stash_first"] is True
+    assert payload["session_dir"] == "session-dir"
+
+
+def test_enforce_diff_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_xray.mcp_server as mcp_server
+
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_diff",
+        lambda project_root=".": {
+            "files": ["src/foo.py"],
+            "file_count": 1,
+            "diff_lines": ["+new line"],
+            "diff_line_count": 1,
+            "would_reject": False,
+            "reject_reason": "",
+        },
+    )
+
+    payload = json.loads(mcp_server.enforce_diff(project_root="."))
+
+    assert payload["file_count"] == 1
+    assert payload["would_reject"] is False
+    assert payload["diff_lines"] == ["+new line"]
+
+
 def test_analyze_tool(tmp_trace_dir: Path) -> None:
     import agent_xray.mcp_server as mcp_server
 

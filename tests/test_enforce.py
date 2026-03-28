@@ -24,6 +24,7 @@ from agent_xray.enforce import (
     build_enforce_report,
     compare_test_results,
     enforce_check,
+    enforce_diff,
     enforce_init,
     enforce_reset,
     enforce_status,
@@ -329,6 +330,55 @@ class TestEnforceInit:
         assert (sd / "iterations").is_dir()
         assert (sd / "challenges").is_dir()
 
+    def test_stash_first_stashes_and_reset_pops(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        cfg = EnforceConfig(
+            test_command="pytest",
+            project_root=str(tmp_path),
+            stash_first=True,
+        )
+        calls = {"stash": 0, "pop": 0}
+
+        monkeypatch.setattr("agent_xray.enforce._git_has_uncommitted_changes", lambda cwd=None: True)
+        monkeypatch.setattr("agent_xray.enforce._git_head_hash", lambda cwd=None: "abc123")
+
+        def mock_stash(cwd=None):
+            calls["stash"] += 1
+            return True
+
+        def mock_pop(cwd=None):
+            calls["pop"] += 1
+            return True
+
+        monkeypatch.setattr("agent_xray.enforce._git_stash", mock_stash)
+        monkeypatch.setattr("agent_xray.enforce._git_stash_pop", mock_pop)
+
+        _, sd = enforce_init(cfg, _run_tests_fn=lambda cmd, cwd: _baseline())
+        session_data = json.loads((sd / "session.json").read_text(encoding="utf-8"))
+
+        assert calls["stash"] == 1
+        assert session_data["stash_saved"] is True
+        assert enforce_reset(str(tmp_path)) is True
+        assert calls["pop"] == 1
+
+    def test_init_adds_session_dir_to_existing_gitignore(self, tmp_path: Path):
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("node_modules/\n", encoding="utf-8")
+
+        cfg = _config(tmp_path)
+        enforce_init(cfg, _run_tests_fn=lambda cmd, cwd: _baseline())
+
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        assert ".agent-xray-enforce/" in lines
+
+    def test_init_does_not_create_gitignore(self, tmp_path: Path):
+        cfg = _config(tmp_path)
+        enforce_init(cfg, _run_tests_fn=lambda cmd, cwd: _baseline())
+        assert not (tmp_path / ".gitignore").exists()
+
 
 # ---------------------------------------------------------------------------
 # enforce_check
@@ -440,6 +490,36 @@ class TestEnforceCheck:
     def test_check_no_session(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
             enforce_check(project_root=str(tmp_path))
+
+
+class TestEnforceDiff:
+    def test_diff_preview_shows_rejection_for_large_change(self, tmp_path: Path):
+        cfg = EnforceConfig(
+            test_command="pytest",
+            project_root=str(tmp_path),
+            max_diff_lines=1,
+        )
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        result = enforce_diff(
+            project_root=str(tmp_path),
+            _git_names_fn=lambda cwd: ["src/foo.py"],
+            _git_diff_content_fn=lambda cwd: (
+                "diff --git a/src/foo.py b/src/foo.py\n"
+                "--- a/src/foo.py\n"
+                "+++ b/src/foo.py\n"
+                "@@ -1 +1 @@\n"
+                "-old line\n"
+                "+new line\n"
+            ),
+        )
+
+        assert result["files"] == ["src/foo.py"]
+        assert result["file_count"] == 1
+        assert result["diff_line_count"] == 2
+        assert result["would_reject"] is True
+        assert "diff lines exceeds limit of 1" in result["reject_reason"]
+        assert "+new line" in result["diff_lines"]
 
 
 # ---------------------------------------------------------------------------
