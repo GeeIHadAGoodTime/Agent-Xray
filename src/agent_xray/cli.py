@@ -418,14 +418,21 @@ def _populate_quickstart_dir(
     _emit_verbose(f"No bundled example traces found; wrote synthetic demo to {fallback_path}", args)
 
 
-def _load(args: argparse.Namespace) -> list[AgentTask]:
-    log_dir = (
-        getattr(args, "log_dir", None) or getattr(args, "log_dir_opt", None) or DEFAULT_LOG_DIR
+def _resolve_log_dir(args: argparse.Namespace) -> str:
+    return (
+        getattr(args, "log_dir", None)
+        or getattr(args, "log_dir_pos", None)
+        or getattr(args, "log_dir_opt", None)
+        or DEFAULT_LOG_DIR
     )
+
+
+def _load(args: argparse.Namespace) -> list[AgentTask]:
     return _load_tasks_with_format(
-        log_dir,
+        _resolve_log_dir(args),
         days=getattr(args, "days", None),
         format_name=getattr(args, "format", "auto"),
+        pattern=getattr(args, "pattern", None),
         settings=args,
     )
 
@@ -435,6 +442,7 @@ def _load_tasks_with_format(
     *,
     days: int | None = None,
     format_name: str = "auto",
+    pattern: str | None = None,
     settings: argparse.Namespace | CliSettings | None = None,
 ) -> list[AgentTask]:
     ui = _settings(settings)
@@ -442,14 +450,16 @@ def _load_tasks_with_format(
     if not path.exists():
         raise CliError(f"Directory not found: {path}. Run agent-xray quickstart for a demo.")
     _emit_verbose(
-        f"Loading traces from {path} (format={format_name}, days={days if days is not None else 'all'})",
+        f"Loading traces from {path} (format={format_name}, days={days if days is not None else 'all'}"
+        + (f", pattern={pattern}" if pattern else "")
+        + ")",
         ui,
     )
     started = perf_counter()
     if format_name != "auto":
         tasks = load_adapted_tasks(path, format=format_name, days=days)
     else:
-        tasks = load_tasks(path, days=days)
+        tasks = load_tasks(path, days=days, pattern=pattern)
         if not tasks:
             _emit_verbose("Native trace loader found no tasks; trying adapters.", ui)
             tasks = load_adapted_tasks(path, format="auto", days=days)
@@ -468,7 +478,8 @@ def _load_tasks_with_format(
 def cmd_analyze(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load_tasks_with_format(
-            args.log_dir, days=args.days, format_name=args.format, settings=args
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
         )
         started = perf_counter()
         rules = load_rules(args.rules) if args.rules else load_rules()
@@ -506,13 +517,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 pct = (count / total * 100) if total else 0.0
                 lines.append(f"  {label + ':':10s} {count:>3d}  ({pct:4.1f}%)")
             lines.append("")
-            lines.append("Run 'agent-xray grade <dir> --json' for per-task details.")
+            lines.append(f"Run 'agent-xray grade {args.log_dir} --json' for per-task details.")
             # Suggest domain-specific rules if most tasks are web/browser
             web_count = sum(
                 1 for t in tasks if t.task_category == "web"
                 or any(s.tool_name.startswith("browser_") for s in t.steps)
             )
-            if web_count > len(tasks) * 0.4 and not args.rules:
+            using_default_rules = rules.name == "default"
+            if web_count > len(tasks) * 0.4 and using_default_rules:
                 lines.append(
                     f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
                     " Use '--rules browser_flow' for domain-specific grading."
@@ -573,7 +585,8 @@ def cmd_diff(args: argparse.Namespace) -> int:
 def cmd_grade(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load_tasks_with_format(
-            args.log_dir, days=args.days, format_name=args.format, settings=args
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
         )
         started = perf_counter()
         rules = load_rules(args.rules)
@@ -610,13 +623,15 @@ def cmd_grade(args: argparse.Namespace) -> int:
             _dump(payload)
         else:
             grade_text = _format_grade_summary(tasks, rules.name, grades, args)
-            hint = "\nHint: Use 'agent-xray surface <task-id> --log-dir <dir>' to inspect a specific task."
+            log_path = args.log_dir
+            hint = f"\nHint: Use 'agent-xray surface <task-id> --log-dir {log_path}' to inspect a specific task."
             # Suggest domain-specific rules if most tasks are web/browser
             web_count = sum(
                 1 for t in tasks if t.task_category == "web"
                 or any(s.tool_name.startswith("browser_") for s in t.steps)
             )
-            if web_count > len(tasks) * 0.4 and not args.rules:
+            using_default_rules = rules.name == "default"
+            if web_count > len(tasks) * 0.4 and using_default_rules:
                 hint += (
                     f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
                     " Use '--rules browser_flow' for domain-specific grading."
@@ -983,6 +998,14 @@ def _add_format_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_pattern_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pattern",
+        help="Glob pattern to filter .jsonl files (e.g. 'agent-steps-*.jsonl'). "
+        "Without this, auto-detects files containing agent traces.",
+    )
+
+
 def _add_subparser(
     subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
@@ -1020,19 +1043,20 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Analyze a log directory",
         example="agent-xray analyze ./traces --rules browser_flow --json",
     )
-    p_analyze.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_analyze.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
     p_analyze.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     p_analyze.add_argument(
         "--rules",
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
     _add_format_option(p_analyze)
+    _add_pattern_option(p_analyze)
     p_analyze.add_argument("--json", action="store_true", help="Output results as JSON")
     p_analyze.set_defaults(func=cmd_analyze)
 
     for name, handler, example in (
-        ("surface", cmd_surface, "agent-xray surface task-123 --log-dir ./traces"),
-        ("reasoning", cmd_reasoning, "agent-xray reasoning task-123 --log-dir ./traces --json"),
+        ("surface", cmd_surface, "agent-xray surface task-123 ./traces"),
+        ("reasoning", cmd_reasoning, "agent-xray reasoning task-123 ./traces --json"),
     ):
         parser_ = _add_subparser(
             sub,
@@ -1042,12 +1066,17 @@ def build_parser() -> argparse.ArgumentParser:
         )
         parser_.add_argument("task_id", help="Task ID or prefix to search for")
         parser_.add_argument(
-            "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+            "log_dir_pos", nargs="?", default=None,
+            help="Directory or .jsonl file (also accepted via --log-dir)",
+        )
+        parser_.add_argument(
+            "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
         )
         parser_.add_argument(
             "--days", type=int, help="Include only the N most recent days of traces"
         )
         _add_format_option(parser_)
+        _add_pattern_option(parser_)
         parser_.add_argument("--json", action="store_true", help="Output results as JSON")
         parser_.set_defaults(func=handler)
 
@@ -1060,10 +1089,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("task_id_1", help="First task ID to compare")
     p_diff.add_argument("task_id_2", help="Second task ID to compare")
     p_diff.add_argument(
-        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+        "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
     )
     p_diff.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_diff)
+    _add_pattern_option(p_diff)
     p_diff.add_argument("--json", action="store_true", help="Output results as JSON")
     p_diff.set_defaults(func=cmd_diff)
 
@@ -1073,7 +1103,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Grade a log directory",
         example="agent-xray grade ./traces --rules browser_flow",
     )
-    p_grade.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_grade.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
     p_grade.add_argument(
         "--rules",
         default=str(DEFAULT_RULES_PATH),
@@ -1081,6 +1111,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_grade.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_grade)
+    _add_pattern_option(p_grade)
     p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
     p_grade.set_defaults(func=cmd_grade)
 
@@ -1088,13 +1119,18 @@ def build_parser() -> argparse.ArgumentParser:
         sub,
         "tree",
         help_text="Show a day/site/task tree",
-        example="agent-xray tree --log-dir ./traces",
+        example="agent-xray tree ./traces",
     )
     p_tree.add_argument(
-        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+        "log_dir", nargs="?", default=None,
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_tree.add_argument(
+        "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file (alternative to positional)",
     )
     p_tree.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_tree)
+    _add_pattern_option(p_tree)
     p_tree.add_argument("--json", action="store_true", help="Output results as JSON")
     p_tree.set_defaults(func=cmd_tree)
 
@@ -1106,10 +1142,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_capture.add_argument("task_id", help="Task ID or prefix to search for")
     p_capture.add_argument(
-        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+        "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
     )
     p_capture.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_capture)
+    _add_pattern_option(p_capture)
     p_capture.add_argument("--out", help="Output file path for captured fixture")
     p_capture.add_argument(
         "--no-sanitize", action="store_true", help="Disable PII sanitization in captured fixtures"
@@ -1125,10 +1162,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_replay.add_argument("fixture", help="Path to a captured fixture JSON file")
     p_replay.add_argument(
-        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+        "--log-dir", dest="log_dir_opt", help="Directory or .jsonl file containing agent traces"
     )
     p_replay.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_replay)
+    _add_pattern_option(p_replay)
     p_replay.add_argument("--json", action="store_true", help="Output results as JSON")
     p_replay.set_defaults(func=cmd_replay)
 
@@ -1138,7 +1176,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Run end-to-end grading, root-cause analysis, and baseline comparison",
         example="agent-xray flywheel ./traces --baseline ./baseline.json --json",
     )
-    p_flywheel.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_flywheel.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
     p_flywheel.add_argument(
         "--rules",
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
@@ -1149,6 +1187,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Previous flywheel JSON output used for grade delta and regression comparison",
     )
     p_flywheel.add_argument("--out", help="Output file path for flywheel results")
+    _add_pattern_option(p_flywheel)
     p_flywheel.add_argument("--json", action="store_true", help="Output results as JSON")
     p_flywheel.set_defaults(func=cmd_flywheel)
 
@@ -1173,7 +1212,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, compare)",
         example="agent-xray report ./traces health",
     )
-    p_report.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_report.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
     p_report.add_argument(
         "report_type",
         choices=[
@@ -1198,6 +1237,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_report.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_report)
+    _add_pattern_option(p_report)
     p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
     p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
     p_report.add_argument("--json", action="store_true", help="Output results as JSON")

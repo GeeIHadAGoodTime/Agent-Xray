@@ -415,10 +415,38 @@ def _extract_day(path: Path, payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _iter_jsonl_files(log_dir: Path, days: int | None = None) -> list[Path]:
+def _sniff_agent_trace(path: Path) -> bool:
+    """Check if a JSONL file contains agent traces by inspecting its first few lines."""
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as f:
+            for _, line in zip(range(5), f):
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                # Agent step files have task_id + (tool_name or event=agent_step/task_complete)
+                if row.get("task_id") and (
+                    row.get("tool_name")
+                    or row.get("event") in {"agent_step", "task_complete"}
+                ):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _iter_jsonl_files(
+    log_dir: Path, days: int | None = None, pattern: str | None = None
+) -> list[Path]:
     if log_dir.is_file():
         return [log_dir]
-    files = sorted(log_dir.glob("*.jsonl"))
+    glob_pat = pattern or "*.jsonl"
+    files = sorted(log_dir.glob(glob_pat))
+    if not pattern:
+        # Auto-filter: only keep files that actually contain agent traces
+        files = [f for f in files if _sniff_agent_trace(f)]
     if days and days > 0:
         return files[-days:]
     return files
@@ -467,12 +495,16 @@ def load_adapted_tasks(
     return [tasks[key] for key in sorted(tasks)]
 
 
-def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
+def load_tasks(
+    log_dir: str | Path, days: int | None = None, pattern: str | None = None
+) -> list[AgentTask]:
     """Load native agent-xray JSONL traces into normalized tasks.
 
     Args:
         log_dir: Directory or single ``.jsonl`` trace file to load.
         days: Optional number of most recent ``.jsonl`` files to include.
+        pattern: Glob pattern to filter files (e.g. ``"agent-steps-*.jsonl"``).
+            When omitted, auto-detects files containing agent traces.
 
     Returns:
         list[AgentTask]: Parsed tasks ordered by ``task_id``.
@@ -488,7 +520,8 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
     tasks: dict[str, AgentTask] = {}
     skipped = 0
     total = 0
-    for path in _iter_jsonl_files(root, days=days):
+    files = _iter_jsonl_files(root, days=days, pattern=pattern)
+    for path in files:
         with path.open(encoding="utf-8", errors="ignore") as handle:
             for line in handle:
                 total += 1
@@ -541,8 +574,20 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
                         if value is not None and key not in task.metadata:
                             task.metadata[key] = value
     if skipped > 0:
+        pct = skipped / total * 100 if total else 0
+        if skipped == total:
+            msg = (
+                f"load_tasks: all {total} lines lacked task_id — "
+                f"file may not contain agent traces. "
+                f"Try pointing at a specific agent step file or use pattern='agent-steps-*.jsonl'"
+            )
+        else:
+            msg = (
+                f"load_tasks: skipped {skipped}/{total} lines ({pct:.0f}%) "
+                f"without task_id (not agent step records)"
+            )
         warnings.warn(
-            f"load_tasks: skipped {skipped} unparseable lines out of {total} total",
+            msg,
             stacklevel=2,
         )
     return [tasks[key] for key in sorted(tasks)]
