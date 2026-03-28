@@ -525,7 +525,7 @@ class AgentStep:
     ) -> None:
         self.task_id = str(task_id)
         self.step = int(step)
-        self.tool_name = str(tool_name)
+        self.tool_name = str(tool_name) if tool_name is not None else ""
         self.tool_input = _coerce_dict(tool_input)
         self.tool_result = _coerce_optional_str(tool_result)
         self.error = _coerce_optional_str(error)
@@ -711,7 +711,7 @@ class AgentStep:
         return cls(
             task_id=_validate_task_id(payload),
             step=_validate_step(payload),
-            tool_name=str(payload.get("tool_name", "")),
+            tool_name=str(payload.get("tool_name") or ""),
             tool_input=_coerce_dict(payload.get("tool_input")),
             tool_result=_coerce_optional_str(payload.get("tool_result")),
             error=_coerce_optional_str(payload.get("error")),
@@ -882,7 +882,11 @@ class TaskOutcome:
         }
         return cls(
             task_id=str(payload.get("task_id", "")),
-            status=str(payload.get("outcome") or payload.get("status") or ""),
+            status=str(
+                payload["outcome"] if payload.get("outcome") is not None
+                else payload["status"] if payload.get("status") is not None
+                else ""
+            ),
             final_answer=_coerce_optional_str(payload.get("final_answer")),
             total_steps=_coerce_optional_int(payload.get("total_steps")),
             total_duration_s=_coerce_optional_float(payload.get("total_duration_s")),
