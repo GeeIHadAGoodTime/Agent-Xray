@@ -110,6 +110,12 @@ from .enforce_report import (
     format_enforce_text,
     generate_report,
 )
+try:
+    from .mcp_server import main as mcp_main
+    from .mcp_server import server as mcp_server
+except ImportError:
+    mcp_main = None
+    mcp_server = None
 from .surface import (
     diff_tasks,
     enriched_tree_for_tasks,
@@ -257,6 +263,8 @@ __all__ = [
     "format_enforce_json",
     "format_enforce_markdown",
     "generate_report",
+    "mcp_server",
+    "mcp_main",
 ]
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"

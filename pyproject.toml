@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-xray"
-version = "1.4.0"
+version = "1.5.0"
 description = "Local-first debugging, grading, and replay tooling for AI agent traces."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -96,6 +96,7 @@ all = [
   "anthropic>=0.39",
   "build>=1.2",
   "httpx>=0.24",
+  "mcp>=1.0",
   "mypy>=1.10",
   "openai>=1.0",
   "opentelemetry-api>=1.30",
@@ -110,6 +111,7 @@ dev = [
   "anthropic>=0.39",
   "build>=1.2",
   "httpx>=0.24",
+  "mcp>=1.0",
   "mypy>=1.10",
   "openai>=1.0",
   "opentelemetry-api>=1.30",
@@ -123,6 +125,7 @@ dev = [
 
 [project.scripts]
 agent-xray = "agent_xray.cli:main"
+agent-xray-mcp = "agent_xray.mcp_server:main"
 
 [project.entry-points.pytest11]
 agent_xray = "agent_xray.pytest_plugin"
@@ -165,6 +168,7 @@ addopts = "-ra"
 testpaths = ["tests"]
 markers = [
   "benchmark: performance benchmarks that can be skipped in fast CI",
+  "integration: end-to-end tests that exercise real external tools or subprocesses",
 ]
 
 [tool.coverage.run]

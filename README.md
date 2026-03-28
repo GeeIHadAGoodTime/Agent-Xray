@@ -273,7 +273,7 @@ AI agents left to fix failing tests will often game them: weaken assertions, ins
 
 ```bash
 # Initialize a session (captures baseline test results)
-agent-xray enforce init --test-cmd "pytest tests/ -q"
+agent-xray enforce init --test "pytest tests/ -q"
 
 # Agent makes a change, then checks in
 agent-xray enforce check
