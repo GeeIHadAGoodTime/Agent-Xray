@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,7 @@ class TaskAnalysis:
         site_name: Best-effort site or target label inferred from the task.
         final_url: Last visited URL, if any.
         timeout_like: Whether the run ended like a timeout or max-iteration stop.
+        task_completed: Whether the task outcome indicates successful completion.
         error_kinds: Error counts bucketed by classifier label.
         total_cost_usd: Sum of per-step costs in US dollars.
         avg_cost_per_step: Average step cost in US dollars.
@@ -77,10 +79,15 @@ class TaskAnalysis:
     site_name: str
     final_url: str
     timeout_like: bool
+    task_completed: bool
     error_kinds: dict[str, int]
     total_cost_usd: float
     avg_cost_per_step: float
     signal_metrics: dict[str, dict[str, Any]]
+
+    @property
+    def task_id(self) -> str:
+        return self.task.task_id
 
     @property
     def is_spin(self) -> bool:
@@ -140,6 +147,7 @@ class TaskAnalysis:
             "max_repeat_tool": self.max_repeat_tool,
             "is_spin": self.is_spin,
             "timeout_like": self.timeout_like,
+            "task_completed": self.task_completed,
             "total_duration_ms": self.total_duration_ms,
             "site_name": self.site_name,
             "final_url": self.final_url,
@@ -344,9 +352,14 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "site_name": extract_site_name(task),
         "final_url": urls[-1] if urls else "",
         "timeout_like": (
-            task.outcome is not None and task.outcome.status in {"timeout", "max_iterations"}
+            task.outcome is not None
+            and task.outcome.status
+            in {"timeout", "max_iterations", "spin_terminated", "early_abort", "failed"}
         )
         or len(task.steps) >= 75,
+        "task_completed": (
+            task.outcome is not None and task.outcome.status in {"success", "completed"}
+        ),
         "error_kinds": dict(error_kinds),
         "total_cost_usd": float(total_cost),
         "avg_cost_per_step": (float(total_cost) / len(task.steps)) if task.steps else 0.0,
@@ -473,19 +486,25 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
     if not root.exists():
         raise FileNotFoundError(f"log path does not exist: {root}")
     tasks: dict[str, AgentTask] = {}
+    skipped = 0
+    total = 0
     for path in _iter_jsonl_files(root, days=days):
         with path.open(encoding="utf-8", errors="ignore") as handle:
             for line in handle:
+                total += 1
                 try:
                     raw_payload = json.loads(line)
                 except json.JSONDecodeError:
+                    skipped += 1
                     continue
                 if not isinstance(raw_payload, dict):
+                    skipped += 1
                     continue
                 payload = {str(key): value for key, value in raw_payload.items()}
                 event = payload.get("event")
                 task_id = str(payload.get("task_id") or "")
                 if not task_id:
+                    skipped += 1
                     continue
                 task = tasks.setdefault(task_id, AgentTask(task_id=task_id))
                 if task.day is None:
@@ -521,6 +540,11 @@ def load_tasks(log_dir: str | Path, days: int | None = None) -> list[AgentTask]:
                         value = payload.get(key)
                         if value is not None and key not in task.metadata:
                             task.metadata[key] = value
+    if skipped > 0:
+        warnings.warn(
+            f"load_tasks: skipped {skipped} unparseable lines out of {total} total",
+            stacklevel=2,
+        )
     return [tasks[key] for key in sorted(tasks)]
 
 

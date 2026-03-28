@@ -58,4 +58,4 @@ __all__ = [
     "run_detection",
 ]
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"

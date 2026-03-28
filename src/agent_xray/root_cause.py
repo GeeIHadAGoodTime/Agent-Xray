@@ -799,7 +799,13 @@ def classify_task(
     """Classify a single BROKEN or WEAK task into its most likely root cause."""
 
     if grade.grade not in {"BROKEN", "WEAK"}:
-        return None
+        # Still classify if task outcome indicates failure despite grade
+        if not (
+            task.outcome
+            and task.outcome.status
+            in {"spin_terminated", "early_abort", "failed", "timeout", "max_iterations"}
+        ):
+            return None
     cfg = config or _DEFAULT_CONFIG
     analysis = analysis or analyze_task(task)
     result = RootCauseResult(

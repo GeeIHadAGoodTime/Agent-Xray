@@ -133,7 +133,7 @@ def test_cli_compare_subprocess(
     payload = _json_output(result)
     assert result.returncode == 0
     assert payload["matched_tasks"] == 1
-    assert payload["grade_deltas"]["GOOD"] == 1
+    assert payload["grade_deltas"]["GOLDEN"] == 1
 
 
 def test_cli_report_subprocess(tmp_trace_dir: Path) -> None:

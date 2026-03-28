@@ -498,8 +498,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         if args.json:
             _dump(payload)
         else:
-            _emit(f"Analyzed {summary['tasks']} task(s) with rules={rules.name}", args, final=True)
-            _emit(str(grade_distribution), args, final=True)
+            total_steps = sum(len(t.steps) for t in tasks)
+            total = summary["tasks"]
+            lines = [f"Analyzed {total} task(s) across {total_steps} step(s)", ""]
+            for label in GRADE_LABELS:
+                count = grade_distribution[label]
+                pct = (count / total * 100) if total else 0.0
+                lines.append(f"  {label + ':':10s} {count:>3d}  ({pct:4.1f}%)")
+            lines.append("")
+            lines.append("Run 'agent-xray grade <dir> --json' for per-task details.")
+            _emit("\n".join(lines), args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -559,7 +567,11 @@ def cmd_grade(args: argparse.Namespace) -> int:
         )
         started = perf_counter()
         rules = load_rules(args.rules)
+        if not args.json:
+            print(f"Grading {len(tasks)} task(s)...", file=sys.stderr, flush=True)
         grades = grade_tasks(tasks, rules)
+        if not args.json:
+            print("Done.", file=sys.stderr, flush=True)
         failures = classify_failures(tasks, grades)
         distribution = _grade_distribution(grades)
         summary = {
@@ -587,7 +599,9 @@ def cmd_grade(args: argparse.Namespace) -> int:
         if args.json:
             _dump(payload)
         else:
-            _emit(_format_grade_summary(tasks, rules.name, grades, args), args, final=True)
+            grade_text = _format_grade_summary(tasks, rules.name, grades, args)
+            hint = "\nHint: Use 'agent-xray surface <task-id> --log-dir <dir>' to inspect a specific task."
+            _emit(grade_text + hint, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -986,11 +1000,14 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Analyze a log directory",
         example="agent-xray analyze ./traces --rules browser_flow --json",
     )
-    p_analyze.add_argument("log_dir")
-    p_analyze.add_argument("--days", type=int)
-    p_analyze.add_argument("--rules")
+    p_analyze.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_analyze.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    p_analyze.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
     _add_format_option(p_analyze)
-    p_analyze.add_argument("--json", action="store_true")
+    p_analyze.add_argument("--json", action="store_true", help="Output results as JSON")
     p_analyze.set_defaults(func=cmd_analyze)
 
     for name, handler, example in (
@@ -1003,11 +1020,15 @@ def build_parser() -> argparse.ArgumentParser:
             help_text=f"{name.title()} output for a task",
             example=example,
         )
-        parser_.add_argument("task_id")
-        parser_.add_argument("--log-dir", dest="log_dir_opt")
-        parser_.add_argument("--days", type=int)
+        parser_.add_argument("task_id", help="Task ID or prefix to search for")
+        parser_.add_argument(
+            "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+        )
+        parser_.add_argument(
+            "--days", type=int, help="Include only the N most recent days of traces"
+        )
         _add_format_option(parser_)
-        parser_.add_argument("--json", action="store_true")
+        parser_.add_argument("--json", action="store_true", help="Output results as JSON")
         parser_.set_defaults(func=handler)
 
     p_diff = _add_subparser(
@@ -1016,12 +1037,14 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Compare two tasks",
         example="agent-xray diff task-123 task-124 --log-dir ./traces",
     )
-    p_diff.add_argument("task_id_1")
-    p_diff.add_argument("task_id_2")
-    p_diff.add_argument("--log-dir", dest="log_dir_opt")
-    p_diff.add_argument("--days", type=int)
+    p_diff.add_argument("task_id_1", help="First task ID to compare")
+    p_diff.add_argument("task_id_2", help="Second task ID to compare")
+    p_diff.add_argument(
+        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+    )
+    p_diff.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_diff)
-    p_diff.add_argument("--json", action="store_true")
+    p_diff.add_argument("--json", action="store_true", help="Output results as JSON")
     p_diff.set_defaults(func=cmd_diff)
 
     p_grade = _add_subparser(
@@ -1030,14 +1053,15 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Grade a log directory",
         example="agent-xray grade ./traces --rules browser_flow",
     )
-    p_grade.add_argument("log_dir")
+    p_grade.add_argument("log_dir", help="Directory containing .jsonl trace files")
     p_grade.add_argument(
         "--rules",
         default=str(DEFAULT_RULES_PATH),
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
-    p_grade.add_argument("--days", type=int)
+    p_grade.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_grade)
-    p_grade.add_argument("--json", action="store_true")
+    p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
     p_grade.set_defaults(func=cmd_grade)
 
     p_tree = _add_subparser(
@@ -1046,10 +1070,12 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Show a day/site/task tree",
         example="agent-xray tree --log-dir ./traces",
     )
-    p_tree.add_argument("--log-dir", dest="log_dir_opt")
-    p_tree.add_argument("--days", type=int)
+    p_tree.add_argument(
+        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+    )
+    p_tree.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_tree)
-    p_tree.add_argument("--json", action="store_true")
+    p_tree.add_argument("--json", action="store_true", help="Output results as JSON")
     p_tree.set_defaults(func=cmd_tree)
 
     p_capture = _add_subparser(
@@ -1058,13 +1084,17 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Capture a task as a sanitized fixture",
         example="agent-xray capture task-123 --log-dir ./traces --out ./fixtures/task-123.json",
     )
-    p_capture.add_argument("task_id")
-    p_capture.add_argument("--log-dir", dest="log_dir_opt")
-    p_capture.add_argument("--days", type=int)
+    p_capture.add_argument("task_id", help="Task ID or prefix to search for")
+    p_capture.add_argument(
+        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+    )
+    p_capture.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_capture)
-    p_capture.add_argument("--out")
-    p_capture.add_argument("--no-sanitize", action="store_true")
-    p_capture.add_argument("--json", action="store_true")
+    p_capture.add_argument("--out", help="Output file path for captured fixture")
+    p_capture.add_argument(
+        "--no-sanitize", action="store_true", help="Disable PII sanitization in captured fixtures"
+    )
+    p_capture.add_argument("--json", action="store_true", help="Output results as JSON")
     p_capture.set_defaults(func=cmd_capture)
 
     p_replay = _add_subparser(
@@ -1073,11 +1103,13 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Compare a fixture to current logs",
         example="agent-xray replay ./fixtures/task-123.json --log-dir ./traces",
     )
-    p_replay.add_argument("fixture")
-    p_replay.add_argument("--log-dir", dest="log_dir_opt")
-    p_replay.add_argument("--days", type=int)
+    p_replay.add_argument("fixture", help="Path to a captured fixture JSON file")
+    p_replay.add_argument(
+        "--log-dir", dest="log_dir_opt", help="Directory containing .jsonl trace files"
+    )
+    p_replay.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_replay)
-    p_replay.add_argument("--json", action="store_true")
+    p_replay.add_argument("--json", action="store_true", help="Output results as JSON")
     p_replay.set_defaults(func=cmd_replay)
 
     p_flywheel = _add_subparser(
@@ -1086,15 +1118,18 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Run end-to-end grading, root-cause analysis, and baseline comparison",
         example="agent-xray flywheel ./traces --baseline ./baseline.json --json",
     )
-    p_flywheel.add_argument("log_dir")
-    p_flywheel.add_argument("--rules")
-    p_flywheel.add_argument("--fixture-dir")
+    p_flywheel.add_argument("log_dir", help="Directory containing .jsonl trace files")
+    p_flywheel.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_flywheel.add_argument("--fixture-dir", help="Directory containing golden fixture files")
     p_flywheel.add_argument(
         "--baseline",
         help="Previous flywheel JSON output used for grade delta and regression comparison",
     )
-    p_flywheel.add_argument("--out")
-    p_flywheel.add_argument("--json", action="store_true")
+    p_flywheel.add_argument("--out", help="Output file path for flywheel results")
+    p_flywheel.add_argument("--json", action="store_true", help="Output results as JSON")
     p_flywheel.set_defaults(func=cmd_flywheel)
 
     p_compare = _add_subparser(
@@ -1103,10 +1138,13 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Compare two model run directories",
         example="agent-xray compare ./runs/model-a ./runs/model-b --rules browser_flow",
     )
-    p_compare.add_argument("left_log_dir")
-    p_compare.add_argument("right_log_dir")
-    p_compare.add_argument("--rules")
-    p_compare.add_argument("--json", action="store_true")
+    p_compare.add_argument("left_log_dir", help="First trace directory to compare")
+    p_compare.add_argument("right_log_dir", help="Second trace directory to compare")
+    p_compare.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_compare.add_argument("--json", action="store_true", help="Output results as JSON")
     p_compare.set_defaults(func=cmd_compare)
 
     p_report = _add_subparser(
@@ -1115,7 +1153,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Generate a report (health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, compare)",
         example="agent-xray report ./traces health",
     )
-    p_report.add_argument("log_dir")
+    p_report.add_argument("log_dir", help="Directory containing .jsonl trace files")
     p_report.add_argument(
         "report_type",
         choices=[
@@ -1132,14 +1170,18 @@ def build_parser() -> argparse.ArgumentParser:
             "fixes",
             "compare",
         ],
+        help="Type of report to generate",
     )
-    p_report.add_argument("--rules")
-    p_report.add_argument("--days", type=int)
+    p_report.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_report.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     _add_format_option(p_report)
     p_report.add_argument("--day1", help="First day for compare report (YYYYMMDD)")
     p_report.add_argument("--day2", help="Second day for compare report (YYYYMMDD)")
-    p_report.add_argument("--json", action="store_true")
-    p_report.add_argument("--markdown", action="store_true")
+    p_report.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_report.add_argument("--markdown", action="store_true", help="Output results as Markdown")
     p_report.set_defaults(func=cmd_report)
 
     p_tui = _add_subparser(

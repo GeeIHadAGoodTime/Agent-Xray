@@ -427,12 +427,14 @@ def surface_for_task(
             if reasoning
             else None,
             "approval_path": reasoning.approval_path if reasoning else None,
+            "llm_decision": reasoning.llm_decision if reasoning else None,
             # Browser state
             "page_url": browser.page_url if browser else None,
             "snapshot_compressed": browser.snapshot_compressed if browser else None,
             "had_screenshot": browser.had_screenshot if browser else None,
             "had_screenshot_image": browser.had_screenshot_image if browser else None,
             "snapshot_pre_compress_len": browser.snapshot_pre_compress_len if browser else None,
+            "browser_tiers_used": browser.browser_tiers_used if browser else None,
             # Memory & retrieval
             "memory_query": memory_rag["memory_query"],
             "memory_results": memory_rag["memory_results"],

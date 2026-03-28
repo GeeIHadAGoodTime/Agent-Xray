@@ -31,6 +31,13 @@
       "reason": "+1 zero errors"
     },
     {
+      "name": "task_completed",
+      "metric": "task_completed",
+      "equals": true,
+      "points": 2,
+      "reason": "+2 task completed successfully"
+    },
+    {
       "name": "timeout_penalty",
       "metric": "timeout_like",
       "equals": true,
@@ -74,7 +81,7 @@
     }
   ],
   "grade_thresholds": {
-    "GOLDEN": 5,
+    "GOLDEN": 4,
     "GOOD": 3,
     "OK": 1,
     "WEAK": 0

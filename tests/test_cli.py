@@ -30,7 +30,7 @@ def test_cmd_analyze_returns_output(tmp_trace_dir, capsys: pytest.CaptureFixture
     )
     captured = capsys.readouterr()
     assert result == 0
-    assert "Analyzed 4 task(s) with rules=default" in captured.out
+    assert "Analyzed 4 task(s)" in captured.out
 
 
 def test_cmd_analyze_json_flag(tmp_trace_dir, capsys: pytest.CaptureFixture[str]) -> None:
@@ -57,7 +57,7 @@ def test_cmd_grade_default_rules(tmp_trace_dir, capsys: pytest.CaptureFixture[st
     assert result == 0
     assert payload["summary"]["rules"] == "default"
     assert grades["broken-task"] == "BROKEN"
-    assert grades["golden-task"] == "GOOD"
+    assert grades["golden-task"] == "GOLDEN"
 
 
 def test_cmd_grade_browser_flow_rules(
@@ -206,7 +206,7 @@ def test_cmd_compare_two_dirs(
     payload = json.loads(capsys.readouterr().out)
     assert result == 0
     assert payload["matched_tasks"] == 1
-    assert payload["grade_deltas"]["GOOD"] == 1
+    assert payload["grade_deltas"]["GOLDEN"] == 1
     assert payload["grade_deltas"]["BROKEN"] == -1
 
 

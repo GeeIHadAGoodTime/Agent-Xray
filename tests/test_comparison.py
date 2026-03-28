@@ -45,7 +45,7 @@ def test_compare_detects_grade_improvement(
 
     result = compare_model_runs(left_dir, right_dir)
 
-    assert result.grade_deltas["GOOD"] == 1
+    assert result.grade_deltas["GOLDEN"] == 1
     assert result.grade_deltas["BROKEN"] == -1
 
 
@@ -60,7 +60,7 @@ def test_compare_detects_grade_regression(
 
     result = compare_model_runs(left_dir, right_dir)
 
-    assert result.grade_deltas["GOOD"] == -1
+    assert result.grade_deltas["GOLDEN"] == -1
     assert result.grade_deltas["BROKEN"] == 1
 
 

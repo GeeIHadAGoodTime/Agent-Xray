@@ -59,6 +59,7 @@ TOOLS_FIELD_NAMES = {
 }
 REASONING_FIELD_NAMES = {
     "llm_reasoning",
+    "llm_decision",
     "correction_messages",
     "spin_intervention",
     "error_registry_context",
@@ -74,6 +75,7 @@ BROWSER_FIELD_NAMES = {
     "had_screenshot_image",
     "snapshot_compressed",
     "snapshot_pre_compress_len",
+    "browser_tiers_used",
 }
 RESERVED_STEP_FIELDS = (
     CORE_STEP_FIELDS
@@ -238,6 +240,7 @@ class ReasoningContext:
     """
 
     llm_reasoning: str | None = None
+    llm_decision: str | None = None
     correction_messages: list[str] | None = None
     spin_intervention: str | None = None
     error_registry_context: str | None = None
@@ -265,6 +268,7 @@ class BrowserContext:
     snapshot_compressed: bool | None = None
     had_screenshot_image: bool | None = None
     snapshot_pre_compress_len: int | None = None
+    browser_tiers_used: list[str] | None = None
 
 
 MODEL_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
@@ -298,6 +302,7 @@ TOOL_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
 }
 REASONING_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
     "llm_reasoning": _coerce_optional_str,
+    "llm_decision": _coerce_optional_str,
     "correction_messages": _coerce_list_of_str,
     "spin_intervention": _coerce_optional_str,
     "error_registry_context": _coerce_optional_str,
@@ -313,6 +318,7 @@ BROWSER_CONTEXT_COERCIONS: dict[str, Callable[[Any], Any]] = {
     "snapshot_compressed": _coerce_optional_bool,
     "had_screenshot_image": _coerce_optional_bool,
     "snapshot_pre_compress_len": _coerce_optional_int,
+    "browser_tiers_used": _coerce_list_of_str,
 }
 CONTEXT_FACTORIES = {
     "model": ModelContext,
@@ -662,6 +668,18 @@ class AgentStep:
             target_field = FIELD_ALIASES.get(field_name, field_name)
             if target_field not in target_payload:
                 target_payload[target_field] = coercion_fn(payload.get(field_name))
+
+        # Extract token counts from nested llm_usage if present
+        if "llm_usage" in payload and isinstance(payload["llm_usage"], dict):
+            usage = payload["llm_usage"]
+            model_data = context_payloads.get("model", {})
+            if "input_tokens" not in model_data and "input_tokens" in usage:
+                model_data["input_tokens"] = usage["input_tokens"]
+            if "output_tokens" not in model_data and "output_tokens" in usage:
+                model_data["output_tokens"] = usage["output_tokens"]
+            if "total_tokens" not in model_data and "total_tokens" in usage:
+                model_data["total_tokens"] = usage["total_tokens"]
+            context_payloads["model"] = model_data
 
         if (
             "had_screenshot_image" in payload
