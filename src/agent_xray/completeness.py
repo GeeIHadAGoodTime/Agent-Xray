@@ -143,7 +143,7 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
     # 4. Cache tokens
     total_dims += 1
     has_cache_tokens = any(
-        step.model and (step.model.cache_read_tokens or step.model.cache_creation_tokens)
+        step.model and (step.model.cache_read_tokens is not None or step.model.cache_creation_tokens is not None)
         for t in tasks
         for step in t.steps
     )

@@ -409,9 +409,8 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         except (TypeError, ValueError):
             pass
     max_context_usage_pct = max(context_usages) if context_usages else 0.0
-    # Normalize to percentage if in 0-1 range
-    if 0.0 < max_context_usage_pct <= 1.0:
-        max_context_usage_pct *= 100.0
+    # Production data stores context_usage_pct already in percentage units
+    # (0.5 means 0.5%, not 50%). Do NOT normalize.
     # Cache token totals
     cache_read_tokens_total = sum(
         step.model.cache_read_tokens or 0
@@ -435,10 +434,16 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
     for s in sorted_steps:
         if s.timestamp is not None:
             try:
+                # Try numeric epoch first, then ISO-8601
                 ts_float = float(s.timestamp)
                 timestamps_ms.append(int(ts_float * 1000))
             except (TypeError, ValueError):
-                pass
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(str(s.timestamp))
+                    timestamps_ms.append(int(dt.timestamp() * 1000))
+                except (TypeError, ValueError):
+                    pass
     for i in range(1, len(timestamps_ms)):
         gap = timestamps_ms[i] - timestamps_ms[i - 1]
         if gap > max_step_gap_ms:
@@ -484,11 +489,15 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         if not ref_match:
             continue
         ref_str = ref_match.group(0)
-        prev_step = sorted_steps[idx - 1]
-        if not prev_step.tool_name.startswith("browser_snapshot"):
+        # Search backward for the most recent snapshot (not just immediately prior)
+        snapshot_result = None
+        for back_idx in range(idx - 1, -1, -1):
+            if sorted_steps[back_idx].tool_name.startswith("browser_snapshot"):
+                snapshot_result = sorted_steps[back_idx].tool_result or ""
+                break
+        if snapshot_result is None:
             continue
-        prev_result = prev_step.tool_result or ""
-        if ref_str not in prev_result:
+        if ref_str not in snapshot_result:
             element_ref_mismatches += 1
     return {
         "unique_urls": urls,

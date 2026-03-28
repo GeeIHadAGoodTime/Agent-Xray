@@ -242,14 +242,11 @@ def _normalize_text(value: str | None) -> str:
 
 
 def _normalize_usage_pct(value: float | None) -> float:
-    """Normalize context usage metrics to percentage units."""
+    """Return context usage as a percentage (production data is already in pct units)."""
 
     if value is None:
         return 0.0
-    usage = float(value)
-    if usage <= 1.0:
-        usage *= 100.0
-    return usage
+    return float(value)
 
 
 @dataclass(slots=True)
