@@ -48,6 +48,49 @@ def test_browser_flow_grade() -> None:
     assert result.score >= 8
 
 
+def test_browser_flow_ignores_stale_cart_keywords() -> None:
+    task = AgentTask(
+        task_id="task-stale-cart",
+        task_text="Order a pizza.",
+        task_category="commerce",
+        steps=[
+            AgentStep(
+                "task-stale-cart",
+                1,
+                "browser_navigate",
+                {"url": "https://pizza.example.test"},
+                tool_result="Homepage loaded. 1 ITEMS IN YOUR CART.",
+                page_url="https://pizza.example.test/",
+            ),
+            AgentStep(
+                "task-stale-cart",
+                2,
+                "browser_click",
+                {"ref": "order-now"},
+                tool_result="Menu page loaded.",
+                page_url="https://pizza.example.test/menu",
+            ),
+            AgentStep(
+                "task-stale-cart",
+                3,
+                "browser_click",
+                {"ref": "pizzas"},
+                tool_result="Pizza category loaded.",
+                page_url="https://pizza.example.test/menu/pizzas",
+            ),
+        ],
+    )
+    rules = load_rules(
+        Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules" / "browser_flow.json"
+    )
+    result = grade_task(task, rules)
+
+    signal_results = {signal.name: signal for signal in result.signals}
+    assert signal_results["cart_reached"].passed is False
+    assert signal_results["checkout_reached"].passed is False
+    assert result.metrics["commerce"]["milestone_confidence"]["cart"] == "keyword_match"
+
+
 def test_normalize_score_known_ruleset() -> None:
     rules = RuleSet(
         name="normalize",

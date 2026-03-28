@@ -42,6 +42,23 @@ def _write_invalid_task_bank(path: Path) -> Path:
     return path
 
 
+def _write_warning_task_bank(path: Path) -> Path:
+    payload = {
+        "tasks": [
+            {
+                "id": "novviola-warning-entry",
+                "user_text": "Handle the florist request in multiple phases.",
+                "success_criteria": {
+                    "answer_type": "consultative_then_action",
+                    "local_florist_allowed": True,
+                },
+            }
+        ]
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
 def test_root_cause_parser_exists() -> None:
     parser = build_parser()
     args = parser.parse_args(["root-cause", "./traces", "--task-bank", "task_bank.json"])
@@ -216,3 +233,28 @@ def test_cmd_task_bank_validate_invalid_bank(
     assert result == 1
     assert payload["valid"] is False
     assert payload["errors"]
+    assert payload["warnings"]
+    assert "unknown criterion 'made_up_rule'" in payload["warnings"][0]
+
+
+def test_cmd_task_bank_validate_warning_only_bank(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    task_bank = _write_warning_task_bank(tmp_path / "warning_task_bank.json")
+    result = cmd_task_bank(
+        Namespace(
+            task_bank_command="validate",
+            path=task_bank,
+            json=True,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["valid"] is True
+    assert payload["errors"] == []
+    assert payload["warnings"]
+    assert "unknown criterion 'local_florist_allowed'" in payload["warnings"][0]

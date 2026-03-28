@@ -10,6 +10,7 @@ from agent_xray.analyzer import (
     classify_error,
     extract_site_from_urlish,
     extract_site_name,
+    final_answer_indicates_failure,
     site_from_host,
 )
 from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
@@ -255,10 +256,30 @@ def test_soft_errors_not_double_counted() -> None:
     assert analysis.soft_error_kinds == {}
 
 
+def test_final_answer_failure_classifier_matches_explicit_failure_language() -> None:
+    assert final_answer_indicates_failure(
+        "The checkout page is currently showing an error, and I cannot proceed further."
+    ) is True
+    assert final_answer_indicates_failure("Checkout completed successfully.") is False
+
+
+def test_analyze_task_records_final_answer_failure_signal() -> None:
+    task = _task(_step(1, "browser_snapshot", page_url="https://shop.example.test/checkout"))
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="completed",
+        final_answer="The checkout page is currently showing an error, and I cannot proceed further.",
+    )
+    analysis = analyze_task(task)
+    assert analysis.final_answer_indicates_failure is True
+    assert analysis.metrics()["final_answer_indicates_failure"] is True
+
+
 def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
     task = _task(_step(1, "browser_fill_ref", tool_result="Element not found"))
     analysis = analyze_task(task)
     restored = type(analysis).from_dict(analysis.to_dict())
     assert restored.soft_errors == 1
     assert restored.soft_error_kinds == {"soft_element_missing": 1}
+    assert restored.final_answer_indicates_failure is False
     assert restored.task.task_id == analysis.task.task_id

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 
+from agent_xray.analyzer import analyze_task
 from agent_xray.grader import grade_task, load_rules
-from agent_xray.schema import AgentStep, AgentTask
+from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
 from agent_xray.signals import BUILTIN_DETECTORS, discover_detectors, run_detection
 from agent_xray.signals.coding import CodingDetector
 from agent_xray.signals.commerce import CommerceDetector
@@ -55,12 +56,13 @@ def test_commerce_detector_checkout() -> None:
                     "browser_snapshot",
                     {},
                     tool_result="checkout",
-                    page_url="https://shop.example.test/checkout",
+                    page_url="https://shop.example.test/",
                 )
             )
         ],
     )
-    assert summary["reached_checkout"] is True
+    assert summary["reached_checkout"] is False
+    assert summary["reached_checkout_confidence"] == "keyword_match"
 
 
 def test_commerce_detector_cart() -> None:
@@ -69,7 +71,127 @@ def test_commerce_detector_cart() -> None:
         AgentTask(task_id="task-1", steps=[]),
         [detector.detect_step(_step(1, "browser_snapshot", {}, tool_result="your cart"))],
     )
+    assert summary["reached_cart"] is False
+    assert summary["reached_cart_confidence"] == "keyword_match"
+
+
+def test_commerce_detector_cart_action_sequence() -> None:
+    detector = CommerceDetector()
+    steps = [
+        _step(
+            1,
+            "browser_click",
+            {"ref": "add-to-cart"},
+            tool_result="Added to cart. Your cart subtotal is $129.",
+            page_url="https://shop.example.test/products/wireless-headset",
+        )
+    ]
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=steps),
+        [detector.detect_step(step) for step in steps],
+    )
     assert summary["reached_cart"] is True
+    assert summary["reached_cart_confidence"] == "action_sequence"
+
+
+def test_commerce_detector_checkout_requires_url_or_progression() -> None:
+    detector = CommerceDetector()
+    steps = [
+        _step(
+            1,
+            "browser_snapshot",
+            {},
+            tool_result="Checkout is available in the top navigation.",
+            page_url="https://shop.example.test/",
+        ),
+        _step(
+            2,
+            "browser_click",
+            {"ref": "proceed-to-checkout"},
+            tool_result="Address review loaded.",
+            page_url="https://shop.example.test/checkout",
+        ),
+    ]
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=steps),
+        [detector.detect_step(step) for step in steps],
+    )
+    assert summary["reached_checkout"] is True
+    assert summary["reached_checkout_confidence"] == "action_sequence"
+
+
+def test_commerce_detector_payment_requires_url_or_payment_fields() -> None:
+    detector = CommerceDetector()
+    weak_steps = [
+        _step(
+            1,
+            "browser_snapshot",
+            {},
+            tool_result="Payment method options are listed in the footer.",
+            page_url="https://shop.example.test/",
+        )
+    ]
+    weak_summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=weak_steps),
+        [detector.detect_step(step) for step in weak_steps],
+    )
+    assert weak_summary["reached_payment"] is False
+    assert weak_summary["reached_payment_confidence"] == "keyword_match"
+
+    strong_steps = [
+        _step(
+            1,
+            "browser_fill_ref",
+            {"ref": "payment-form", "fields": ["card number", "cvv"], "text": "4111 1111 1111 1111"},
+            tool_result="Payment form completed.",
+            page_url="https://shop.example.test/review",
+        )
+    ]
+    strong_summary = detector.summarize(
+        AgentTask(task_id="task-2", steps=strong_steps),
+        [detector.detect_step(step) for step in strong_steps],
+    )
+    assert strong_summary["reached_payment"] is True
+    assert strong_summary["reached_payment_confidence"] == "action_sequence"
+
+
+def test_commerce_detector_ignores_stale_cart_keywords_without_progression() -> None:
+    detector = CommerceDetector()
+    steps = [
+        _step(
+            1,
+            "browser_navigate",
+            {"url": "https://pizza.example.test"},
+            tool_result="Homepage banner. 1 ITEMS IN YOUR CART.",
+            page_url="https://pizza.example.test/",
+        ),
+        _step(
+            2,
+            "browser_click",
+            {"ref": "order-now"},
+            tool_result="Menu page loaded.",
+            page_url="https://pizza.example.test/menu",
+        ),
+        _step(
+            3,
+            "browser_click",
+            {"ref": "pizzas"},
+            tool_result="Pizza category page loaded.",
+            page_url="https://pizza.example.test/menu/pizzas",
+        ),
+    ]
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=steps),
+        [detector.detect_step(step) for step in steps],
+    )
+    assert summary["reached_cart"] is False
+    assert summary["reached_checkout"] is False
+    assert summary["reached_payment"] is False
+    assert summary["milestone_confidence"] == {
+        "cart": "keyword_match",
+        "checkout": "none",
+        "payment": "none",
+    }
 
 
 def test_commerce_detector_form_fill() -> None:
@@ -246,3 +368,56 @@ def test_grader_with_dotpath_signal_fields(tmp_path) -> None:
     result = grade_task(task, load_rules(rules_path))
     assert result.grade == "GOLDEN"
     assert result.score == 7
+
+
+def test_browser_flow_penalizes_failure_language_in_final_answer() -> None:
+    clean_task = AgentTask(
+        task_id="task-1",
+        steps=[
+            _step(
+                1,
+                "browser_navigate",
+                {"url": "https://shop.example.test/cart"},
+                tool_result="Cart loaded.",
+                page_url="https://shop.example.test/cart",
+            ),
+            _step(
+                2,
+                "browser_snapshot",
+                {},
+                tool_result="card number cvv expir",
+                page_url="https://shop.example.test/payment",
+            ),
+        ],
+        outcome=TaskOutcome(
+            task_id="task-1",
+            status="completed",
+            total_steps=2,
+            total_duration_s=2.0,
+            final_answer="Payment page loaded for checkout review.",
+        ),
+    )
+    failed_task = AgentTask(
+        task_id="task-1",
+        steps=clean_task.steps,
+        outcome=TaskOutcome(
+            task_id="task-1",
+            status="completed",
+            total_steps=2,
+            total_duration_s=2.0,
+            final_answer="The checkout page is currently showing an error, and I cannot proceed further.",
+        ),
+    )
+    clean_analysis = analyze_task(clean_task)
+    failed_analysis = analyze_task(failed_task)
+    clean_result = grade_task(clean_task, load_rules("browser_flow"), analysis=clean_analysis)
+    failed_result = grade_task(failed_task, load_rules("browser_flow"), analysis=failed_analysis)
+    signal_map = {signal.name: signal for signal in failed_result.signals}
+
+    assert clean_analysis.final_answer_indicates_failure is False
+    assert failed_analysis.final_answer_indicates_failure is True
+    assert clean_result.grade == "GOOD"
+    assert failed_result.grade == "OK"
+    assert failed_result.score == clean_result.score - 3
+    assert signal_map["final_answer_indicates_failure"].passed is True
+    assert signal_map["final_answer_indicates_failure"].points == -3

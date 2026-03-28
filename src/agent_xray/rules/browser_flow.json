@@ -20,22 +20,22 @@
     },
     {
       "name": "checkout_reached",
-      "metric": "commerce.reached_checkout",
-      "equals": true,
+      "metric": "commerce.reached_checkout_confidence",
+      "in": ["url_match", "action_sequence"],
       "points": 3,
       "reason": "+3 checkout reached"
     },
     {
       "name": "payment_reached",
-      "metric": "commerce.reached_payment",
-      "equals": true,
+      "metric": "commerce.reached_payment_confidence",
+      "in": ["url_match", "action_sequence"],
       "points": 4,
       "reason": "+4 payment reached"
     },
     {
       "name": "cart_reached",
-      "metric": "commerce.reached_cart",
-      "equals": true,
+      "metric": "commerce.reached_cart_confidence",
+      "in": ["url_match", "action_sequence"],
       "points": 2,
       "reason": "+2 cart reached"
     },
@@ -143,6 +143,13 @@
       "gte": 1,
       "points": -1,
       "reason": "-1 step(s) with zero tools available"
+    },
+    {
+      "name": "final_answer_indicates_failure",
+      "metric": "final_answer_indicates_failure",
+      "equals": true,
+      "points": -3,
+      "reason": "-3 final answer explicitly reports failure"
     }
   ],
   "grade_thresholds": {

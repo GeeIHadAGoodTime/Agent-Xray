@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_xray import TaskBank, TaskBankEntry, load_task_bank
+from agent_xray.contrib.task_bank import ALLOWED_ANSWER_TYPES, validate_task_bank_entries
 
 
 def _write_task_bank(path: Path, payload: object) -> Path:
@@ -124,3 +125,33 @@ def test_load_task_bank_rejects_invalid_entry_shape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="success_criteria"):
         load_task_bank(path)
+
+
+@pytest.mark.parametrize("answer_type", sorted(ALLOWED_ANSWER_TYPES))
+def test_validate_task_bank_entries_accepts_extended_answer_types(answer_type: str) -> None:
+    result = validate_task_bank_entries([
+        {
+            "id": f"task-{answer_type}",
+            "user_text": "Handle the task.",
+            "success_criteria": {"answer_type": answer_type},
+        }
+    ])
+
+    assert result.valid is True
+    assert result.errors == []
+    assert result.warnings == []
+
+
+def test_validate_task_bank_entries_reports_unknown_criteria_as_warning() -> None:
+    result = validate_task_bank_entries([
+        {
+            "id": "novviola-florist",
+            "user_text": "Find a local florist and place the order.",
+            "success_criteria": {"local_florist_allowed": True},
+        }
+    ])
+
+    assert result.valid is True
+    assert result.errors == []
+    assert result.warnings
+    assert "unknown criterion 'local_florist_allowed'" in result.warnings[0]

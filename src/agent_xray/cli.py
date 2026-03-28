@@ -1541,22 +1541,42 @@ def cmd_task_bank(args: argparse.Namespace) -> int:
             return 0
 
         if subcmd == "validate":
-            errors = validate_task_bank_file(path)
+            report = validate_task_bank_file(path)
             if getattr(args, "json", False):
-                _dump({"valid": not errors, "errors": errors})
+                _dump({
+                    "valid": report.valid,
+                    "errors": report.errors,
+                    "warnings": report.warnings,
+                })
             else:
-                if errors:
+                if report.errors:
                     lines = ["TASK BANK INVALID", "=" * 60]
-                    lines.extend(f"  - {error}" for error in errors)
+                    lines.append("Errors:")
+                    lines.extend(f"  - {error}" for error in report.errors)
+                    if report.warnings:
+                        lines.append("")
+                        lines.append("Warnings:")
+                        lines.extend(f"  - {warning}" for warning in report.warnings)
                     _emit("\n".join(lines), args, final=True)
                 else:
                     count = len(load_task_bank_entries(path))
-                    _emit(
-                        f"TASK BANK VALID\n{'=' * 60}\n{path} ({count} task(s))",
-                        args,
-                        final=True,
-                    )
-            return 0 if not errors else 1
+                    if report.warnings:
+                        lines = [
+                            "TASK BANK VALID WITH WARNINGS",
+                            "=" * 60,
+                            f"{path} ({count} task(s))",
+                            "",
+                            "Warnings:",
+                        ]
+                        lines.extend(f"  - {warning}" for warning in report.warnings)
+                        _emit("\n".join(lines), args, final=True)
+                    else:
+                        _emit(
+                            f"TASK BANK VALID\n{'=' * 60}\n{path} ({count} task(s))",
+                            args,
+                            final=True,
+                        )
+            return 0 if report.valid else 1
 
         _emit("Usage: agent-xray task-bank {list,show,validate}", args, final=True)
         return 1

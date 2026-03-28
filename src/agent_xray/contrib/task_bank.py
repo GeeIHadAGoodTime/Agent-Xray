@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,24 @@ KNOWN_CRITERIA = frozenset({
 })
 
 REQUIRED_ENTRY_FIELDS = frozenset({"id", "user_text", "success_criteria"})
+ALLOWED_ANSWER_TYPES = frozenset({
+    "action",
+    "consultative",
+    "factual",
+    "consultative_then_action",
+    "action_then_consultative",
+    "multi_step",
+})
+
+
+@dataclass(slots=True)
+class TaskBankValidationResult:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +123,10 @@ def load_task_bank(path: str | Path) -> list[dict[str, Any]]:
     raise ValueError(f"Unsupported task bank format at {resolved}")
 
 
-def validate_task_bank_entries(entries: list[dict[str, Any]]) -> list[str]:
-    """Validate a loaded task bank and return human-readable schema errors."""
+def validate_task_bank_entries(entries: list[dict[str, Any]]) -> TaskBankValidationResult:
+    """Validate a loaded task bank and return schema errors plus non-fatal warnings."""
 
-    errors: list[str] = []
+    result = TaskBankValidationResult()
     seen_ids: set[str] = set()
     criterion_types: dict[str, tuple[type[Any], ...]] = {
         "must_answer_contains": (list,),
@@ -129,33 +148,33 @@ def validate_task_bank_entries(entries: list[dict[str, Any]]) -> list[str]:
     for index, entry in enumerate(entries, start=1):
         label = f"entry {index}"
         if not isinstance(entry, dict):
-            errors.append(f"{label}: expected an object, got {type(entry).__name__}")
+            result.errors.append(f"{label}: expected an object, got {type(entry).__name__}")
             continue
 
         missing = [field for field in REQUIRED_ENTRY_FIELDS if field not in entry]
         if missing:
-            errors.append(f"{label}: missing required field(s): {', '.join(sorted(missing))}")
+            result.errors.append(f"{label}: missing required field(s): {', '.join(sorted(missing))}")
 
         entry_id = entry.get("id")
         if not isinstance(entry_id, str) or not entry_id.strip():
-            errors.append(f"{label}: field 'id' must be a non-empty string")
+            result.errors.append(f"{label}: field 'id' must be a non-empty string")
         elif entry_id in seen_ids:
-            errors.append(f"{label}: duplicate task id '{entry_id}'")
+            result.errors.append(f"{label}: duplicate task id '{entry_id}'")
         else:
             seen_ids.add(entry_id)
 
         user_text = entry.get("user_text")
         if not isinstance(user_text, str) or not user_text.strip():
-            errors.append(f"{label}: field 'user_text' must be a non-empty string")
+            result.errors.append(f"{label}: field 'user_text' must be a non-empty string")
 
         criteria = entry.get("success_criteria")
         if not isinstance(criteria, dict):
-            errors.append(f"{label}: field 'success_criteria' must be an object")
+            result.errors.append(f"{label}: field 'success_criteria' must be an object")
             continue
 
         for criterion_name, criterion_value in criteria.items():
             if criterion_name not in KNOWN_CRITERIA:
-                errors.append(
+                result.warnings.append(
                     f"{label}: unknown criterion '{criterion_name}' "
                     f"(known: {', '.join(sorted(KNOWN_CRITERIA))})"
                 )
@@ -164,7 +183,7 @@ def validate_task_bank_entries(entries: list[dict[str, Any]]) -> list[str]:
             expected_types = criterion_types.get(criterion_name)
             if expected_types and not isinstance(criterion_value, expected_types):
                 expected_text = ", ".join(tp.__name__ for tp in expected_types)
-                errors.append(
+                result.errors.append(
                     f"{label}: criterion '{criterion_name}' must be {expected_text}, "
                     f"got {type(criterion_value).__name__}"
                 )
@@ -172,26 +191,25 @@ def validate_task_bank_entries(entries: list[dict[str, Any]]) -> list[str]:
 
             if criterion_name in {"must_answer_contains", "must_fill_fields", "must_use_tools"}:
                 if not criterion_value:
-                    errors.append(f"{label}: criterion '{criterion_name}' must not be empty")
+                    result.warnings.append(f"{label}: criterion '{criterion_name}' must not be empty")
                 elif not all(isinstance(item, str) and item.strip() for item in criterion_value):
-                    errors.append(
+                    result.errors.append(
                         f"{label}: criterion '{criterion_name}' must contain non-empty strings"
                     )
             if criterion_name == "answer_type":
-                allowed = {"factual", "action", "consultative"}
-                if str(criterion_value).strip().lower() not in allowed:
-                    errors.append(
+                if str(criterion_value).strip().lower() not in ALLOWED_ANSWER_TYPES:
+                    result.warnings.append(
                         f"{label}: criterion 'answer_type' must be one of "
-                        f"{', '.join(sorted(allowed))}"
+                        f"{', '.join(sorted(ALLOWED_ANSWER_TYPES))}"
                     )
             if criterion_name in {"min_urls", "max_steps", "min_tool_count"} and criterion_value < 0:
-                errors.append(f"{label}: criterion '{criterion_name}' must be >= 0")
+                result.warnings.append(f"{label}: criterion '{criterion_name}' must be >= 0")
 
-    return errors
+    return result
 
 
-def validate_task_bank(path: str | Path) -> list[str]:
-    """Load and validate a task bank file, returning schema errors."""
+def validate_task_bank(path: str | Path) -> TaskBankValidationResult:
+    """Load and validate a task bank file, returning schema errors and warnings."""
 
     return validate_task_bank_entries(load_task_bank(path))
 
@@ -719,8 +737,10 @@ def grade_with_task_bank(
 
 
 __all__ = [
+    "ALLOWED_ANSWER_TYPES",
     "FUZZY_THRESHOLD",
     "KNOWN_CRITERIA",
+    "TaskBankValidationResult",
     "evaluate_task_criteria",
     "grade_with_task_bank",
     "load_task_bank",

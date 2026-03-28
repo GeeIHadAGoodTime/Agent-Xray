@@ -109,6 +109,7 @@ class TaskAnalysis:
     system_context_field_count: int = 0
     # Final answer quality
     final_answer_empty_but_success: bool = False
+    final_answer_indicates_failure: bool = False
     # DOM element ref mismatch
     element_ref_mismatches: int = 0
 
@@ -220,6 +221,7 @@ class TaskAnalysis:
             "system_context_field_count": self.system_context_field_count,
             # Final answer quality
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
+            "final_answer_indicates_failure": self.final_answer_indicates_failure,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
         }
@@ -272,6 +274,7 @@ class TaskAnalysis:
             "has_user_model": self.has_user_model,
             "system_context_field_count": self.system_context_field_count,
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
+            "final_answer_indicates_failure": self.final_answer_indicates_failure,
             "element_ref_mismatches": self.element_ref_mismatches,
         }
 
@@ -361,6 +364,7 @@ class TaskAnalysis:
             has_user_model=_bool(payload.get("has_user_model")),
             system_context_field_count=_int(payload.get("system_context_field_count")),
             final_answer_empty_but_success=_bool(payload.get("final_answer_empty_but_success")),
+            final_answer_indicates_failure=_bool(payload.get("final_answer_indicates_failure")),
             element_ref_mismatches=_int(payload.get("element_ref_mismatches")),
         )
 
@@ -456,6 +460,15 @@ _SOFT_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"could not|unable to|failed to|cannot", re.IGNORECASE), "soft_failure"),
 ]
 
+_FINAL_ANSWER_FAILURE_PATTERN = re.compile(
+    r"\b(?:"
+    r"error|errored|failure|failed|failing|"
+    r"cannot|can't|could not|couldn't|unable to|"
+    r"stuck|broke|broken|crash|crashed"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def classify_soft_error(tool_result: str | None) -> str:
     """Classify logical failures in tool_result content (no error field set).
@@ -468,6 +481,13 @@ def classify_soft_error(tool_result: str | None) -> str:
         if pattern.search(tool_result):
             return name
     return ""
+
+
+def final_answer_indicates_failure(final_answer: str | None) -> bool:
+    if not final_answer:
+        return False
+    normalized = " ".join(final_answer.split())
+    return bool(_FINAL_ANSWER_FAILURE_PATTERN.search(normalized))
 
 
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
@@ -672,6 +692,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
     final_answer_empty_but_success = (
         task_completed_flag and final_answer_length <= 10
     )
+    final_answer_failure_flag = final_answer_indicates_failure(final_answer)
     # --- DOM element ref mismatch ---
     element_ref_mismatches = 0
     ref_pattern = re.compile(r"@e\d+")
@@ -752,6 +773,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         "has_user_model": has_user_model,
         "system_context_field_count": system_context_field_count,
         "final_answer_empty_but_success": final_answer_empty_but_success,
+        "final_answer_indicates_failure": final_answer_failure_flag,
         "element_ref_mismatches": element_ref_mismatches,
     }
 
