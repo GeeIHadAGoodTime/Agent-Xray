@@ -422,7 +422,7 @@ def _filter_git_output_lines(output: str) -> list[str]:
 def _git_diff_stat(cwd: str | None = None) -> str:
     """Get git diff --stat for staged and unstaged changes."""
     _, out = _run_shell(
-        f"git diff --stat HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+        f'git diff --stat HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
     )
     return "\n".join(_filter_git_output_lines(out))
 
@@ -430,13 +430,15 @@ def _git_diff_stat(cwd: str | None = None) -> str:
 def _git_diff_names(cwd: str | None = None) -> list[str]:
     """Get list of modified file names."""
     _, out = _run_shell(
-        f"git diff --name-only HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+        f'git diff --name-only HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
     )
     return _filter_git_output_lines(out)
 
 
 def _git_stage_all(cwd: str | None = None) -> bool:
-    code, _ = _run_shell("git add -A", cwd)
+    code, _ = _run_shell(
+        f'git add -A -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
+    )
     return code == 0
 
 
@@ -475,7 +477,7 @@ def _git_stash_pop(cwd: str | None = None) -> bool:
 def _git_has_uncommitted_changes(cwd: str | None = None) -> bool:
     """Return True when the repo has tracked or untracked changes."""
     _, out = _run_shell(
-        f"git status --porcelain --untracked-files=all -- . ':!{SESSION_DIR_NAME}'",
+        f'git status --porcelain --untracked-files=all -- . ":(exclude){SESSION_DIR_NAME}"',
         cwd,
     )
     return bool(_filter_git_output_lines(out))
@@ -484,7 +486,7 @@ def _git_has_uncommitted_changes(cwd: str | None = None) -> bool:
 def _git_diff_content(cwd: str | None = None) -> str:
     """Get full diff content."""
     _, out = _run_shell(
-        f"git diff HEAD -- . ':!{SESSION_DIR_NAME}'", cwd,
+        f'git diff HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
     )
     return out
 
@@ -943,13 +945,15 @@ def enforce_init(
     project_root = config.project_root
     runner = _run_tests_fn or run_tests
     sd = _ensure_session_dir(project_root)
-    _maybe_add_session_dir_to_gitignore(project_root)
 
     stash_saved = False
     if config.stash_first and _git_has_uncommitted_changes(project_root):
         if not _git_stash(project_root):
             raise RuntimeError("Failed to stash uncommitted changes before enforce init.")
         stash_saved = True
+
+    # Must run AFTER stash so the gitignore entry isn't reverted by the stash
+    _maybe_add_session_dir_to_gitignore(project_root)
 
     baseline = runner(config.baseline_command or config.test_command, project_root)
     _save_session(config, baseline, project_root, stash_saved=stash_saved)
