@@ -109,7 +109,8 @@ class TaskAnalysis:
     system_context_field_count: int = 0
     # Final answer quality
     final_answer_empty_but_success: bool = False
-    final_answer_indicates_failure: bool = False
+    final_answer_contains_failure_keywords: bool = False
+    final_answer_failure_keywords_matched: list[str] = field(default_factory=list)
     # DOM element ref mismatch
     element_ref_mismatches: int = 0
 
@@ -238,7 +239,10 @@ class TaskAnalysis:
             "system_context_field_count": self.system_context_field_count,
             # Final answer quality
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
-            "final_answer_indicates_failure": self.final_answer_indicates_failure,
+            "final_answer_contains_failure_keywords": self.final_answer_contains_failure_keywords,
+            "final_answer_failure_keywords_matched": self.final_answer_failure_keywords_matched,
+            # Backward compat alias
+            "final_answer_indicates_failure": self.final_answer_contains_failure_keywords,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
             # Consultative response (no browser needed)
@@ -293,7 +297,10 @@ class TaskAnalysis:
             "has_user_model": self.has_user_model,
             "system_context_field_count": self.system_context_field_count,
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
-            "final_answer_indicates_failure": self.final_answer_indicates_failure,
+            "final_answer_contains_failure_keywords": self.final_answer_contains_failure_keywords,
+            "final_answer_failure_keywords_matched": self.final_answer_failure_keywords_matched,
+            # Backward compat alias
+            "final_answer_indicates_failure": self.final_answer_contains_failure_keywords,
             "element_ref_mismatches": self.element_ref_mismatches,
         }
 
@@ -383,7 +390,13 @@ class TaskAnalysis:
             has_user_model=_bool(payload.get("has_user_model")),
             system_context_field_count=_int(payload.get("system_context_field_count")),
             final_answer_empty_but_success=_bool(payload.get("final_answer_empty_but_success")),
-            final_answer_indicates_failure=_bool(payload.get("final_answer_indicates_failure")),
+            final_answer_contains_failure_keywords=_bool(
+                payload.get("final_answer_contains_failure_keywords",
+                            payload.get("final_answer_indicates_failure"))
+            ),
+            final_answer_failure_keywords_matched=list(
+                payload.get("final_answer_failure_keywords_matched", [])
+            ),
             element_ref_mismatches=_int(payload.get("element_ref_mismatches")),
         )
 
@@ -479,12 +492,14 @@ _SOFT_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"could not|unable to|failed to|cannot", re.IGNORECASE), "soft_failure"),
 ]
 
+_FINAL_ANSWER_FAILURE_KEYWORDS = [
+    "error", "errored", "failure", "failed", "failing",
+    "cannot", "can't", "could not", "couldn't", "unable to",
+    "stuck", "broke", "broken", "crash", "crashed",
+]
+
 _FINAL_ANSWER_FAILURE_PATTERN = re.compile(
-    r"\b(?:"
-    r"error|errored|failure|failed|failing|"
-    r"cannot|can't|could not|couldn't|unable to|"
-    r"stuck|broke|broken|crash|crashed"
-    r")\b",
+    r"\b(?:" + "|".join(re.escape(kw) for kw in _FINAL_ANSWER_FAILURE_KEYWORDS) + r")\b",
     re.IGNORECASE,
 )
 
@@ -503,10 +518,23 @@ def classify_soft_error(tool_result: str | None) -> str:
 
 
 def final_answer_indicates_failure(final_answer: str | None) -> bool:
+    """Backward-compat wrapper — returns bool only."""
+    return bool(final_answer_failure_keywords(final_answer))
+
+
+def final_answer_failure_keywords(final_answer: str | None) -> list[str]:
+    """Return all failure keywords found in the final answer text.
+
+    Returns an empty list when no keywords match — the caller sees exactly
+    which words triggered the flag rather than a binary judgment.
+    """
     if not final_answer:
-        return False
+        return []
     normalized = " ".join(final_answer.split())
-    return bool(_FINAL_ANSWER_FAILURE_PATTERN.search(normalized))
+    return [
+        kw for kw in _FINAL_ANSWER_FAILURE_KEYWORDS
+        if re.search(r"\b" + re.escape(kw) + r"\b", normalized, re.IGNORECASE)
+    ]
 
 
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
@@ -711,7 +739,8 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
     final_answer_empty_but_success = (
         task_completed_flag and final_answer_length <= 10
     )
-    final_answer_failure_flag = final_answer_indicates_failure(final_answer)
+    final_answer_failure_kws = final_answer_failure_keywords(final_answer)
+    final_answer_failure_flag = bool(final_answer_failure_kws)
     # --- DOM element ref mismatch ---
     element_ref_mismatches = 0
     ref_pattern = re.compile(r"@e\d+")
@@ -792,7 +821,8 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         "has_user_model": has_user_model,
         "system_context_field_count": system_context_field_count,
         "final_answer_empty_but_success": final_answer_empty_but_success,
-        "final_answer_indicates_failure": final_answer_failure_flag,
+        "final_answer_contains_failure_keywords": final_answer_failure_flag,
+        "final_answer_failure_keywords_matched": final_answer_failure_kws,
         "element_ref_mismatches": element_ref_mismatches,
     }
 

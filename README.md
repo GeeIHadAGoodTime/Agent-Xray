@@ -273,6 +273,45 @@ agent-xray root-cause ./traces --task-bank ./task_bank.json
 
 ## Full CLI Reference
 
+### Filtering and Common Flags
+
+Most commands accept cross-cutting flags for filtering, output format, and environment configuration. These apply broadly and are listed here once rather than repeated per command.
+
+#### Task filters
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--grade BROKEN,WEAK` | grade, root-cause, diagnose, report, search, tree | Filter tasks by grade (comma-separated) |
+| `--site dominos.com` | grade, root-cause, diagnose, report, tree | Filter tasks by site name |
+| `--outcome success` | grade, root-cause, diagnose, report, tree | Filter tasks by outcome status |
+| `--since 2h` / `--since 1d` | grade, root-cause, diagnose, report, tree | Time-based filter with relative durations |
+| `--pattern "agent-steps-*.jsonl"` | analyze, grade, surface, root-cause, diagnose, report, completeness, compare | Glob pattern to filter JSONL files |
+| `--days N` | analyze, grade, surface, root-cause, diagnose, report, completeness | Include only N most recent days |
+
+#### Grading and rules
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--rules browser_flow` | grade, root-cause, diagnose, report, compare, flywheel, golden, watch, tree | Select domain-specific ruleset |
+| `--task-bank task_bank.json` | analyze, grade, root-cause, diagnose, report, surface | Enable expectation-aware grading with success criteria |
+| `--expected-rejection ask_user` | grade, root-cause, diagnose (repeatable) | Exclude intentional tool rejections from mismatch counts |
+
+#### Output format
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--json` | Most commands | Machine-readable JSON output |
+| `--markdown` | report | Markdown-formatted report output |
+
+#### Environment variables
+
+| Variable | Applies to | Description |
+|----------|-----------|-------------|
+| `AGENT_XRAY_LOG_DIR` | All commands taking `log_dir` | Default log directory |
+| `AGENT_XRAY_PROJECT_ROOT` | diagnose, validate-targets | Default project root |
+| `AGENT_XRAY_PRICING` | pricing, report cost | Custom pricing JSON path |
+| `NO_COLOR` | All commands | Disable ANSI color output |
+
 ### Core inspection commands
 
 | Command | What it does | Example |
@@ -611,7 +650,7 @@ Supporting pieces:
 
 ## MCP Server Tools
 
-`src/agent_xray/mcp_server.py` exposes 13 tools:
+`src/agent_xray/mcp_server.py` exposes 28 tools:
 
 | MCP tool | What it returns |
 | --- | --- |
@@ -628,6 +667,21 @@ Supporting pieces:
 | `grade` | grades traces and returns distribution plus per-task grade details |
 | `root_cause` | classifies failure causes and returns grouped distribution plus per-task results |
 | `completeness` | reports trace completeness warnings and coverage scores |
+| `surface_task` | extracts full detail for one task: tool chain, LLM I/O, state, outcome |
+| `search_tasks` | finds tasks by user_text substring with optional grade filter |
+| `diagnose` | produces structured diagnostics with tool gaps, approval blocks, fix plan |
+| `compare_runs` | side-by-side diff of two trace directories |
+| `report` | generates any of the 16 report types (health, broken, tools, spins, etc.) |
+| `diff_tasks` | compares two tasks side by side: tool calls, timing, outcomes |
+| `reasoning` | extracts the model's reasoning chain for a specific task |
+| `tree` | shows day/site/task hierarchy with optional grade enrichment |
+| `golden_rank` | ranks golden/good runs by efficiency within each site |
+| `golden_compare` | compares current runs against golden fixtures for regressions |
+| `task_bank_validate` | validates task bank schema and criterion names |
+| `task_bank_list` | lists all task entries in a bank |
+| `flywheel` | runs grading + root-cause + baseline comparison in one shot |
+| `capture_task` | captures a task as a sanitized fixture for replay and regression |
+| `pricing_show` | shows per-token pricing for a specific model |
 
 Run the MCP server over stdio with:
 
@@ -860,7 +914,7 @@ JSONL / framework trace files
   -> instrument/          OpenAI, Anthropic, LangChain, and MCP auto-instrumentation
   -> runner.py            TaskRunner protocol plus HTTP runner
   -> protocols.py         ToolRegistry / PromptBuilder / StepAdapter protocols
-  -> mcp_server.py        13 MCP tools for enforce and analysis
+  -> mcp_server.py        28 MCP tools for enforce, analysis, and investigation
   -> enforce.py           controlled experiment loop (session, check, auto)
   -> enforce_audit.py     gaming detection and adversarial challenges
   -> enforce_report.py    enforce session reports (text, JSON, markdown)

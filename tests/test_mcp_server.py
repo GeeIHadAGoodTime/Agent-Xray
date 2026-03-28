@@ -249,6 +249,21 @@ def test_mcp_tool_descriptions_include_flow_guidance() -> None:
         "grade",
         "root_cause",
         "completeness",
+        "surface_task",
+        "search_tasks",
+        "diagnose",
+        "compare_runs",
+        "report",
+        "diff_tasks",
+        "reasoning",
+        "tree",
+        "golden_rank",
+        "golden_compare",
+        "task_bank_validate",
+        "task_bank_list",
+        "flywheel",
+        "capture_task",
+        "pricing_show",
     ]
     for name in tool_names:
         tool_func = getattr(module, name)

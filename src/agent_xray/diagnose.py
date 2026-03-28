@@ -237,6 +237,11 @@ def _severity_for_root_cause(root_cause: str) -> int:
 
 
 def _verify_command_for(root_cause: str, task_id: str, log_dir: str | None = None) -> str:
+    """Return a suggested verification command for a root cause.
+
+    These are starting points for investigation — adapt based on your
+    findings.  They are not prescriptions.
+    """
     dir_placeholder = log_dir if log_dir else "<dir>"
     commands = {
         "approval_block": f"agent-xray surface {task_id} | grep approval",
@@ -278,7 +283,8 @@ class FixPlanEntry:
             Plugin resolvers may return file paths, but the default resolver
             returns generic concepts that apply to any codebase.
         fix_hint: Human-readable fix hint for the grouped failures.
-        verify_command: Suggested CLI command for validating the fix.
+        verify_command: Suggested starting-point CLI command for investigation
+            (adapt based on your findings).
         evidence: Sample evidence strings taken from the worst task.
         low_confidence: Whether the sample size is below the minimum threshold.
     """
@@ -485,6 +491,6 @@ def format_fix_plan_text(plan: list[FixPlanEntry]) -> str:
                 " \u2014 update your resolver"
             )
         lines.append(f"  Investigate task: {entry.investigate_task}")
-        lines.append(f"  Verify: {entry.verify_command}")
+        lines.append(f"  Suggested verification: {entry.verify_command}")
         lines.append("")
     return "\n".join(lines)

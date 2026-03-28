@@ -414,8 +414,8 @@ def test_browser_flow_penalizes_failure_language_in_final_answer() -> None:
     failed_result = grade_task(failed_task, load_rules("browser_flow"), analysis=failed_analysis)
     signal_map = {signal.name: signal for signal in failed_result.signals}
 
-    assert clean_analysis.final_answer_indicates_failure is False
-    assert failed_analysis.final_answer_indicates_failure is True
+    assert clean_analysis.final_answer_contains_failure_keywords is False
+    assert failed_analysis.final_answer_contains_failure_keywords is True
     assert clean_result.grade == "GOOD"
     assert failed_result.grade == "OK"
     assert failed_result.score == clean_result.score - 3

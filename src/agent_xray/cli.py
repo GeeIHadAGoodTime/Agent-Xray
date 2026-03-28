@@ -721,6 +721,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                     "\nTip: provide a task bank with --task-bank for richer analysis"
                     " (expected outcomes, known issues)."
                 )
+            lines.append("Tip: use 'agent-xray watch' for live monitoring, 'agent-xray search' to find specific tasks.")
             _emit("\n".join(lines), args, final=True)
         return 0
 
@@ -775,6 +776,9 @@ def cmd_surface(args: argparse.Namespace) -> int:
                 for line in bank_match["criteria_results"]:
                     lines.append("  %s" % line)
                 text += "\n".join(lines)
+            log_dir = _resolve_log_dir(args)
+            text += "\n\nTip: use 'agent-xray reasoning {tid} {log}' for focused reasoning view.".format(tid=args.task_id, log=log_dir)
+            text += "\nNext: agent-xray diff <other_task_id> {tid} {log}  # compare with a similar task".format(tid=args.task_id, log=log_dir)
             _emit(text, args, final=True)
         return 0
 
@@ -898,6 +902,36 @@ def cmd_grade(args: argparse.Namespace) -> int:
                 )
                 sections.append(f"\nTop issues: {top_causes}")
 
+                # Per-task signal detail when dataset is small enough to be
+                # useful, or top-5 worst tasks when large.
+                if len(failures) <= 20:
+                    per_task_lines: list[str] = []
+                    for f in failures:
+                        also = ""
+                        if f.also_matched:
+                            alt_names = [a["root_cause"] for a in f.also_matched]
+                            also = f" (also: {', '.join(alt_names)})"
+                        per_task_lines.append(
+                            f"  {f.task_id}: {f.root_cause} "
+                            f"[{f.confidence}, {f.evidence_count} evidence]{also}"
+                        )
+                    sections.append("\n".join(per_task_lines))
+                else:
+                    # Large set — show top 5 worst by score
+                    worst = sorted(failures, key=lambda f: f.score)[:5]
+                    worst_lines = ["\nWorst 5 tasks:"]
+                    for f in worst:
+                        also = ""
+                        if f.also_matched:
+                            alt_names = [a["root_cause"] for a in f.also_matched]
+                            also = f" (also: {', '.join(alt_names)})"
+                        worst_lines.append(
+                            f"  {f.task_id}: {f.root_cause} "
+                            f"score={f.score} [{f.confidence}, "
+                            f"{f.evidence_count} evidence]{also}"
+                        )
+                    sections.append("\n".join(worst_lines))
+
             # Broken tools warning
             tool_errors: dict[str, list[int]] = {}
             for task in tasks:
@@ -954,6 +988,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
                     "\nTip: provide a task bank with --task-bank for expectation-aware grading"
                     " (checks must_reach_url, must_answer_contains, payment_fields_visible, etc.)."
                 )
+            sections.append("Tip: use 'agent-xray golden rank' to see best performers, 'agent-xray report {log} broken' for worst.".format(log=short_path))
             _emit("\n".join(sections), args, final=True)
         return 0
 
@@ -998,7 +1033,15 @@ def cmd_root_cause(args: argparse.Namespace) -> int:
         if getattr(args, "json", False):
             _dump(payload)
         else:
-            _emit(format_root_causes_text(failures), args, final=True)
+            text = format_root_causes_text(failures)
+            task_bank_path = getattr(args, "task_bank", None)
+            if not task_bank_path:
+                text += "\n\nTip: add --task-bank for expectation-aware classification."
+            if failures:
+                worst = failures[0]
+                text += f"\n\nNext: agent-xray diagnose {args.log_dir}  # build a prioritized fix plan"
+                text += f"\n      agent-xray surface {worst.task_id} {args.log_dir}  # deep-dive worst failure"
+            _emit(text, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -1068,7 +1111,9 @@ def cmd_flywheel(args: argparse.Namespace) -> int:
         if args.json:
             _dump(result.to_dict())
         else:
-            _emit(json.dumps(result.to_dict(), indent=2), args, final=True)
+            text = json.dumps(result.to_dict(), indent=2)
+            text += "\n\nNext: agent-xray golden rank {log}  # see best-performing runs".format(log=args.log_dir)
+            _emit(text, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -1084,7 +1129,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if args.json:
             _dump(result.to_dict())
         else:
-            _emit(format_model_comparison(result), args, final=True)
+            text = format_model_comparison(result)
+            hints: list[str] = []
+            rules_arg = getattr(args, "rules", None)
+            if not rules_arg or rules_arg == "default":
+                hints.append("Tip: add --rules browser_flow for domain-specific comparison.")
+            hints.append("Tip: use 'agent-xray report <log> compare --day1 X --day2 Y' for richer day-over-day comparison.")
+            text += "\n\n" + "\n".join(hints)
+            _emit(text, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -1358,7 +1410,19 @@ def cmd_report(args: argparse.Namespace) -> int:
         elif use_markdown:
             _emit(markdown_funcs[report_type](), args, final=True)
         else:
-            _emit(_colorize_report_headers(text_funcs[report_type](), args), args, final=True)
+            text = _colorize_report_headers(text_funcs[report_type](), args)
+            # Add contextual hints per report type
+            hints: list[str] = []
+            task_bank_path = getattr(args, "task_bank", None)
+            if not task_bank_path:
+                hints.append("Tip: add --task-bank for expectation-aware grading.")
+            if report_type == "spins":
+                hints.append("Next: agent-xray surface <task_id> {log}  # investigate worst spin".format(log=args.log_dir))
+            elif report_type == "broken":
+                hints.append("Next: agent-xray root-cause {log}  # classify failure types".format(log=args.log_dir))
+            if hints:
+                text += "\n\n" + "\n".join(hints)
+            _emit(text, args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -1480,7 +1544,17 @@ def cmd_completeness(args: argparse.Namespace) -> int:
                 ],
             })
         else:
-            _emit(report.format_text(), args, final=True)
+            text = report.format_text()
+            hints: list[str] = []
+            critical = [w for w in report.warnings if w.severity == "critical"]
+            high = [w for w in report.warnings if w.severity == "high"]
+            if critical:
+                hints.append("Fix first: {dims} (critical).".format(dims=", ".join(w.dimension for w in critical)))
+            elif high:
+                hints.append("Fix first: {dims} (high severity).".format(dims=", ".join(w.dimension for w in high)))
+            hints.append("Next: agent-xray grade {log}  # grade tasks with current data".format(log=args.log_dir))
+            text += "\n\n" + "\n".join(hints)
+            _emit(text, args, final=True)
         return 0
     return _run_command(args, _action)
 
@@ -1523,7 +1597,15 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         if args.json:
             _dump([entry.to_dict() for entry in plan])
         else:
-            _emit(format_fix_plan_text(plan), args, final=True)
+            text = format_fix_plan_text(plan)
+            task_bank_path = getattr(args, "task_bank", None)
+            if not task_bank_path:
+                text += "\n\nTip: add --task-bank for expectation-aware failure classification."
+            if not project_root:
+                text += "\n\nNext: agent-xray diagnose {log} --project-root /path/to/project  # verify fix paths exist".format(log=args.log_dir)
+            else:
+                text += "\n\nNext: agent-xray validate-targets --project-root {root}  # check all fix paths are current".format(root=project_root)
+            _emit(text, args, final=True)
         return 0
     return _run_command(args, _action)
 
@@ -1942,6 +2024,9 @@ def cmd_search(args: argparse.Namespace) -> int:
                     f"  steps={entry['step_count']}  site={entry['site']}"
                 )
                 lines.append(f"    {entry['user_text']}")
+            first_id = matches[0]["task_id"]
+            log_path = _resolve_log_dir(args)
+            lines.append(f"\nNext: agent-xray surface {first_id} {log_path}  # inspect top match")
             _emit("\n".join(lines), args, final=True)
         return 0
 

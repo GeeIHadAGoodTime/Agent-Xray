@@ -727,10 +727,11 @@ def grade_with_task_bank(
                         crit_name = line.split("]", 1)[1].strip().split(":")[0].strip()
                         failed_names.add(crit_name)
                 if failed_names & critical_criteria:
+                    failed_critical = failed_names & critical_criteria
                     result.grade = "GOOD"
                     result.reasons.append(
-                        "capped at GOOD: critical bank criteria failed (%s)"
-                        % ", ".join(failed_names & critical_criteria)
+                        "[DOWNGRADE] GOLDEN → GOOD: %s failed"
+                        % ", ".join(sorted(failed_critical))
                     )
         results.append(result)
     return results

@@ -271,8 +271,13 @@ def test_analyze_task_records_final_answer_failure_signal() -> None:
         final_answer="The checkout page is currently showing an error, and I cannot proceed further.",
     )
     analysis = analyze_task(task)
-    assert analysis.final_answer_indicates_failure is True
+    assert analysis.final_answer_contains_failure_keywords is True
+    assert analysis.metrics()["final_answer_contains_failure_keywords"] is True
+    # Backward compat alias still present
     assert analysis.metrics()["final_answer_indicates_failure"] is True
+    # Keywords matched are visible
+    assert len(analysis.final_answer_failure_keywords_matched) > 0
+    assert "error" in analysis.final_answer_failure_keywords_matched
 
 
 def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
@@ -281,7 +286,7 @@ def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
     restored = type(analysis).from_dict(analysis.to_dict())
     assert restored.soft_errors == 1
     assert restored.soft_error_kinds == {"soft_element_missing": 1}
-    assert restored.final_answer_indicates_failure is False
+    assert restored.final_answer_contains_failure_keywords is False
     assert restored.task.task_id == analysis.task.task_id
 
 

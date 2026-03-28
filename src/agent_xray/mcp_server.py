@@ -383,6 +383,511 @@ def completeness(log_dir: str, format: str = "auto") -> str:
         return _json_response({"error": str(e)})
 
 
+@server.tool()
+def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: str | None = None) -> str:
+    """Inspect the full decision surface for a single task, showing per-step tool choices, reasoning, and context.
+
+    Use this when you need to understand exactly what happened inside one task — what tools were available, what the model chose, and why.
+    High-value path: provide task_bank (path to task_bank.json) to include matched expectations and success criteria alongside the surface.
+    Next step: if the surface reveals a tool selection problem, call `root_cause` to classify it. If the surface looks correct but the grade is wrong, call `grade` with task_bank to check expectation alignment.
+    """
+    try:
+        from agent_xray.surface import surface_for_task as run_surface
+
+        tasks = _load_tasks(log_dir, format)
+        task = None
+        for t in tasks:
+            if t.task_id == task_id:
+                task = t
+                break
+        if task is None:
+            return _json_response({"error": f"Task {task_id!r} not found in {log_dir}"})
+
+        surface = run_surface(task)
+
+        if task_bank:
+            from agent_xray.contrib.task_bank import load_task_bank, match_task_to_bank
+
+            bank = load_task_bank(task_bank)
+            matched = match_task_to_bank(task, bank)
+            if matched:
+                surface["task_bank_entry"] = _serialize(matched)
+
+        return _json_response(surface)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
+    """Search tasks by user_text substring to find specific task IDs for further inspection.
+
+    Use this when you know what the user asked but not the task_id, or when filtering traces by keyword before drilling in.
+    Next step: call `surface_task` on a matched task_id to inspect its full decision surface, or call `grade` to see how matched tasks scored.
+    """
+    try:
+        from agent_xray.analyzer import analyze_task
+
+        tasks = _load_tasks(log_dir, format)
+        query_lower = query.lower()
+        matches: list[dict[str, Any]] = []
+        for task in tasks:
+            text = task.task_text or ""
+            if query_lower not in text.lower():
+                continue
+            analysis = analyze_task(task)
+            matches.append({
+                "task_id": task.task_id,
+                "outcome": task.outcome.status if task.outcome else "",
+                "step_count": len(task.steps),
+                "site": analysis.site_name,
+                "user_text": text[:80],
+            })
+
+        return _json_response({
+            "query": query,
+            "match_count": len(matches),
+            "matches": matches,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
+    """Classify failures and build a prioritized fix plan with investigation targets and verify commands.
+
+    Use this after `grade` and `root_cause` when you want an actionable ranked list of what to fix first.
+    High-value path: provide task_bank (path to task_bank.json) for expectation-aware failure classification.
+    Next step: for each fix-plan entry, call `surface_task` on the investigate_task to understand the failure, then apply the fix and re-run `grade` to verify improvement.
+    """
+    try:
+        from agent_xray.diagnose import build_fix_plan
+        from agent_xray.grader import grade_tasks, load_rules
+        from agent_xray.root_cause import classify_failures
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules)
+
+        if task_bank:
+            from agent_xray.contrib.task_bank import grade_with_task_bank
+            grades = grade_with_task_bank(tasks, task_bank, rule_set)
+        else:
+            grades = grade_tasks(tasks, rule_set)
+
+        failures = classify_failures(tasks, grades)
+        plan = build_fix_plan(failures, log_dir=log_dir)
+
+        return _json_response({
+            "summary": {
+                "tasks": len(tasks),
+                "rules": rule_set.name,
+                "task_bank": task_bank or "none",
+                "failures_classified": len(failures),
+                "fix_plan_entries": len(plan),
+            },
+            "fix_plan": [_serialize(entry) for entry in plan],
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def compare_runs(left_log_dir: str, right_log_dir: str, rules: str = "default", format: str = "auto") -> str:
+    """Compare two trace sets side by side to find grade shifts, cost deltas, and decision divergences.
+
+    Use this when you have a before/after pair of runs (different models, different days, or different prompt versions) and want to quantify what changed.
+    Next step: for each divergence point, call `surface_task` on the task_id to inspect what each run did differently. Call `diagnose` on the worse run to build a fix plan.
+    """
+    try:
+        from agent_xray.comparison import compare_model_runs
+
+        result = compare_model_runs(
+            left_log_dir,
+            right_log_dir,
+            rules_path=rules if rules != "default" else None,
+        )
+
+        return _json_response(_serialize(result))
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def report(
+    log_dir: str,
+    report_type: str,
+    rules: str = "default",
+    format: str = "auto",
+    task_bank: str | None = None,
+) -> str:
+    """Generate a focused report by type: health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, timeline, or spins.
+
+    Use this when you need a specific analytical view of the traces rather than the broad `analyze` overview.
+    High-value path: provide task_bank (path to task_bank.json) for expectation-aware reports (especially fixes and broken).
+    Next step: after reviewing a report, call `surface_task` on specific task_ids that need investigation, or call `diagnose` for a prioritized fix plan.
+    """
+    try:
+        from agent_xray.analyzer import analyze_task, analyze_tasks
+        from agent_xray.grader import grade_tasks, load_rules
+        from agent_xray.reports import (
+            report_actions_data,
+            report_broken_data,
+            report_coding_data,
+            report_cost_data,
+            report_fixes_data,
+            report_flows_data,
+            report_golden_data,
+            report_health_data,
+            report_outcomes_data,
+            report_research_data,
+            report_spins_data,
+            report_timeline_data,
+            report_tools_data,
+        )
+
+        valid_types = [
+            "health", "golden", "broken", "tools", "flows", "outcomes",
+            "actions", "coding", "research", "cost", "fixes", "timeline", "spins",
+        ]
+        if report_type not in valid_types:
+            return _json_response({"error": f"Unknown report_type: {report_type!r}. Choose from: {', '.join(valid_types)}"})
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules)
+
+        if task_bank:
+            from agent_xray.contrib.task_bank import grade_with_task_bank
+            grades = grade_with_task_bank(tasks, task_bank, rule_set)
+        else:
+            grades = grade_tasks(tasks, rule_set)
+
+        analyses = analyze_tasks(tasks)
+
+        data_funcs: dict[str, Any] = {
+            "health": lambda: report_health_data(tasks, grades, analyses),
+            "golden": lambda: report_golden_data(tasks, grades, analyses),
+            "broken": lambda: report_broken_data(tasks, grades, analyses),
+            "tools": lambda: report_tools_data(tasks, analyses),
+            "flows": lambda: report_flows_data(tasks, analyses),
+            "outcomes": lambda: report_outcomes_data(tasks, grades, analyses),
+            "actions": lambda: report_actions_data(tasks, grades, analyses),
+            "coding": lambda: report_coding_data(tasks, analyses),
+            "research": lambda: report_research_data(tasks, analyses),
+            "cost": lambda: report_cost_data(tasks, analyses),
+            "fixes": lambda: report_fixes_data(tasks, grades, analyses),
+            "timeline": lambda: report_timeline_data(tasks, grades, analyses),
+            "spins": lambda: report_spins_data(tasks, analyses),
+        }
+
+        return _json_response({
+            "report_type": report_type,
+            "tasks": len(tasks),
+            "rules": rule_set.name,
+            "data": data_funcs[report_type](),
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto") -> str:
+    """Compare two tasks side by side: tool sequences, timing, outcomes.
+
+    Use this when two tasks attempted the same goal but diverged in behavior or grade.
+    Next step: surface_task on the diverging task.
+    """
+    try:
+        from agent_xray.surface import diff_tasks as run_diff_tasks
+
+        tasks = _load_tasks(log_dir, format)
+        left = right = None
+        for t in tasks:
+            if t.task_id == task_id_1:
+                left = t
+            if t.task_id == task_id_2:
+                right = t
+        if left is None:
+            return _json_response({"error": f"Task {task_id_1!r} not found in {log_dir}"})
+        if right is None:
+            return _json_response({"error": f"Task {task_id_2!r} not found in {log_dir}"})
+
+        result = run_diff_tasks(left, right)
+        return _json_response(_serialize(result))
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
+    """Extract the model's reasoning chain for a task, showing how it decided what to do at each step.
+
+    Use this when you need to understand the model's internal decision-making, not just its actions.
+    Next step: surface_task for full context.
+    """
+    try:
+        from agent_xray.surface import reasoning_for_task
+
+        tasks = _load_tasks(log_dir, format)
+        task = None
+        for t in tasks:
+            if t.task_id == task_id:
+                task = t
+                break
+        if task is None:
+            return _json_response({"error": f"Task {task_id!r} not found in {log_dir}"})
+
+        result = reasoning_for_task(task)
+        return _json_response(_serialize(result))
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def tree(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
+    """Bird's-eye view of trace organization as a day/site/task hierarchy.
+
+    Use this to orient yourself before drilling into specific tasks or sites.
+    Next step: surface_task on a specific task_id.
+    """
+    try:
+        from agent_xray.grader import grade_tasks, load_rules
+        from agent_xray.surface import enriched_tree_for_tasks
+
+        tasks = _load_tasks(log_dir, format)
+        if not tasks:
+            return _json_response({"tree": {}, "task_count": 0})
+
+        grades = None
+        if rules:
+            rule_set = load_rules(rules)
+            grades = grade_tasks(tasks, rule_set)
+
+        enriched = enriched_tree_for_tasks(tasks, grades)
+        return _json_response({
+            "task_count": len(tasks),
+            "rules": rules or "none",
+            "tree": _serialize(enriched),
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def golden_rank(
+    log_dir: str,
+    rules: str | None = None,
+    optimize: str = "balanced",
+    format: str = "auto",
+) -> str:
+    """Rank best runs by efficiency, grouping by site with configurable optimization profile.
+
+    Use this to find exemplar runs that represent ideal agent behavior.
+    Next step: golden_compare to check for regressions.
+    """
+    try:
+        from agent_xray.golden import rank_golden_runs
+        from agent_xray.grader import load_rules
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules) if rules else load_rules()
+        rankings = rank_golden_runs(tasks, rules=rule_set, optimize=optimize)
+
+        payload: dict[str, Any] = {
+            "summary": {
+                "tasks": len(tasks),
+                "optimize": optimize,
+                "sites_ranked": len(rankings),
+            },
+            "rankings": {
+                site: [_serialize(r) for r in ranks]
+                for site, ranks in rankings.items()
+            },
+        }
+        return _json_response(payload)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def golden_compare(
+    log_dir: str,
+    fixtures_dir: str,
+    rules: str | None = None,
+    format: str = "auto",
+) -> str:
+    """Regression detection against golden captures. Compares current runs to fixture baselines.
+
+    Use this after golden_rank to verify that agent quality has not degraded.
+    Next step: surface_task on any REGRESSION task.
+    """
+    try:
+        from pathlib import Path
+
+        from agent_xray.golden import rank_golden_runs
+        from agent_xray.grader import load_rules
+        from agent_xray.replay import load_fixture
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules) if rules else load_rules()
+        rankings = rank_golden_runs(tasks, rules=rule_set, optimize="balanced")
+
+        fixtures_path = Path(fixtures_dir)
+        if not fixtures_path.exists():
+            return _json_response({"error": f"Fixtures directory not found: {fixtures_dir}"})
+
+        results: list[dict[str, Any]] = []
+        for fixture_path in sorted(fixtures_path.glob("*.json")):
+            try:
+                fixture = load_fixture(fixture_path)
+            except Exception:
+                continue
+            fixture_site = str(fixture.get("site", ""))
+            fixture_steps = int(fixture.get("total_steps", 0) or 0)
+            site_ranks = rankings.get(fixture_site, [])
+            if site_ranks:
+                best = site_ranks[0]
+                step_delta = best.step_count - fixture_steps
+                results.append({
+                    "fixture": fixture_path.name,
+                    "site": fixture_site,
+                    "fixture_steps": fixture_steps,
+                    "current_best_task": best.task_id,
+                    "current_best_steps": best.step_count,
+                    "current_best_efficiency": round(best.efficiency, 4),
+                    "step_delta": step_delta,
+                    "verdict": (
+                        "IMPROVED" if step_delta < -2
+                        else "REGRESSION" if step_delta > 5
+                        else "STABLE"
+                    ),
+                })
+            else:
+                results.append({
+                    "fixture": fixture_path.name,
+                    "site": fixture_site,
+                    "fixture_steps": fixture_steps,
+                    "current_best_task": None,
+                    "current_best_steps": None,
+                    "current_best_efficiency": None,
+                    "step_delta": None,
+                    "verdict": "UNMATCHED",
+                })
+
+        return _json_response({
+            "summary": {
+                "tasks": len(tasks),
+                "fixtures_compared": len(results),
+                "regressions": sum(1 for r in results if r["verdict"] == "REGRESSION"),
+                "improvements": sum(1 for r in results if r["verdict"] == "IMPROVED"),
+            },
+            "comparisons": results,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def task_bank_validate(path: str) -> str:
+    """Check task bank schema and criteria for correctness.
+
+    Use this before grading with a task bank to catch schema errors early.
+    Next step: grade with --task-bank.
+    """
+    try:
+        from agent_xray.contrib.task_bank import validate_task_bank
+
+        result = validate_task_bank(path)
+        return _json_response({
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "valid": len(result.errors) == 0,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def task_bank_list(path: str) -> str:
+    """List all entries in a task bank, showing task IDs, descriptions, and success criteria.
+
+    Use this to inspect what a task bank contains before using it for grading.
+    Next step: grade with --task-bank.
+    """
+    try:
+        from agent_xray.contrib.task_bank import load_task_bank
+
+        entries = load_task_bank(path)
+        return _json_response({
+            "count": len(entries),
+            "entries": entries,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def flywheel(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
+    """Full quality loop in one call: grade + root cause + baseline comparison.
+
+    Use this for an end-to-end quality assessment when you want everything at once.
+    Next step: diagnose for fix plan.
+    """
+    try:
+        from agent_xray.flywheel import run_flywheel
+
+        result = run_flywheel(
+            log_dir,
+            rules_path=rules,
+        )
+        return _json_response(_serialize(result.to_dict()))
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def capture_task(log_dir: str, task_id: str, format: str = "auto") -> str:
+    """Save a task as a sanitized fixture for replay and regression testing.
+
+    Use this to capture a golden or interesting task for future comparison.
+    Next step: replay to compare against future runs.
+    """
+    try:
+        from pathlib import Path
+
+        from agent_xray.capture import capture_task as run_capture
+
+        tasks = _load_tasks(log_dir, format)
+        output_path = Path.cwd() / "captured" / f"{task_id}.json"
+        path = run_capture(tasks, task_id, output_path)
+        return _json_response({
+            "fixture": str(path),
+            "task_id": task_id,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def pricing_show(model_name: str) -> str:
+    """Look up per-token pricing for a model, showing input/output/cached costs.
+
+    Use this to understand cost implications before analyzing spend.
+    Next step: report cost for full cost analysis.
+    """
+    try:
+        from agent_xray.pricing import format_model_pricing, load_pricing
+
+        pricing_data = load_pricing()
+        formatted = format_model_pricing(model_name, pricing_data)
+        return _json_response({
+            "model": model_name,
+            "pricing": formatted,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
 def main() -> None:
     """Run the agent-xray MCP server over stdio transport."""
     server.run(transport="stdio")

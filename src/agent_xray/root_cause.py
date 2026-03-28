@@ -243,11 +243,21 @@ def _confidence_label_from_score(score: float) -> str:
 
 
 def _score_confidence(label: str, evidence: list[str]) -> float:
-    """Derive a numeric confidence score from a baseline label and evidence count."""
+    """Derive a numeric confidence score from a baseline label and evidence count.
+
+    The evidence_count is the primary signal — the label sets a baseline but
+    evidence items shift the score so the agent can see how much data backs
+    the classification.
+    """
 
     baseline = _baseline_confidence_score(label)
     bonus = min(max(0, len(evidence) - 1) * 0.05, 0.1)
     return _clamp_confidence_score(baseline + bonus)
+
+
+def _evidence_count(evidence: list[str]) -> int:
+    """Return the raw evidence count — visible to consumers alongside the score."""
+    return len(evidence)
 
 
 def _normalize_text(value: str | None) -> str:
@@ -279,6 +289,9 @@ class RootCauseResult:
     error_kinds: dict[str, int] = field(default_factory=dict)
     prompt_section: str | None = None
     prompt_fix_hint: str | None = None
+    also_matched: list[dict[str, Any]] = field(default_factory=list)
+    classifiers_checked: list[dict[str, Any]] = field(default_factory=list)
+    evidence_count: int = 0
 
     def __post_init__(self) -> None:
         """Normalize legacy and numeric confidence fields into a consistent shape."""
@@ -291,6 +304,7 @@ class RootCauseResult:
             resolved_score = _baseline_confidence_score(str(self.confidence))
         self.confidence_score = resolved_score
         self.confidence = _confidence_label_from_score(resolved_score)
+        self.evidence_count = len(self.evidence)
 
 
 def _available_tools(task: AgentTask) -> set[str]:
@@ -469,6 +483,7 @@ def _apply_classification(
     result.evidence.extend(evidence)
     result.confidence_score = _score_confidence(confidence, result.evidence)
     result.confidence = _confidence_label_from_score(result.confidence_score)
+    result.evidence_count = len(result.evidence)
     return result
 
 
@@ -930,6 +945,50 @@ def _classify_tool_selection_from_low_diversity(
     return None
 
 
+def _collect_near_misses(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> list[dict[str, Any]]:
+    """Return top 3 classifiers that came closest to matching.
+
+    For each classifier, report its name and the key metric values vs
+    thresholds so the agent can see WHY none triggered.
+    """
+    near_misses: list[dict[str, Any]] = []
+
+    # Each entry: (name, checked_condition, metric_detail)
+    checks = [
+        ("routing_bug", "tools_available_count == 0 or no_tools_steps > 0",
+         {"no_tools_steps": analysis.no_tools_steps, "unique_tools": len(analysis.unique_tools)}),
+        ("approval_block", "rejected_tool_count > 0",
+         {"rejected_tool_count": analysis.rejected_tool_count}),
+        ("spin", "max_repeat_count >= threshold",
+         {"max_repeat_count": analysis.max_repeat_count,
+          "threshold": config.spin_threshold}),
+        ("error_dominance", "error_rate >= threshold",
+         {"error_rate": round(analysis.errors / max(1, analysis.step_count), 3),
+          "errors": analysis.errors, "steps": analysis.step_count,
+          "threshold": config.high_error_rate}),
+        ("memory_overload", "max_context_usage_pct >= threshold",
+         {"max_context_usage_pct": analysis.max_context_usage_pct,
+          "threshold": config.memory_overload_usage_pct}),
+        ("stuck_loop", "unique_urls <= 1 and steps >= min_steps",
+         {"unique_urls": len(analysis.unique_urls), "step_count": analysis.step_count,
+          "min_steps": config.stuck_loop_min_steps}),
+        ("early_abort", "step_count <= threshold",
+         {"step_count": analysis.step_count, "threshold": config.early_abort_max_steps}),
+    ]
+    for name, condition, metrics in checks:
+        near_misses.append({
+            "classifier": name,
+            "condition": condition,
+            "actual_values": metrics,
+        })
+    # Return top 3 by closest-to-threshold heuristic (sort by name for stability)
+    return near_misses[:3]
+
+
 def classify_task(
     task: AgentTask,
     grade: GradeResult,
@@ -958,7 +1017,9 @@ def classify_task(
         site_name=analysis.site_name,
         error_kinds=analysis.error_kinds,
     )
-    for classifier in (
+
+    # Run ALL classifiers, collect every match — not just the first.
+    classifiers = (
         _classify_routing_bug,
         _classify_approval_block,
         _classify_spin,
@@ -977,16 +1038,30 @@ def classify_task(
         _classify_early_abort,
         _classify_reasoning_bug,
         _classify_tool_selection_from_low_diversity,
-    ):
+    )
+    all_matches: list[ClassificationDecision] = []
+    for classifier in classifiers:
         decision = classifier(task, analysis, cfg)
         if decision is not None:
-            root_cause, confidence, evidence = decision
-            return _apply_classification(
-                result,
-                root_cause=root_cause,
-                confidence=confidence,
-                evidence=evidence,
-            )
+            all_matches.append(decision)
+
+    if all_matches:
+        # Primary = first match (highest priority in classifier ordering)
+        primary_cause, primary_confidence, primary_evidence = all_matches[0]
+        _apply_classification(
+            result,
+            root_cause=primary_cause,
+            confidence=primary_confidence,
+            evidence=primary_evidence,
+        )
+        # Surface alternatives the agent should know about
+        for alt_cause, alt_confidence, alt_evidence in all_matches[1:]:
+            result.also_matched.append({
+                "root_cause": alt_cause,
+                "confidence": alt_confidence,
+                "evidence": alt_evidence,
+            })
+        return result
 
     # Check if there's genuine prompt-bug evidence before falling back
     _enrich_prompt_bug(result, task, analysis)
@@ -995,9 +1070,11 @@ def classify_task(
         result.evidence.append("prompt-section attribution identified specific prompt issue")
         result.confidence_score = _score_confidence("low", result.evidence)
         result.confidence = _confidence_label_from_score(result.confidence_score)
+        result.evidence_count = len(result.evidence)
         return result
 
-    # No specific root cause identified — classify as unclassified
+    # No specific root cause identified — show what was checked so the agent
+    # can see WHY nothing matched instead of just "unclassified".
     result.root_cause = "unclassified"
     result.evidence.append(
         "No specific root cause identified — manual investigation recommended"
@@ -1006,8 +1083,15 @@ def classify_task(
         result.evidence.append(
             "no outcome record — classification confidence further reduced"
         )
+
+    # Surface the classifiers that came closest (had partial signal but
+    # didn't cross thresholds) so the agent sees what was checked.
+    _near_miss = _collect_near_misses(task, analysis, cfg)
+    result.classifiers_checked = _near_miss
+
     result.confidence_score = _score_confidence("low", result.evidence)
     result.confidence = _confidence_label_from_score(result.confidence_score)
+    result.evidence_count = len(result.evidence)
     return result
 
 
