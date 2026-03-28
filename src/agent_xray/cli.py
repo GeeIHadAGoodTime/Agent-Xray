@@ -507,6 +507,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 lines.append(f"  {label + ':':10s} {count:>3d}  ({pct:4.1f}%)")
             lines.append("")
             lines.append("Run 'agent-xray grade <dir> --json' for per-task details.")
+            # Suggest domain-specific rules if most tasks are web/browser
+            web_count = sum(
+                1 for t in tasks if t.task_category == "web"
+                or any(s.tool_name.startswith("browser_") for s in t.steps)
+            )
+            if web_count > len(tasks) * 0.4 and not args.rules:
+                lines.append(
+                    f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
+                    " Use '--rules browser_flow' for domain-specific grading."
+                )
             _emit("\n".join(lines), args, final=True)
         return 0
 
@@ -601,6 +611,16 @@ def cmd_grade(args: argparse.Namespace) -> int:
         else:
             grade_text = _format_grade_summary(tasks, rules.name, grades, args)
             hint = "\nHint: Use 'agent-xray surface <task-id> --log-dir <dir>' to inspect a specific task."
+            # Suggest domain-specific rules if most tasks are web/browser
+            web_count = sum(
+                1 for t in tasks if t.task_category == "web"
+                or any(s.tool_name.startswith("browser_") for s in t.steps)
+            )
+            if web_count > len(tasks) * 0.4 and not args.rules:
+                hint += (
+                    f"\nTip: {web_count}/{len(tasks)} tasks are browser tasks."
+                    " Use '--rules browser_flow' for domain-specific grading."
+                )
             _emit(grade_text + hint, args, final=True)
         return 0
 

@@ -81,10 +81,17 @@
     }
   ],
   "grade_thresholds": {
-    "GOLDEN": 4,
+    "GOLDEN": 5,
     "GOOD": 3,
     "OK": 1,
     "WEAK": 0
   },
-  "golden_requirements": []
+  "golden_requirements": [
+    {
+      "field": "max_repeat_count",
+      "op": "lt",
+      "value": 3,
+      "reason": "GOLDEN requires no tool repeated 3+ times consecutively"
+    }
+  ]
 }
