@@ -1,6 +1,7 @@
 {
   "name": "default",
   "description": "Generic grading rules for any agent trace. Focuses on reliability, progress, and loop resistance.",
+  "philosophy": "The default ruleset grades EXECUTION QUALITY — tool diversity, reliability, and loop resistance. It does NOT verify task achievement. Self-reported success earns +1, not +2, because the agent's word alone cannot prove the task was accomplished. For domain-specific achievement grading, use browser_flow, coding_agent, or research_agent rulesets, or create your own with 'agent-xray rules init'.",
   "signals": [
     {
       "name": "tool_diversity",
@@ -34,8 +35,8 @@
       "name": "task_completed",
       "metric": "task_completed",
       "equals": true,
-      "points": 2,
-      "reason": "+2 task completed successfully"
+      "points": 1,
+      "reason": "+1 task completed (self-reported)"
     },
     {
       "name": "timeout_penalty",
@@ -81,7 +82,7 @@
     }
   ],
   "grade_thresholds": {
-    "GOLDEN": 5,
+    "GOLDEN": 4,
     "GOOD": 3,
     "OK": 1,
     "WEAK": 0

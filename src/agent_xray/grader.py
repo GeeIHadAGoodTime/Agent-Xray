@@ -109,6 +109,29 @@ def load_rules(path: str | Path | None = None) -> RuleSet:
     if not isinstance(raw_payload, dict):
         raise ValueError(f"rules file did not contain a JSON object: {rule_path}")
     payload = {str(key): value for key, value in raw_payload.items()}
+    # Handle ruleset inheritance
+    if "extends" in payload:
+        base_path = _resolve_rules_path(payload["extends"])
+        base_raw = json.loads(base_path.read_text(encoding="utf-8"))
+        if not isinstance(base_raw, dict):
+            raise ValueError(f"base rules file is not a JSON object: {base_path}")
+        base = {str(k): v for k, v in base_raw.items()}
+        # Merge signals: base first, child overrides by name
+        base_signals = {s.get("name"): s for s in base.get("signals", []) if isinstance(s, dict)}
+        for sig in payload.get("signals", []):
+            if isinstance(sig, dict) and sig.get("name"):
+                base_signals[sig["name"]] = sig
+            elif isinstance(sig, dict):
+                base_signals[id(sig)] = sig
+        payload.setdefault("signals", list(base_signals.values()))
+        # Merge thresholds: base, then child overrides
+        merged_thresholds = dict(base.get("grade_thresholds", base.get("thresholds", {})))
+        merged_thresholds.update(payload.get("grade_thresholds", payload.get("thresholds", {})))
+        payload["grade_thresholds"] = merged_thresholds
+        # Merge golden_requirements: base + child
+        base_golden = [r for r in base.get("golden_requirements", []) if isinstance(r, (str, dict))]
+        child_golden = [r for r in payload.get("golden_requirements", []) if isinstance(r, (str, dict))]
+        payload["golden_requirements"] = base_golden + child_golden
     rules = RuleSet(
         name=str(payload["name"]),
         description=str(payload.get("description", "")),

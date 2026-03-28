@@ -1045,6 +1045,65 @@ def cmd_record(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_rules_list(args: argparse.Namespace) -> int:
+    """List available built-in rulesets."""
+    from importlib.resources import files as pkg_files
+    rules_dir = Path(str(pkg_files("agent_xray.rules")))
+    lines = ["Available rulesets:", ""]
+    for path in sorted(rules_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            name = data.get("name", path.stem)
+            desc = data.get("description", "")
+            lines.append(f"  {name:20s} {desc}")
+        except Exception:
+            continue
+    lines.extend([
+        "",
+        "Use: agent-xray grade <dir> --rules <name>",
+        "Create custom: agent-xray rules init --base default > my_rules.json",
+    ])
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_rules_show(args: argparse.Namespace) -> int:
+    """Show a ruleset's full JSON."""
+    rules = load_rules(args.name)
+    data = {
+        "name": rules.name,
+        "description": rules.description,
+        "signals": rules.signals,
+        "grade_thresholds": rules.grade_thresholds,
+        "golden_requirements": rules.golden_requirements,
+    }
+    print(json.dumps(data, indent=2))
+    return 0
+
+
+def cmd_rules_init(args: argparse.Namespace) -> int:
+    """Scaffold a custom ruleset."""
+    base_name = args.base or "default"
+    scaffold = {
+        "name": "my_custom_rules",
+        "description": "Custom grading rules. Edit signals, thresholds, and requirements to match your agent.",
+        "extends": base_name,
+        "signals": [
+            {
+                "name": "example_custom_signal",
+                "metric": "unique_tools",
+                "gte": 5,
+                "points": 1,
+                "reason": "+1 used 5+ unique tools (customize this)"
+            }
+        ],
+        "grade_thresholds": {},
+        "golden_requirements": []
+    }
+    print(json.dumps(scaffold, indent=2))
+    return 0
+
+
 def _add_format_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -1340,6 +1399,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Command to run (everything after --)",
     )
     p_record.set_defaults(func=cmd_record)
+
+    # Rules management subcommands
+    p_rules = _add_subparser(
+        sub,
+        "rules",
+        help_text="List, show, or scaffold rulesets",
+        example="agent-xray rules list",
+    )
+    rules_sub = p_rules.add_subparsers(dest="rules_command")
+
+    p_rules_list = rules_sub.add_parser("list", help="List available built-in rulesets")
+    p_rules_list.set_defaults(func=cmd_rules_list)
+
+    p_rules_show = rules_sub.add_parser("show", help="Show a ruleset's full JSON")
+    p_rules_show.add_argument("name", help="Ruleset name (e.g. default, browser_flow)")
+    p_rules_show.set_defaults(func=cmd_rules_show)
+
+    p_rules_init = rules_sub.add_parser("init", help="Scaffold a custom ruleset to stdout")
+    p_rules_init.add_argument("--base", default="default", help="Base ruleset to extend (default: default)")
+    p_rules_init.set_defaults(func=cmd_rules_init)
+
+    # Default: show help when no sub-subcommand given
+    p_rules.set_defaults(func=lambda args: (p_rules.print_help(), 0)[1])
 
     return parser
 
