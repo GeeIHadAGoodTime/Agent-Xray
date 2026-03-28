@@ -261,6 +261,401 @@ Rule files support both legacy metric syntax and the newer field/operator form:
 }
 ```
 
+Task-bank-aware grading is also supported when you have curated task expectations:
+
+```bash
+agent-xray grade ./traces --task-bank ./task_bank.json
+agent-xray analyze ./traces --task-bank ./task_bank.json
+agent-xray root-cause ./traces --task-bank ./task_bank.json
+```
+
+`contrib/task_bank.py` adds fuzzy task matching plus per-task success criteria such as `must_reach_url`, `must_fill_fields`, `must_use_tools`, `must_reach_checkout`, `must_not_fill_payment`, and `must_have_answer`.
+
+## Full CLI Reference
+
+### Core inspection commands
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `agent-xray analyze <log-dir>` | Grades a trace set and returns a high-level distribution summary | `agent-xray analyze ./traces --rules browser_flow --task-bank ./task_bank.json` |
+| `agent-xray surface <task-id> [log-dir]` | Reconstructs the full decision surface for one task | `agent-xray surface golden-task ./traces --json` |
+| `agent-xray reasoning <task-id> [log-dir]` | Extracts the reasoning chain for a task | `agent-xray reasoning golden-task ./traces` |
+| `agent-xray diff <task-a> <task-b> [log-dir]` | Compares two tasks step by step | `agent-xray diff task-a task-b ./traces --summary` |
+| `agent-xray grade <log-dir>` | Produces per-task grades, reasons, and root-cause output | `agent-xray grade ./traces --rules coding_agent --json` |
+| `agent-xray root-cause <log-dir>` | Classifies likely failure modes for weak or broken tasks | `agent-xray root-cause ./traces --rules browser_flow --json` |
+| `agent-xray tree [log-dir]` | Groups tasks into a day/site/task tree and can enrich it with grades | `agent-xray tree ./traces --rules default` |
+| `agent-xray search <text> [log-dir]` | Searches tasks by `user_text`, optionally filtering by grade | `agent-xray search "checkout" ./traces --grade BROKEN,WEAK` |
+| `agent-xray compare <left-dir> <right-dir>` | Compares matched tasks across two run directories | `agent-xray compare ./runs/gpt-4.1 ./runs/gpt-5 --json` |
+| `agent-xray tui <log-dir>` | Opens the optional interactive inspector | `agent-xray tui ./traces --task-id broken-task` |
+| `agent-xray quickstart` | Creates a sample trace set and walkthrough | `agent-xray quickstart` |
+
+### Fixture, replay, and flywheel commands
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `agent-xray capture <task-id>` | Captures a sanitized golden fixture from a task | `agent-xray capture golden-task --log-dir ./traces --out ./fixtures/golden-task.json` |
+| `agent-xray replay <fixture>` | Replays a captured fixture against current traces | `agent-xray replay ./fixtures/golden-task.json --log-dir ./traces` |
+| `agent-xray flywheel <log-dir>` | Runs grading, root-cause analysis, fix-plan generation, fixture replay, and baseline comparison | `agent-xray flywheel ./traces --fixture-dir ./fixtures --baseline ./last-flywheel.json --json` |
+| `agent-xray record -- <command...>` | Records JSON-emitting agent output from a subprocess into native trace files | `agent-xray record --output-dir ./traces -- python my_agent.py` |
+
+### Reporting, monitoring, and diagnosis commands
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `agent-xray report <log-dir> <type>` | Generates text, JSON, or Markdown reports | `agent-xray report ./traces actions --markdown` |
+| `agent-xray watch <file>` | Live-tails a JSONL file and grades tasks as they complete | `agent-xray watch ./traces/agent-steps-20260328.jsonl --rules browser_flow` |
+| `agent-xray completeness <log-dir>` | Checks trace completeness across observability dimensions | `agent-xray completeness ./traces --json` |
+| `agent-xray diagnose <log-dir>` | Builds a prioritized fix plan from root causes and validates targets when `--project-root` is set | `agent-xray diagnose ./traces --project-root . --json` |
+| `agent-xray validate-targets --project-root <dir>` | Validates fix-plan file-path targets on disk | `agent-xray validate-targets --project-root . --resolver novviola` |
+
+### Rules, pricing, golden, baseline, and task-bank subcommands
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `agent-xray rules list` | Lists built-in rulesets | `agent-xray rules list` |
+| `agent-xray rules show <name>` | Prints a ruleset JSON | `agent-xray rules show browser_flow` |
+| `agent-xray rules init` | Scaffolds a custom ruleset | `agent-xray rules init --base default > my_rules.json` |
+| `agent-xray pricing list` | Lists all models in the pricing database | `agent-xray pricing list` |
+| `agent-xray pricing show <model>` | Shows pricing for one model | `agent-xray pricing show gpt-4.1-mini` |
+| `agent-xray pricing update` | Refreshes the local pricing cache from GitHub | `agent-xray pricing update` |
+| `agent-xray pricing path` | Shows the active pricing source path | `agent-xray pricing path` |
+| `agent-xray golden rank [log-dir]` | Ranks `GOLDEN`/`GOOD` runs by efficiency within each site | `agent-xray golden rank ./traces --optimize balanced` |
+| `agent-xray golden best [log-dir]` | Shows the exemplar run for each site | `agent-xray golden best ./traces --optimize speed` |
+| `agent-xray golden capture [log-dir]` | Captures the current exemplar fixture for a site | `agent-xray golden capture ./traces --site shop --out ./exemplars/shop.json` |
+| `agent-xray golden compare [log-dir]` | Compares current exemplars to captured fixtures | `agent-xray golden compare ./traces --fixtures ./exemplars` |
+| `agent-xray golden profiles` | Lists built-in optimization profiles | `agent-xray golden profiles` |
+| `agent-xray baseline capture <task-id> [log-dir]` | Saves a baseline JSON for a task/site | `agent-xray baseline capture golden-task ./traces -o ./baselines/shop.json` |
+| `agent-xray baseline generate <task-id> [log-dir]` | Prints the naked prompt for a task | `agent-xray baseline generate golden-task ./traces` |
+| `agent-xray baseline list <dir>` | Lists saved baselines | `agent-xray baseline list ./baselines` |
+| `agent-xray task-bank list <path>` | Lists task-bank entries | `agent-xray task-bank list ./task_bank.json` |
+| `agent-xray task-bank show <path> <task-id>` | Shows one task-bank entry | `agent-xray task-bank show ./task_bank.json checkout-wireless-headset` |
+| `agent-xray task-bank validate <path>` | Validates task-bank schema and criterion names | `agent-xray task-bank validate ./task_bank.json` |
+
+### Enforce subcommands
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `agent-xray enforce init` | Starts an enforcement session and captures a baseline | `agent-xray enforce init --test "pytest tests/ -q"` |
+| `agent-xray enforce check` | Grades the current iteration and recommends commit, revert, or reject | `agent-xray enforce check --hypothesis "missing await"` |
+| `agent-xray enforce diff` | Shows current diff size and rejection status | `agent-xray enforce diff` |
+| `agent-xray enforce status` | Shows the active session state | `agent-xray enforce status` |
+| `agent-xray enforce challenge` | Runs adversarial checks across iterations | `agent-xray enforce challenge` |
+| `agent-xray enforce report` | Generates a text, JSON, or Markdown session report | `agent-xray enforce report --format markdown` |
+| `agent-xray enforce reset` | Abandons the active session | `agent-xray enforce reset` |
+| `agent-xray enforce auto` | Runs the full autonomous enforce loop | `agent-xray enforce auto --test "pytest tests/ -q" --agent-cmd "codex exec '{hypothesis}'"` |
+| `agent-xray enforce plan` | Registers a hypothesis and expected tests before a change | `agent-xray enforce plan --hypothesis "timeout is caused by missing await"` |
+| `agent-xray enforce guard` | Checks for changes that bypassed the enforce pipeline | `agent-xray enforce guard` |
+
+## Signal Detector Packs
+
+`agent-xray` ships six built-in detector packs. Their metrics are merged into `TaskAnalysis.metrics()` and can be used directly in rules:
+
+| Detector | Class | What it measures |
+| --- | --- | --- |
+| Commerce | `CommerceDetector` | `reached_payment`, `reached_checkout`, `reached_cart`, fill counts, payment-field visibility, and suspiciously-short terminal runs |
+| Coding | `CodingDetector` | file edits, test/build/lint/git/shell activity, error counts, `test_to_edit_ratio`, and unique files touched |
+| Research | `ResearchDetector` | searches, reads, source diversity, citations, synthesis steps, and URL references |
+| Planning | `PlanningDetector` | plans created, plan steps executed, plan revisions, and plan completion rate |
+| Memory | `MemoryDetector` | memory store/recall activity, recall hit rate, RAG queries, unique keys, and context injections |
+| Multi-agent | `MultiAgentDetector` | delegation count, unique agents, delegation success rate, and delegation depth |
+
+### Custom signal plugins
+
+Built-ins are loaded first, then `discover_detectors()` loads third-party detectors from the `agent_xray.signals` entry-point group.
+
+```toml
+[project.entry-points."agent_xray.signals"]
+my_detector = "my_package.detectors:MyDetector"
+```
+
+```python
+from agent_xray.schema import AgentStep, AgentTask
+
+
+class MyDetector:
+    name = "my_detector"
+
+    def detect_step(self, step: AgentStep) -> dict[str, bool]:
+        return {"is_special": "special" in step.tool_name.lower()}
+
+    def summarize(self, task: AgentTask, step_signals: list[dict[str, bool]]) -> dict[str, int]:
+        return {"special_steps": sum(1 for item in step_signals if item["is_special"])}
+```
+
+If your detector instance satisfies the `SignalDetector` protocol, `run_detection()` will include its summary under `analysis.signal_metrics["my_detector"]`.
+
+## Task Bank System
+
+`src/agent_xray/contrib/task_bank.py` adds a criterion-aware grading layer for curated task banks.
+
+### What the module exposes
+
+- `load_task_bank(path)`: loads a bare JSON array or `{"tasks": [...]}` payload
+- `match_task_to_bank(task, bank, analysis=None, threshold=0.45)`: fuzzy-matches an `AgentTask` to the best bank entry using `SequenceMatcher` plus token overlap
+- `evaluate_task_criteria(task, analysis, criteria)`: evaluates one bank entry's `success_criteria`
+- `grade_with_task_bank(tasks, bank_path, rules=None)`: runs normal grading, appends task-bank reasons/signals, and caps `GOLDEN` to `GOOD` when critical criteria fail
+- `validate_task_bank(path)` / `validate_task_bank_entries(entries)`: validates schema, duplicate IDs, criterion names, and criterion value types
+
+### Supported criteria
+
+`task_bank.py` currently evaluates 14 criterion names:
+
+- `must_answer_contains`
+- `answer_type`
+- `must_reach_url`
+- `must_fill_fields`
+- `min_urls`
+- `max_steps`
+- `payment_fields_visible`
+- `must_not_fill_payment`
+- `must_reach_cart`
+- `must_reach_checkout`
+- `must_use_tools`
+- `no_browser_needed`
+- `must_have_answer`
+- `min_tool_count`
+
+### Task-bank schema
+
+```json
+{
+  "tasks": [
+    {
+      "id": "checkout-wireless-headset",
+      "user_text": "Buy the wireless headset and complete checkout on shop.example.test.",
+      "site": "shop.example.test",
+      "category": "commerce",
+      "success_criteria": {
+        "must_reach_checkout": true,
+        "must_reach_url": "order/confirmation",
+        "must_use_tools": ["browser_click", "browser_fill_ref"]
+      }
+    }
+  ]
+}
+```
+
+### CLI usage
+
+```bash
+agent-xray task-bank validate ./task_bank.json
+agent-xray task-bank list ./task_bank.json
+agent-xray task-bank show ./task_bank.json checkout-wireless-headset
+
+agent-xray grade ./traces --task-bank ./task_bank.json
+agent-xray analyze ./traces --task-bank ./task_bank.json
+agent-xray root-cause ./traces --task-bank ./task_bank.json
+```
+
+The task bank is intentionally opt-in. It does not replace rules; it augments grading with task-specific success criteria.
+
+## Reports, Watch Mode, and Completeness
+
+### Core report types (14)
+
+The `report` command exposes fourteen core trace reports:
+
+| Report type | What it focuses on | Example |
+| --- | --- | --- |
+| `health` | overall grade distribution and task health | `agent-xray report ./traces health` |
+| `golden` | high-performing `GOLDEN`/`GOOD` runs | `agent-xray report ./traces golden` |
+| `broken` | weak and broken tasks plus likely why | `agent-xray report ./traces broken` |
+| `tools` | tool effectiveness and error rates | `agent-xray report ./traces tools` |
+| `flows` | task-flow detection across commerce, coding, research, and browser patterns | `agent-xray report ./traces flows` |
+| `outcomes` | outcome/status distribution | `agent-xray report ./traces outcomes` |
+| `actions` | prioritized action items | `agent-xray report ./traces actions` |
+| `cost` | cost summaries by model and task | `agent-xray report ./traces cost --markdown` |
+| `fixes` | grouped fix-plan output built from root causes | `agent-xray report ./traces fixes` |
+| `compare` | day-over-day comparison (the CLI name is `compare`) | `agent-xray report ./traces compare --day1 20260326 --day2 20260327` |
+| `coding` | coding-task activity and verification patterns | `agent-xray report ./traces coding` |
+| `research` | research-task sourcing and synthesis patterns | `agent-xray report ./traces research` |
+| `timeline` | time-bucketed task throughput and error patterns | `agent-xray report ./traces timeline --bucket 15m` |
+| `spins` | spin sequences grouped by tool, site, and pattern | `agent-xray report ./traces spins` |
+
+Every report supports text output by default, plus `--json` and `--markdown`.
+
+### Baseline-derived report types
+
+Two more report modes are built on top of `baseline.py`:
+
+- `report overhead`: compares current runs to captured baselines with `measure_all_overhead()`
+- `report prompt-impact`: groups runs by prompt hash with `group_by_prompt_hash()`
+
+### Watch / live-tail mode
+
+`watch.py` implements `watch_file()`, which incrementally tails a JSONL file, rebuilds completed tasks from accumulated steps, grades each task as soon as its `task_complete` event lands, and prints a running tally.
+
+```bash
+agent-xray watch ./traces/agent-steps-20260328.jsonl --rules browser_flow
+agent-xray watch ./traces/agent-steps-20260328.jsonl --json
+```
+
+### Completeness checker
+
+`check_completeness()` audits trace coverage across 14 dimensions:
+
+- `outcome_records`
+- `tool_schemas`
+- `model_name`
+- `cache_tokens`
+- `final_answer`
+- `system_prompt`
+- `rejected_tools`
+- `approval_path`
+- `conversation_history`
+- `step_durations`
+- `system_context`
+- `llm_reasoning`
+- `step_data_loss`
+- `target_validity`
+
+The CLI command `agent-xray completeness` checks the trace-driven dimensions directly. The optional `target_validity` dimension is evaluated when `check_completeness(project_root=...)` is used programmatically.
+
+## Diagnosis and Fix Plans
+
+`diagnose.py` turns root-cause output into a prioritized fix queue.
+
+- `build_fix_plan(results)`: groups failures by root cause and ranks them by impact and severity
+- `format_fix_plan_text(plan)`: renders a CLI-friendly fix plan
+- `validate_fix_targets(plan, project_root)`: flags stale path targets
+- `list_all_targets(resolver)`: lists every known target returned by a resolver
+- `register_target_resolver(name, resolver, make_default=False)`: registers a custom resolver
+- `DefaultTargetResolver`: the built-in resolver that returns conceptual search targets rather than file paths
+
+`contrib/novviola.py` is the project-specific example of a resolver plugin. It exposes:
+
+- `NovviolaTargetResolver`: maps root causes to NOVVIOLA file paths
+- `NovviolaVerifyCommands`: returns NOVVIOLA-specific verification commands
+- `register()`: installs the NOVVIOLA resolver as the default active resolver
+
+## Golden Ranking and Optimization Profiles
+
+`golden.py` ranks high-quality runs by efficiency within each site.
+
+- `rank_golden_runs(tasks, rules=None, optimize="balanced")`: returns per-site rankings
+- `find_exemplars(tasks, rules=None, optimize="balanced")`: returns the best run per site
+- `capture_exemplar(...)`: writes the current exemplar as a fixture with efficiency metadata
+- `explain_efficiency_gap(exemplar_analysis, other_analysis)`: explains why one run is more efficient than another
+
+Built-in optimization profiles:
+
+| Profile | Weights |
+| --- | --- |
+| `balanced` | `steps=0.3`, `duration=0.3`, `cost=0.2`, `errors=0.2` |
+| `cost` | `steps=0.1`, `duration=0.1`, `cost=0.7`, `errors=0.1` |
+| `speed` | `steps=0.1`, `duration=0.7`, `cost=0.1`, `errors=0.1` |
+| `steps` | `steps=0.7`, `duration=0.1`, `cost=0.1`, `errors=0.1` |
+
+CLI examples:
+
+```bash
+agent-xray golden rank ./traces --optimize balanced
+agent-xray golden best ./traces --optimize speed
+agent-xray golden capture ./traces --site shop --out ./exemplars/shop.json
+agent-xray golden compare ./traces --fixtures ./exemplars
+agent-xray golden profiles
+```
+
+## Baseline and Overhead Measurement
+
+`baseline.py` exposes the baseline workflow:
+
+- `generate_naked_prompt(task)`: reconstructs a stripped-down imperative prompt from a task
+- `build_baseline(task, analysis)`: captures steps, duration, tokens, cost, errors, milestones, tool sequence, and naked prompt
+- `save_baseline()` / `load_baseline()` / `load_baselines()`: persist baselines as JSON
+- `measure_overhead()` / `measure_all_overhead()`: compare current tasks to captured baselines
+- `group_by_prompt_hash()`: group tasks by `system_prompt_hash`
+- `format_overhead_report()` / `format_prompt_impact_report()`: render baseline-derived reports
+
+CLI examples:
+
+```bash
+agent-xray baseline capture golden-task ./traces -o ./baselines/shop.json
+agent-xray baseline generate golden-task ./traces
+agent-xray baseline list ./baselines
+
+agent-xray report ./traces overhead --baselines ./baselines
+agent-xray report ./traces prompt-impact --baselines ./baselines
+```
+
+## Pricing Database
+
+`pricing.py` provides bundled pricing, a local cache, alias resolution, and live refreshes.
+
+- Source precedence: explicit `--pricing` path, `AGENT_XRAY_PRICING`, local cache, bundled `src/agent_xray/pricing.json`
+- `load_pricing()`: loads the active pricing database
+- `get_model_cost()`: computes USD cost from input, output, and cached tokens
+- `update_pricing_cache()`: fetches the latest pricing JSON from GitHub
+- `list_models()`: returns all known models
+- `pricing_source()`: reports where pricing is being loaded from
+- `format_model_pricing()`: pretty-prints one model entry
+
+The CLI subcommand for `pricing_source()` is `agent-xray pricing path`.
+
+## Auto-Instrumentation and Recording
+
+`instrument/` contains four integration surfaces:
+
+| SDK / integration | Entry point | What it does |
+| --- | --- | --- |
+| OpenAI Python SDK | `OpenAIInstrumentor` | monkey-patches chat completion calls and records tool calls |
+| Anthropic Python SDK | `AnthropicInstrumentor` | monkey-patches `messages.create` and records tool-use blocks |
+| LangChain / LangGraph | `XRayCallbackHandler` | callback handler that records tool start/end events |
+| MCP clients | `XRayMCPProxy` | wraps `call_tool` / `list_tools` and logs every tool request |
+
+Supporting pieces:
+
+- `auto_instrument(output_dir, task_id=None)`: auto-detects and patches installed Anthropic/OpenAI SDKs
+- `xray_trace(...)`: decorator-based Anthropic tracing helper
+- `StepRecorder`: thread-safe native JSONL writer used by all instrumentors and by `agent-xray record`
+
+## MCP Server Tools
+
+`src/agent_xray/mcp_server.py` exposes 13 tools:
+
+| MCP tool | What it returns |
+| --- | --- |
+| `enforce_init` | initializes an enforcement session and baseline |
+| `enforce_check` | evaluates the current working tree against the active session |
+| `enforce_diff` | previews the current diff and size rejection status |
+| `enforce_plan` | registers a hypothesis and expected tests |
+| `enforce_guard` | detects out-of-band changes |
+| `enforce_status` | returns the current enforcement session state |
+| `enforce_challenge` | runs adversarial review on unreviewed iterations |
+| `enforce_reset` | abandons the active enforcement session |
+| `enforce_report` | emits the full enforcement report in JSON, text, or Markdown |
+| `analyze` | loads traces, analyzes tasks, and returns per-task analysis plus grade summary |
+| `grade` | grades traces and returns distribution plus per-task grade details |
+| `root_cause` | classifies failure causes and returns grouped distribution plus per-task results |
+| `completeness` | reports trace completeness warnings and coverage scores |
+
+Run the MCP server over stdio with:
+
+```bash
+python -m agent_xray.mcp_server
+```
+
+## Programmatic Runners, Protocols, and Reports
+
+Additional modules that are part of the public surface:
+
+- `runner.py`: `TaskRunner` protocol plus `StaticRunner` and `GenericHTTPRunner` for programmatic task execution
+- `protocols.py`: `ToolRegistry`, `PromptBuilder`, `StepAdapter`, `StaticToolRegistry`, `StaticPromptBuilder`, `coerce_step()`, and `coerce_steps()`
+- `reports.py`: text, JSON, and Markdown renderers for every report type
+- `watch.py`: live-tail grading helpers and formatted tally output
+- `pricing.py`: pricing cache, alias resolution, and cost formatting
+
+## Evaluation Drift Detection
+
+`flywheel.py` does more than aggregate grades. It also detects evaluator drift.
+
+- `IntegrityLock`: records the expected and actual SHA-256 of a tracked file or module
+- `_build_integrity_locks(...)`: captures hashes for the active rules file, any task-bank files, `agent_xray.grader`, and `agent_xray.replay`
+- `check_integrity(locks)`: re-hashes those inputs before the classification/fix-plan phase
+- `run_flywheel(..., task_bank_paths=[...])`: raises `EVALUATION_DRIFT` if evaluator inputs changed during the run
+
+This prevents a long flywheel run from mixing grades produced under different rules or replay logic.
+
 ## Enforce Mode
 
 Enforce mode turns `agent-xray` into an **advisor** for AI agents making code changes. It enforces one-change-at-a-time discipline, runs A/B testing against baseline, detects gaming patterns, and recommends commit-or-revert on every iteration — with evidence.
@@ -448,8 +843,9 @@ if grade.grade in {"WEAK", "BROKEN"}:
 JSONL / framework trace files
   -> adapters/            normalize source formats into AgentStep
   -> schema.py            AgentStep / AgentTask / typed contexts
-  -> signals/             detector packs for commerce, coding, and research
+  -> signals/             detector packs for commerce, coding, research, planning, memory, and multi-agent traces
   -> analyzer.py          task metrics, cost tracking, soft-error detection
+  -> contrib/task_bank.py criterion-aware grading with fuzzy task matching
   -> grader.py            configurable JSON rules
   -> surface.py           decision-surface replay, reasoning chain, tree, diff
   -> root_cause.py        19-category failure classifier with cascade ordering
@@ -457,6 +853,14 @@ JSONL / framework trace files
   -> replay.py            fixture-vs-run comparison
   -> flywheel.py          end-to-end quality loop and baseline comparison
   -> comparison.py        model-vs-model divergence analysis
+  -> reports.py           health, tools, flows, cost, fixes, timeline, and spin reports
+  -> watch.py             live-tail grading as JSONL files grow
+  -> pricing.py           pricing database, aliases, cache, and live refresh
+  -> baseline.py          naked prompt generation and overhead measurement
+  -> instrument/          OpenAI, Anthropic, LangChain, and MCP auto-instrumentation
+  -> runner.py            TaskRunner protocol plus HTTP runner
+  -> protocols.py         ToolRegistry / PromptBuilder / StepAdapter protocols
+  -> mcp_server.py        13 MCP tools for enforce and analysis
   -> enforce.py           controlled experiment loop (session, check, auto)
   -> enforce_audit.py     gaming detection and adversarial challenges
   -> enforce_report.py    enforce session reports (text, JSON, markdown)
