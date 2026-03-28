@@ -86,6 +86,27 @@
       "equals": true,
       "points": -1,
       "reason": "-1 task flagged as suspiciously short by runtime"
+    },
+    {
+      "name": "empty_answer_success_penalty",
+      "metric": "final_answer_empty_but_success",
+      "equals": true,
+      "points": -1,
+      "reason": "-1 task reported success but produced no answer"
+    },
+    {
+      "name": "ref_mismatch_penalty",
+      "metric": "element_ref_mismatches",
+      "gte": 3,
+      "points": -1,
+      "reason": "-1 clicked {actual} element refs not in snapshot"
+    },
+    {
+      "name": "runtime_timeout_flag",
+      "metric": "timed_out_flag",
+      "equals": true,
+      "points": -1,
+      "reason": "-1 runtime flagged as timed out"
     }
   ],
   "grade_thresholds": {
@@ -106,6 +127,12 @@
       "op": "equals",
       "value": false,
       "reason": "GOLDEN cannot be suspiciously short"
+    },
+    {
+      "field": "final_answer_empty_but_success",
+      "op": "equals",
+      "value": false,
+      "reason": "GOLDEN requires a non-empty final answer when reporting success"
     }
   ]
 }

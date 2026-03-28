@@ -243,6 +243,91 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
     else:
         ok_dims += 1
 
+    # 9. Conversation history
+    total_dims += 1
+    tasks_with_turns_no_summary = sum(
+        1 for t in tasks
+        if t.metadata.get("prior_conversation_turns", 0) > 0
+        and not t.metadata.get("prior_conversation_summary")
+    )
+    if tasks_with_turns_no_summary > 0:
+        warnings.append(CompletenessWarning(
+            dimension="conversation_history",
+            severity="high",
+            message="Tasks have prior conversation turns but no conversation summary. "
+                    "Decision-surface replay for multi-turn conversations is incomplete.",
+            affected_pct=tasks_with_turns_no_summary / len(tasks) * 100,
+            fix_hint="Log prior_conversation_summary alongside prior_conversation_turns.",
+        ))
+    else:
+        ok_dims += 1
+
+    # 10. Temporal data (step durations)
+    total_dims += 1
+    total_steps = sum(len(t.steps) for t in tasks)
+    steps_with_duration = sum(
+        1 for t in tasks
+        for step in t.steps
+        if step.duration_ms is not None
+    )
+    if total_steps > 0:
+        duration_pct = steps_with_duration / total_steps * 100
+        if duration_pct < 50:
+            warnings.append(CompletenessWarning(
+                dimension="step_durations",
+                severity="medium",
+                message=f"{100 - duration_pct:.0f}% of steps lack duration_ms. "
+                        f"Temporal analysis (bottleneck detection, rate limiting patterns) is limited.",
+                affected_pct=100 - duration_pct,
+                fix_hint="Record duration_ms on every step event.",
+            ))
+        else:
+            ok_dims += 1
+    else:
+        ok_dims += 1
+
+    # 11. System context components
+    total_dims += 1
+    has_system_context = any(
+        "system_context_components" in t.metadata
+        for t in tasks
+    )
+    if not has_system_context:
+        warnings.append(CompletenessWarning(
+            dimension="system_context",
+            severity="medium",
+            message="No system_context_components recorded. Frustration-correlated failures, "
+                    "user-model mismatches, and context injection bugs are invisible.",
+            affected_pct=100.0,
+            fix_hint="Log system_context_components with subfields "
+                     "(playback, memory, frustration, user_model, delivery_address) on step 1.",
+        ))
+    else:
+        ok_dims += 1
+
+    # 12. LLM reasoning trace
+    total_dims += 1
+    steps_with_reasoning = sum(
+        1 for t in tasks
+        for step in t.steps
+        if step.reasoning and step.reasoning.llm_reasoning
+    )
+    if total_steps > 0:
+        reasoning_pct = steps_with_reasoning / total_steps * 100
+        if reasoning_pct < 30:
+            warnings.append(CompletenessWarning(
+                dimension="llm_reasoning",
+                severity="medium",
+                message=f"{100 - reasoning_pct:.0f}% of steps have no reasoning trace. "
+                        f"Cannot diagnose why the model made specific tool choices.",
+                affected_pct=100 - reasoning_pct,
+                fix_hint="Capture llm_reasoning (the model's chain-of-thought) in step events.",
+            ))
+        else:
+            ok_dims += 1
+    else:
+        ok_dims += 1
+
     return CompletenessReport(
         warnings=warnings,
         dimensions_checked=total_dims,

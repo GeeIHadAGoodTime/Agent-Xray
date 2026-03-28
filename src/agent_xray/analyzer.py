@@ -93,6 +93,19 @@ class TaskAnalysis:
     max_context_usage_pct: float = 0.0
     cache_read_tokens_total: int = 0
     cache_creation_tokens_total: int = 0
+    # Temporal patterns
+    max_step_gap_ms: int = 0
+    avg_step_duration_ms: float = 0.0
+    step_duration_trend: str = "stable"
+    # System context analysis
+    has_frustration_context: bool = False
+    has_delivery_address: bool = False
+    has_user_model: bool = False
+    system_context_field_count: int = 0
+    # Final answer quality
+    final_answer_empty_but_success: bool = False
+    # DOM element ref mismatch
+    element_ref_mismatches: int = 0
 
     @property
     def task_id(self) -> str:
@@ -184,6 +197,19 @@ class TaskAnalysis:
             "max_context_usage_pct": self.max_context_usage_pct,
             "cache_read_tokens_total": self.cache_read_tokens_total,
             "cache_creation_tokens_total": self.cache_creation_tokens_total,
+            # Temporal patterns
+            "max_step_gap_ms": self.max_step_gap_ms,
+            "avg_step_duration_ms": self.avg_step_duration_ms,
+            "step_duration_trend": self.step_duration_trend,
+            # System context analysis
+            "has_frustration_context": self.has_frustration_context,
+            "has_delivery_address": self.has_delivery_address,
+            "has_user_model": self.has_user_model,
+            "system_context_field_count": self.system_context_field_count,
+            # Final answer quality
+            "final_answer_empty_but_success": self.final_answer_empty_but_success,
+            # DOM element ref mismatch
+            "element_ref_mismatches": self.element_ref_mismatches,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics
@@ -397,6 +423,73 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         for step in task.steps
         if step.model
     )
+    # --- Temporal patterns ---
+    sorted_steps = task.sorted_steps
+    step_durations = [s.duration_ms for s in sorted_steps if s.duration_ms is not None]
+    avg_step_duration_ms = (
+        (sum(step_durations) / len(step_durations)) if step_durations else 0.0
+    )
+    # Max gap between consecutive step timestamps
+    max_step_gap_ms = 0
+    timestamps_ms: list[int] = []
+    for s in sorted_steps:
+        if s.timestamp is not None:
+            try:
+                ts_float = float(s.timestamp)
+                timestamps_ms.append(int(ts_float * 1000))
+            except (TypeError, ValueError):
+                pass
+    for i in range(1, len(timestamps_ms)):
+        gap = timestamps_ms[i] - timestamps_ms[i - 1]
+        if gap > max_step_gap_ms:
+            max_step_gap_ms = gap
+    # Step duration trend
+    step_duration_trend = "stable"
+    if len(step_durations) >= 3:
+        third = len(step_durations) // 3
+        first_third_avg = sum(step_durations[:third]) / max(third, 1)
+        last_third_avg = sum(step_durations[-third:]) / max(third, 1)
+        if first_third_avg > 0 and last_third_avg > 0:
+            if last_third_avg < first_third_avg / 2:
+                step_duration_trend = "accelerating"
+            elif last_third_avg > first_third_avg * 2:
+                step_duration_trend = "decelerating"
+    # --- System context analysis ---
+    sys_ctx = task.metadata.get("system_context_components")
+    if not isinstance(sys_ctx, dict):
+        sys_ctx = {}
+    has_frustration_context = bool(sys_ctx.get("frustration"))
+    has_delivery_address = "delivery_address" in sys_ctx
+    has_user_model = "user_model" in sys_ctx
+    system_context_field_count = sum(1 for v in sys_ctx.values() if v)
+    # --- Final answer quality ---
+    task_completed_flag = (
+        task.outcome is not None and task.outcome.status in {"success", "completed"}
+    )
+    final_answer_empty_but_success = (
+        task_completed_flag and final_answer_length <= 10
+    )
+    # --- DOM element ref mismatch ---
+    element_ref_mismatches = 0
+    ref_pattern = re.compile(r"@e\d+")
+    for idx in range(1, len(sorted_steps)):
+        step = sorted_steps[idx]
+        if not step.tool_name.startswith(("browser_click", "browser_fill")):
+            continue
+        ref_value = step.tool_input.get("ref", "")
+        if isinstance(ref_value, str):
+            ref_match = ref_pattern.search(ref_value)
+        else:
+            ref_match = ref_pattern.search(str(ref_value))
+        if not ref_match:
+            continue
+        ref_str = ref_match.group(0)
+        prev_step = sorted_steps[idx - 1]
+        if not prev_step.tool_name.startswith("browser_snapshot"):
+            continue
+        prev_result = prev_step.tool_result or ""
+        if ref_str not in prev_result:
+            element_ref_mismatches += 1
     return {
         "unique_urls": urls,
         "unique_url_paths": url_paths,
@@ -431,6 +524,15 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         "max_context_usage_pct": max_context_usage_pct,
         "cache_read_tokens_total": cache_read_tokens_total,
         "cache_creation_tokens_total": cache_creation_tokens_total,
+        "max_step_gap_ms": max_step_gap_ms,
+        "avg_step_duration_ms": avg_step_duration_ms,
+        "step_duration_trend": step_duration_trend,
+        "has_frustration_context": has_frustration_context,
+        "has_delivery_address": has_delivery_address,
+        "has_user_model": has_user_model,
+        "system_context_field_count": system_context_field_count,
+        "final_answer_empty_but_success": final_answer_empty_but_success,
+        "element_ref_mismatches": element_ref_mismatches,
     }
 
 

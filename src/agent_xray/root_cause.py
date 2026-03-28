@@ -499,13 +499,24 @@ def _classify_approval_block(
 ) -> ClassificationDecision | None:
     """Classify failures caused by approval or permission gates."""
 
-    del task, config
+    del config
+    evidence: list[str] = []
     if analysis.error_kinds.get("approval_block"):
-        return (
-            "approval_block",
-            "high",
-            [f"{analysis.error_kinds['approval_block']} approval-blocked step(s)"],
+        evidence.append(f"{analysis.error_kinds['approval_block']} approval-blocked step(s)")
+
+    # Check approval_path on each step's reasoning context for direct evidence
+    blocked_paths = 0
+    for step in task.steps:
+        path = step.approval_path
+        if path and ("block" in path.lower() or "denied" in path.lower()):
+            blocked_paths += 1
+    if blocked_paths:
+        evidence.append(
+            f"{blocked_paths} step(s) had approval_path indicating block/denied"
         )
+
+    if evidence:
+        return ("approval_block", "high", evidence)
     return None
 
 
@@ -692,6 +703,18 @@ def _classify_memory_overload(
         for step in task.sorted_steps
         if _normalize_usage_pct(step.context_usage_pct) >= config.memory_overload_usage_pct
     ]
+
+    # Also check task-level final_context_usage_pct from outcome metadata
+    if task.outcome:
+        final_pct_raw = task.outcome.metadata.get("final_context_usage_pct")
+        if final_pct_raw is not None:
+            final_pct = _normalize_usage_pct(final_pct_raw)
+            if final_pct >= config.memory_overload_usage_pct:
+                # Create a synthetic sentinel step for evidence tracking;
+                # use the last step as a representative if available.
+                if task.sorted_steps and task.sorted_steps[-1] not in high_usage_steps:
+                    high_usage_steps.append(task.sorted_steps[-1])
+
     if not high_usage_steps:
         return None
     evidence = _memory_quality_drop_evidence(
@@ -701,7 +724,20 @@ def _classify_memory_overload(
     )
     if not evidence:
         return None
-    peak_usage = max(_normalize_usage_pct(step.context_usage_pct) for step in high_usage_steps)
+
+    # Peak from per-step usage
+    peak_usage = max(
+        (_normalize_usage_pct(step.context_usage_pct) for step in high_usage_steps),
+        default=0.0,
+    )
+    # Also consider final_context_usage_pct for the peak
+    if task.outcome:
+        final_pct_raw = task.outcome.metadata.get("final_context_usage_pct")
+        if final_pct_raw is not None:
+            final_pct = _normalize_usage_pct(final_pct_raw)
+            if final_pct > peak_usage:
+                peak_usage = final_pct
+
     return (
         "memory_overload",
         "medium",
@@ -885,6 +921,10 @@ def classify_task(
 
     _enrich_prompt_bug(result, task, analysis)
     result.evidence.append("fallback classification after excluding stronger operational causes")
+    if task.outcome is None:
+        result.evidence.append(
+            "no outcome record — classification confidence further reduced"
+        )
     result.confidence_score = _score_confidence("low", result.evidence)
     result.confidence = _confidence_label_from_score(result.confidence_score)
     return result
@@ -917,6 +957,25 @@ def _enrich_prompt_bug(
         and analysis.step_count >= 10
     ):
         all_evidence += " reached checkout never filled payment"
+
+    # Check system_context_components for additional prompt-related evidence
+    ctx_components = task.metadata.get("system_context_components", {})
+    if ctx_components.get("frustration"):
+        result.evidence.append(
+            "frustration context was injected — may have altered model behavior"
+        )
+        all_evidence += " frustration context injected"
+    if ctx_components.get("delivery_address"):
+        # Check if the task failed with browser/fill errors
+        has_fill_errors = any(
+            step.error and ("fill" in step.error.lower() or "browser" in step.error.lower())
+            for step in task.steps
+        )
+        if has_fill_errors:
+            result.evidence.append(
+                "delivery address was available in context but form fills failed"
+            )
+            all_evidence += " delivery address available but fill failed"
 
     for pattern, section, fix_desc in PROMPT_BUG_PATTERNS:
         if re.search(pattern, all_evidence, re.IGNORECASE):
