@@ -274,4 +274,4 @@ __all__ = [
     "mcp_main",
 ]
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
