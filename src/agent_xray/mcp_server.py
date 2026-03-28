@@ -11,8 +11,24 @@ from mcp.server.fastmcp import FastMCP
 server = FastMCP("agent-xray")
 
 
+_MCP_MAX_CHARS = 30_000  # MCP responses must fit in agent context windows
+
+
 def _json_response(payload: Any) -> str:
     return json.dumps(payload, indent=2)
+
+
+def _compact_json(payload: Any) -> str:
+    """JSON response capped for MCP context windows."""
+    result = json.dumps(payload, indent=2)
+    if len(result) <= _MCP_MAX_CHARS:
+        return result
+    # Re-serialize without indent to save space
+    result = json.dumps(payload, separators=(",", ":"))
+    if len(result) <= _MCP_MAX_CHARS:
+        return result
+    # Truncate with warning
+    return result[:_MCP_MAX_CHARS] + '\n\n... TRUNCATED (use CLI for full output) ...'
 
 
 def _serialize(value: Any) -> Any:
@@ -263,22 +279,29 @@ def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_b
         for grade in grades:
             distribution[grade.grade] = distribution.get(grade.grade, 0) + 1
 
+        # MCP: return summary + worst 10 tasks (not all — full dump kills agent context)
+        sorted_grades = sorted(grades, key=lambda g: g.score)
+        worst_10 = sorted_grades[:10]
         payload = {
             "summary": {
                 "tasks": len(tasks),
                 "rules": rule_set.name,
                 "grade_distribution": distribution,
             },
-            "tasks": [
+            "worst_tasks": [
                 {
-                    "task_id": task.task_id,
-                    "analysis": _serialize(analyses[task.task_id]),
-                    "grade": _serialize(grade_by_task[task.task_id]),
+                    "task_id": g.task_id,
+                    "grade": g.grade,
+                    "score": g.score,
+                    "reasons": [r for r in (g.reasons if hasattr(g, "reasons") else [])],
+                    "site": analyses[g.task_id].site_name if g.task_id in analyses else "unknown",
+                    "user_text": (next((t.task_text for t in tasks if t.task_id == g.task_id), "") or "")[:80],
                 }
-                for task in tasks
+                for g in worst_10
             ],
+            "note": "Showing 10 worst tasks. Use CLI `agent-xray analyze` for full per-task output.",
         }
-        return _json_response(payload)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -309,6 +332,9 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
         for result in grades:
             distribution[result.grade] = distribution.get(result.grade, 0) + 1
 
+        # MCP: return distribution + worst 15 tasks (not all 187)
+        sorted_grades = sorted(grades, key=lambda g: g.score)
+        worst = sorted_grades[:15]
         payload: dict[str, Any] = {
             "summary": {
                 "tasks": len(tasks),
@@ -316,9 +342,18 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
                 "task_bank": task_bank or "none (generic grading only)",
                 "distribution": distribution,
             },
-            "tasks": [_serialize(result) for result in grades],
+            "worst_tasks": [
+                {
+                    "task_id": r.task_id,
+                    "grade": r.grade,
+                    "score": r.score,
+                    "reasons": r.reasons[:5] if hasattr(r, "reasons") else [],
+                }
+                for r in worst
+            ],
+            "note": "Showing 15 worst tasks. Use CLI `agent-xray grade` for full per-task output.",
         }
-        return _json_response(payload)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -413,7 +448,14 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
             if matched:
                 surface["task_bank_entry"] = _serialize(matched)
 
-        return _json_response(surface)
+        # MCP: truncate verbose tool_result/result_summary strings
+        for step in surface.get("steps", []):
+            for key in ("tool_result", "result_summary"):
+                val = step.get(key)
+                if isinstance(val, str) and len(val) > 500:
+                    step[key] = val[:500] + "..."
+
+        return _compact_json(surface)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -612,8 +654,15 @@ def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto
         if right is None:
             return _json_response({"error": f"Task {task_id_2!r} not found in {log_dir}"})
 
-        result = run_diff_tasks(left, right)
-        return _json_response(_serialize(result))
+        result = _serialize(run_diff_tasks(left, right))
+        # MCP: truncate verbose step data
+        for side in ("left", "right"):
+            for step in result.get(side, {}).get("steps", []):
+                for key in ("tool_result", "result_summary"):
+                    val = step.get(key)
+                    if isinstance(val, str) and len(val) > 500:
+                        step[key] = val[:500] + "..."
+        return _compact_json(result)
     except Exception as e:
         return _json_response({"error": str(e)})
 

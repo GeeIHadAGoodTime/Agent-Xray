@@ -217,8 +217,9 @@ def test_analyze_tool(tmp_trace_dir: Path) -> None:
 
     assert payload["summary"]["tasks"] == 4
     assert payload["summary"]["grade_distribution"]["BROKEN"] >= 1
-    assert len(payload["tasks"]) == 4
-    assert "analysis" in payload["tasks"][0]
+    assert "worst_tasks" in payload
+    assert len(payload["worst_tasks"]) <= 10
+    assert "grade" in payload["worst_tasks"][0]
 
 
 def test_grade_tool(tmp_trace_dir: Path) -> None:
@@ -228,7 +229,7 @@ def test_grade_tool(tmp_trace_dir: Path) -> None:
 
     assert payload["summary"]["tasks"] == 4
     assert payload["summary"]["distribution"]["GOLDEN"] >= 1
-    assert any(task["grade"] == "BROKEN" for task in payload["tasks"])
+    assert any(task["grade"] == "BROKEN" for task in payload["worst_tasks"])
 
 
 def test_mcp_tool_descriptions_include_flow_guidance() -> None:
