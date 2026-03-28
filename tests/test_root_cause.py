@@ -389,5 +389,5 @@ def test_classification_config_customization() -> None:
 
 def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:
     grade = grade_task(golden_task, load_rules(RULES_PATH))
-    assert grade.grade == "GOOD"
+    assert grade.grade == "GOLDEN"
     assert classify_task(golden_task, grade) is None

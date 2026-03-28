@@ -58,6 +58,7 @@ def _analysis(task: AgentTask, **overrides: Any) -> TaskAnalysis:
         "site_name": "example",
         "final_url": unique_urls[-1] if unique_urls else "",
         "timeout_like": False,
+        "task_completed": False,
         "error_kinds": {},
         "total_cost_usd": 0.0,
         "avg_cost_per_step": 0.0,
