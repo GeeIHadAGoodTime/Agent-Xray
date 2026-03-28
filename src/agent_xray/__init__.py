@@ -130,6 +130,7 @@ from .surface import (
     surface_for_task,
     tree_for_tasks,
 )
+from .task_bank import TaskBank, TaskBankEntry, load_task_bank
 
 __all__ = [
     # Schema
@@ -194,6 +195,10 @@ __all__ = [
     "format_enriched_tree_text",
     "tree_for_tasks",
     "enriched_tree_for_tasks",
+    # Task bank
+    "TaskBankEntry",
+    "TaskBank",
+    "load_task_bank",
     # Comparison
     "ModelComparisonResult",
     "compare_model_runs",
@@ -269,4 +274,4 @@ __all__ = [
     "mcp_main",
 ]
 
-__version__ = "1.7.2"
+__version__ = "1.8.0"

@@ -20,6 +20,11 @@ from . import __version__
 from .analyzer import analyze_task, analyze_tasks, load_adapted_tasks, load_tasks, resolve_task
 from .capture import capture_task
 from .comparison import compare_model_runs, format_model_comparison
+from .contrib.task_bank import (
+    grade_with_task_bank,
+    load_task_bank as load_task_bank_entries,
+    validate_task_bank as validate_task_bank_file,
+)
 from .flywheel import run_flywheel
 from .grader import GradeResult, grade_tasks, load_rules
 from .replay import format_replay_text, replay_fixture
@@ -68,6 +73,7 @@ from .reports import (
     report_tools_markdown,
 )
 from .root_cause import ClassificationConfig, classify_failures
+from .root_cause import format_root_causes_text, summarize_root_causes
 from .schema import AgentTask
 from .surface import (
     diff_tasks,
@@ -229,6 +235,13 @@ def _add_root_cause_config_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_task_bank_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--task-bank",
+        help="Path to a task_bank.json file for criterion-aware grading",
+    )
+
+
 def _format_grade_summary(
     tasks: list[AgentTask],
     rules_name: str,
@@ -255,6 +268,26 @@ def _colorize_report_headers(text: str, args: argparse.Namespace | CliSettings |
     if len(lines) > 1 and lines[1].strip() and set(lines[1].strip()) <= {"=", "-"}:
         lines[1] = _paint(lines[1], "header", args)
     return "\n".join(lines)
+
+
+def _grade_tasks_for_cli(
+    tasks: list[AgentTask],
+    rules: Any,
+    args: argparse.Namespace | CliSettings | None,
+) -> list[GradeResult]:
+    task_bank_path = getattr(args, "task_bank", None) if args is not None else None
+    if task_bank_path:
+        _emit_verbose(f"Applying task bank criteria from {task_bank_path}", args)
+        return grade_with_task_bank(tasks, task_bank_path, rules)
+    return grade_tasks(tasks, rules)
+
+
+def _filter_grades_for_tasks(
+    grades: list[GradeResult],
+    tasks: list[AgentTask],
+) -> list[GradeResult]:
+    wanted = {task.task_id for task in tasks}
+    return [grade for grade in grades if grade.task_id in wanted]
 
 
 def _select_enforce_reason(decision: str, reasons: list[str]) -> str:
@@ -631,7 +664,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         )
         started = perf_counter()
         rules = load_rules(args.rules) if args.rules else load_rules()
-        grades = grade_tasks(tasks, rules)
+        grades = _grade_tasks_for_cli(tasks, rules, args)
         grade_distribution = _grade_distribution(grades)
         summary = {
             "tasks": len(tasks),
@@ -755,15 +788,24 @@ def cmd_grade(args: argparse.Namespace) -> int:
             args.log_dir, days=args.days, format_name=args.format,
             pattern=getattr(args, "pattern", None), settings=args,
         )
-        tasks = _apply_filters(args, tasks)
+        rules = load_rules(args.rules)
+        pre_grades = (
+            _grade_tasks_for_cli(tasks, rules, args)
+            if getattr(args, "grade_filter", None)
+            else None
+        )
+        tasks = _apply_filters(args, tasks, grades=pre_grades)
         if not tasks:
             _emit("No tasks remain after applying filters.", args, final=True)
             return 0
         started = perf_counter()
-        rules = load_rules(args.rules)
         if not args.json:
             print(f"Grading {len(tasks)} task(s)...", file=sys.stderr, flush=True)
-        grades = grade_tasks(tasks, rules)
+        grades = (
+            _filter_grades_for_tasks(pre_grades, tasks)
+            if pre_grades is not None
+            else _grade_tasks_for_cli(tasks, rules, args)
+        )
         if not args.json:
             print("Done.", file=sys.stderr, flush=True)
         failures = classify_failures(
@@ -860,6 +902,50 @@ def cmd_grade(args: argparse.Namespace) -> int:
                     " Use '--rules browser_flow' for domain-specific grading."
                 )
             _emit("\n".join(sections), args, final=True)
+        return 0
+
+    return _run_command(args, _action)
+
+
+def cmd_root_cause(args: argparse.Namespace) -> int:
+    def _action() -> int:
+        tasks = _load_tasks_with_format(
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
+        )
+        rules = load_rules(getattr(args, "rules", "default"))
+        pre_grades = (
+            _grade_tasks_for_cli(tasks, rules, args)
+            if getattr(args, "grade_filter", None)
+            else None
+        )
+        tasks = _apply_filters(args, tasks, grades=pre_grades)
+        if not tasks:
+            _emit("No tasks remain after applying filters.", args, final=True)
+            return 0
+        grades = (
+            _filter_grades_for_tasks(pre_grades, tasks)
+            if pre_grades is not None
+            else _grade_tasks_for_cli(tasks, rules, args)
+        )
+        failures = classify_failures(
+            tasks,
+            grades,
+            config=_classification_config_from_args(args),
+        )
+        payload = {
+            "summary": {
+                "tasks": len(tasks),
+                "rules": rules.name,
+                "classified_failures": len(failures),
+            },
+            "distribution": summarize_root_causes(failures),
+            "tasks": [asdict(result) for result in failures],
+        }
+        if getattr(args, "json", False):
+            _dump(payload)
+        else:
+            _emit(format_root_causes_text(failures), args, final=True)
         return 0
 
     return _run_command(args, _action)
@@ -1035,10 +1121,19 @@ def _grade_and_analyze(
     tasks = _load_tasks_with_format(
         args.log_dir, days=args.days, format_name=args.format, settings=args
     )
-    tasks = _apply_filters(args, tasks)
     rules = load_rules(args.rules) if args.rules else load_rules()
+    pre_grades = (
+        _grade_tasks_for_cli(tasks, rules, args)
+        if getattr(args, "grade_filter", None)
+        else None
+    )
+    tasks = _apply_filters(args, tasks, grades=pre_grades)
     _emit_verbose(f"Grading {len(tasks)} task(s) with rules={rules.name}", args)
-    grades = grade_tasks(tasks, rules)
+    grades = (
+        _filter_grades_for_tasks(pre_grades, tasks)
+        if pre_grades is not None
+        else _grade_tasks_for_cli(tasks, rules, args)
+    )
     _emit_verbose(f"Analyzing {len(tasks)} task(s) for report generation", args)
     analyses = analyze_tasks(tasks)
     _emit_verbose(
@@ -1346,12 +1441,21 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             args.log_dir, days=args.days, format_name=args.format,
             pattern=getattr(args, "pattern", None), settings=args,
         )
-        tasks = _apply_filters(args, tasks)
+        rules = load_rules(getattr(args, "rules", "default"))
+        pre_grades = (
+            _grade_tasks_for_cli(tasks, rules, args)
+            if getattr(args, "grade_filter", None)
+            else None
+        )
+        tasks = _apply_filters(args, tasks, grades=pre_grades)
         if not tasks:
             _emit("No tasks remain after applying filters.", args, final=True)
             return 0
-        rules = load_rules(getattr(args, "rules", "default"))
-        grades = grade_tasks(tasks, rules)
+        grades = (
+            _filter_grades_for_tasks(pre_grades, tasks)
+            if pre_grades is not None
+            else _grade_tasks_for_cli(tasks, rules, args)
+        )
         classifications = classify_failures(
             tasks,
             grades,
@@ -1368,6 +1472,95 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         else:
             _emit(format_fix_plan_text(plan), args, final=True)
         return 0
+    return _run_command(args, _action)
+
+
+def cmd_task_bank(args: argparse.Namespace) -> int:
+    """Inspect and validate task bank files."""
+
+    def _action() -> int:
+        subcmd = getattr(args, "task_bank_command", None)
+        if not subcmd:
+            _emit("Usage: agent-xray task-bank {list,show,validate}", args, final=True)
+            return 1
+        path = Path(args.path)
+
+        if subcmd == "list":
+            entries = load_task_bank_entries(path)
+            if getattr(args, "json", False):
+                _dump(entries)
+            else:
+                lines = [f"TASK BANK ({len(entries)} task(s))", "=" * 60]
+                for entry in entries:
+                    task_id = str(entry.get("id", ""))
+                    category = str(entry.get("category", "")) or "-"
+                    site = str(entry.get("site", "")) or "-"
+                    criteria = entry.get("success_criteria", {})
+                    criteria_count = len(criteria) if isinstance(criteria, dict) else 0
+                    user_text = str(entry.get("user_text", "")).strip()
+                    lines.append(
+                        f"  {task_id:<20s} site={site:<15s} category={category:<12s} criteria={criteria_count}"
+                    )
+                    if user_text:
+                        lines.append(f"    {user_text}")
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        if subcmd == "show":
+            entries = load_task_bank_entries(path)
+            query = args.task_id
+            matched = next((entry for entry in entries if str(entry.get("id")) == query), None)
+            if matched is None:
+                prefix_matches = [
+                    entry for entry in entries if str(entry.get("id", "")).startswith(query)
+                ]
+                if len(prefix_matches) == 1:
+                    matched = prefix_matches[0]
+            if matched is None:
+                raise CliError(f"Task bank entry not found: {query}")
+            if getattr(args, "json", False):
+                _dump(matched)
+            else:
+                criteria = matched.get("success_criteria", {})
+                lines = [
+                    f"TASK BANK ENTRY: {matched.get('id', '')}",
+                    "=" * 60,
+                    f"site: {matched.get('site', '') or '-'}",
+                    f"category: {matched.get('category', '') or '-'}",
+                    "",
+                    str(matched.get("user_text", "")).strip(),
+                    "",
+                    "success_criteria:",
+                ]
+                if isinstance(criteria, dict) and criteria:
+                    for name, value in criteria.items():
+                        lines.append(f"  {name}: {json.dumps(value, ensure_ascii=True)}")
+                else:
+                    lines.append("  (none)")
+                _emit("\n".join(lines), args, final=True)
+            return 0
+
+        if subcmd == "validate":
+            errors = validate_task_bank_file(path)
+            if getattr(args, "json", False):
+                _dump({"valid": not errors, "errors": errors})
+            else:
+                if errors:
+                    lines = ["TASK BANK INVALID", "=" * 60]
+                    lines.extend(f"  - {error}" for error in errors)
+                    _emit("\n".join(lines), args, final=True)
+                else:
+                    count = len(load_task_bank_entries(path))
+                    _emit(
+                        f"TASK BANK VALID\n{'=' * 60}\n{path} ({count} task(s))",
+                        args,
+                        final=True,
+                    )
+            return 0 if not errors else 1
+
+        _emit("Usage: agent-xray task-bank {list,show,validate}", args, final=True)
+        return 1
+
     return _run_command(args, _action)
 
 
@@ -2261,6 +2454,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rules",
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
+    _add_task_bank_option(p_analyze)
     _add_format_option(p_analyze)
     _add_pattern_option(p_analyze)
     p_analyze.add_argument("--json", action="store_true", help="Output results as JSON")
@@ -2331,12 +2525,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
     p_grade.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_task_bank_option(p_grade)
     _add_format_option(p_grade)
     _add_pattern_option(p_grade)
     _add_filter_options(p_grade)
     _add_root_cause_config_options(p_grade)
     p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
     p_grade.set_defaults(func=cmd_grade)
+
+    p_root_cause = _add_subparser(
+        sub,
+        "root-cause",
+        help_text="Classify likely root causes for weak or broken tasks",
+        example="agent-xray root-cause ./traces --rules browser_flow --json",
+    )
+    p_root_cause.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
+    p_root_cause.add_argument(
+        "--rules",
+        default="default",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_root_cause.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_task_bank_option(p_root_cause)
+    _add_format_option(p_root_cause)
+    _add_pattern_option(p_root_cause)
+    _add_filter_options(p_root_cause)
+    _add_root_cause_config_options(p_root_cause)
+    p_root_cause.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_root_cause.set_defaults(func=cmd_root_cause)
 
     p_tree = _add_subparser(
         sub,
@@ -2468,6 +2684,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
     p_report.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_task_bank_option(p_report)
     p_report.add_argument(
         "--bucket",
         default="1h",
@@ -2509,6 +2726,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_diagnose.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
     p_diagnose.add_argument("--days", type=int, help="Include only the N most recent days of traces")
     p_diagnose.add_argument("--rules", default="default", help="Ruleset name for grading (default: default)")
+    _add_task_bank_option(p_diagnose)
     _add_format_option(p_diagnose)
     _add_pattern_option(p_diagnose)
     _add_filter_options(p_diagnose)
@@ -2590,6 +2808,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_watch.add_argument("--json", action="store_true", help="Output one JSON object per completed task")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_task_bank = _add_subparser(
+        sub,
+        "task-bank",
+        help_text="List, show, or validate task bank JSON files",
+        example="agent-xray task-bank validate ./task_bank.json",
+    )
+    task_bank_sub = p_task_bank.add_subparsers(dest="task_bank_command")
+
+    p_task_bank_list = task_bank_sub.add_parser("list", help="List all task entries in a bank")
+    p_task_bank_list.add_argument("path", help="Path to task_bank.json")
+    p_task_bank_list.add_argument("--json", action="store_true", help="Output as JSON")
+    p_task_bank_list.set_defaults(func=cmd_task_bank)
+
+    p_task_bank_show = task_bank_sub.add_parser("show", help="Show one task entry from a bank")
+    p_task_bank_show.add_argument("path", help="Path to task_bank.json")
+    p_task_bank_show.add_argument("task_id", help="Task-bank entry id")
+    p_task_bank_show.add_argument("--json", action="store_true", help="Output as JSON")
+    p_task_bank_show.set_defaults(func=cmd_task_bank)
+
+    p_task_bank_validate = task_bank_sub.add_parser(
+        "validate", help="Validate task bank schema and criterion names"
+    )
+    p_task_bank_validate.add_argument("path", help="Path to task_bank.json")
+    p_task_bank_validate.add_argument("--json", action="store_true", help="Output as JSON")
+    p_task_bank_validate.set_defaults(func=cmd_task_bank)
+
+    p_task_bank.set_defaults(func=cmd_task_bank)
 
     # Baseline management subcommands
     p_baseline = _add_subparser(
@@ -2852,14 +3098,35 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Controlled experiment loop for disciplined, incremental agent changes",
         example="agent-xray enforce init --test 'pytest tests/ -x'",
     )
+    p_enforce.description = (
+        "Use enforce as a deterministic loop: init once, plan one hypothesis, make one small "
+        "change, run check, then iterate based on before/after evidence. Prefer repeatable "
+        "task-bank-backed or behavioral tests over ad-hoc manual checks."
+    )
+    p_enforce.epilog = (
+        "Suggested loop:\n"
+        "  1. agent-xray enforce init --test \"python -m pytest tests/ -x -q --tb=short\"\n"
+        "  2. agent-xray enforce plan --hypothesis \"one sentence, one fix\"\n"
+        "  3. make one focused change\n"
+        "  4. agent-xray enforce check\n"
+        "  5. repeat only if the evidence supports it"
+    )
     enforce_sub = p_enforce.add_subparsers(dest="enforce_command")
 
     p_enf_init = enforce_sub.add_parser(
-        "init", help="Initialize an enforcement session (captures baseline)"
+        "init",
+        help="Initialize an enforcement session (captures the deterministic baseline)",
+    )
+    p_enf_init.description = (
+        "Capture the baseline before any code changes. Use the same deterministic test command "
+        "for the entire session so every later check is comparable."
     )
     p_enf_init.add_argument(
         "--test", required=True,
-        help="Shell command to run tests (e.g. 'pytest tests/ -x')",
+        help=(
+            "Deterministic shell command to evaluate the same task set every iteration "
+            "(e.g. 'python -m pytest tests/ -x -q --tb=short')"
+        ),
     )
     p_enf_init.add_argument(
         "--project-root", default=".",
@@ -2871,37 +3138,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_enf_init.add_argument(
         "--challenge-every", type=int, default=5,
-        help="Adversarial review interval (default: 5)",
+        help="Run cross-iteration adversarial review every N iterations (default: 5)",
     )
     p_enf_init.add_argument(
         "--allow-test-modification", action="store_true",
-        help="Allow changes to test files without flagging as gaming",
+        help="Allow test-file edits without flagging them as suspicious by default",
     )
     p_enf_init.add_argument(
         "--no-require-improvement", action="store_true",
-        help="Don't revert changes that don't improve test results",
+        help="Allow neutral iterations instead of requiring measurable improvement",
     )
     p_enf_init.add_argument(
         "--no-git-commit", action="store_true",
-        help="Don't auto-commit verified changes",
+        help="Do not auto-commit validated iterations",
     )
     p_enf_init.add_argument(
         "--no-git-revert", action="store_true",
-        help="Don't auto-revert failed changes",
+        help="Do not auto-revert rejected or regressing iterations",
     )
     p_enf_init.add_argument(
         "--stash-first", action="store_true",
-        help="Temporarily stash uncommitted changes before capturing the baseline",
+        help="Temporarily stash unrelated uncommitted work before capturing the baseline",
     )
     p_enf_init.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_init.set_defaults(func=cmd_enforce)
 
     p_enf_check = enforce_sub.add_parser(
-        "check", help="Check current state after an agent made a change"
+        "check", help="Check one proposed change against the active baseline"
+    )
+    p_enf_check.description = (
+        "Run the same test command against the current working tree after one focused change. "
+        "Use this after plan -> change, not after a batch of unrelated edits."
     )
     p_enf_check.add_argument(
         "--hypothesis",
-        help="What the agent expected this change to fix",
+        help="Hypothesis for this single change if you did not already register it with enforce plan",
     )
     p_enf_check.add_argument(
         "--project-root", default=".",
@@ -2911,7 +3182,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_check.set_defaults(func=cmd_enforce)
 
     p_enf_diff = enforce_sub.add_parser(
-        "diff", help="Preview the current diff against enforce change-size limits"
+        "diff", help="Preview whether the current diff still fits one-change-at-a-time limits"
+    )
+    p_enf_diff.description = (
+        "Use this before running check when you want to confirm the current working tree is still "
+        "small enough to be a clean experiment."
     )
     p_enf_diff.add_argument(
         "--project-root", default=".",
@@ -2921,7 +3196,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_diff.set_defaults(func=cmd_enforce)
 
     p_enf_status = enforce_sub.add_parser(
-        "status", help="Show current session status"
+        "status", help="Show current session status and baseline context"
+    )
+    p_enf_status.description = (
+        "Inspect the active enforce session before resuming work or choosing the next iteration."
     )
     p_enf_status.add_argument(
         "--project-root", default=".",
@@ -2931,7 +3209,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_status.set_defaults(func=cmd_enforce)
 
     p_enf_challenge = enforce_sub.add_parser(
-        "challenge", help="Run adversarial review on changes so far"
+        "challenge", help="Run adversarial cross-iteration review on changes so far"
+    )
+    p_enf_challenge.description = (
+        "Audit the whole session for cumulative gaming, repeated churn, scope creep, and other "
+        "patterns that per-iteration checks can miss."
     )
     p_enf_challenge.add_argument(
         "--project-root", default=".",
@@ -2941,7 +3223,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_challenge.set_defaults(func=cmd_enforce)
 
     p_enf_report = enforce_sub.add_parser(
-        "report", help="Generate final enforcement report"
+        "report", help="Generate the full enforcement report for the session"
+    )
+    p_enf_report.description = (
+        "Render the current session as text, JSON, or Markdown after you have meaningful enforce "
+        "history to summarize."
     )
     p_enf_report.add_argument(
         "--project-root", default=".",
@@ -2958,7 +3244,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_report.set_defaults(func=cmd_enforce)
 
     p_enf_reset = enforce_sub.add_parser(
-        "reset", help="Reset/abandon the enforcement session"
+        "reset", help="Reset or abandon the current enforcement session"
+    )
+    p_enf_reset.description = (
+        "Discard the active enforce session only when you intentionally want a fresh baseline."
     )
     p_enf_reset.add_argument(
         "--project-root", default=".",
@@ -2968,16 +3257,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     # GAP 1: Autonomous loop
     p_enf_auto = enforce_sub.add_parser(
-        "auto", help="Run autonomous enforcement loop (init + check + commit/revert in a loop)"
+        "auto", help="Run the full autonomous enforce loop around one deterministic test command"
+    )
+    p_enf_auto.description = (
+        "Let an agent iterate inside the enforce loop. This still assumes one hypothesis and one "
+        "small change per iteration; it is not a license for broad speculative refactors."
     )
     p_enf_auto.add_argument(
         "--test", required=True,
-        help="Shell command to run tests (e.g. 'pytest tests/ -x')",
+        help="Deterministic shell command reused for baseline and every later iteration",
     )
     p_enf_auto.add_argument(
         "--agent-cmd", required=True,
         help=(
-            "Shell command to invoke the agent for one change. "
+            "Shell command to invoke the agent for one change attempt. "
             "Template vars: {failing_tests}, {fail_count}, {pass_count}, "
             "{total_count}, {iteration}, {last_error}, {hypothesis}"
         ),
@@ -2992,51 +3285,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_enf_auto.add_argument(
         "--challenge-every", type=int, default=5,
-        help="Adversarial review interval (default: 5)",
+        help="Run cross-iteration adversarial review every N iterations (default: 5)",
     )
     p_enf_auto.add_argument(
         "--allow-test-modification", action="store_true",
-        help="Allow changes to test files without flagging as gaming",
+        help="Allow test-file edits without flagging them as suspicious by default",
     )
     p_enf_auto.add_argument(
         "--no-require-improvement", action="store_true",
-        help="Don't revert changes that don't improve test results",
+        help="Allow neutral iterations instead of requiring measurable improvement",
     )
     p_enf_auto.add_argument(
         "--no-git-commit", action="store_true",
-        help="Don't auto-commit verified changes",
+        help="Do not auto-commit validated iterations",
     )
     p_enf_auto.add_argument(
         "--no-git-revert", action="store_true",
-        help="Don't auto-revert failed changes",
+        help="Do not auto-revert rejected or regressing iterations",
     )
     p_enf_auto.add_argument(
         "--max-files-per-change", type=int, default=5,
-        help="Reject changes modifying more than N files (default: 5)",
+        help="Reject edits that touch more than N files so each iteration stays reviewable (default: 5)",
     )
     p_enf_auto.add_argument(
         "--max-diff-lines", type=int, default=200,
-        help="Reject changes with more than N diff lines (default: 200)",
+        help="Reject edits with more than N diff lines so each iteration remains focused (default: 200)",
     )
     p_enf_auto.add_argument(
         "--rules-file",
-        help="Path to project rules JSON for convention checking",
+        help="Path to project-specific guardrails checked on every iteration",
     )
     p_enf_auto.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_auto.set_defaults(func=cmd_enforce)
 
     # GAP 8: Pre-change plan
     p_enf_plan = enforce_sub.add_parser(
-        "plan", help="Register a hypothesis and expected tests before making changes"
+        "plan", help="Register the next hypothesis and expected test movement before editing"
+    )
+    p_enf_plan.description = (
+        "Plan the next single-change experiment before touching code. A good plan predicts what "
+        "should improve and narrows the scope of the edit."
     )
     p_enf_plan.add_argument(
         "--hypothesis", required=True,
-        help="What the agent expects this change to fix",
+        help="One-sentence prediction for the single change you are about to make",
     )
     p_enf_plan.add_argument(
         "--expected-tests",
         nargs="*",
-        help="Space-separated test names expected to improve; comma-separated values also work",
+        help=(
+            "Specific failing tests or checks expected to improve; space-separated and "
+            "comma-separated values both work"
+        ),
     )
     p_enf_plan.add_argument(
         "--project-root", default=".",
@@ -3047,7 +3347,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # GAP 10: Guard check
     p_enf_guard = enforce_sub.add_parser(
-        "guard", help="Check if uncommitted changes exist outside the enforce pipeline"
+        "guard", help="Check for unreviewed working-tree changes outside the enforce pipeline"
+    )
+    p_enf_guard.description = (
+        "Use this before the next iteration if you need to confirm the current tree only contains "
+        "changes that belong to the tracked hypothesis."
     )
     p_enf_guard.add_argument(
         "--project-root", default=".",
@@ -3059,15 +3363,15 @@ def build_parser() -> argparse.ArgumentParser:
     # Also add new config flags to init
     p_enf_init.add_argument(
         "--max-files-per-change", type=int, default=5,
-        help="Reject changes modifying more than N files (default: 5)",
+        help="Reject edits that touch more than N files so each iteration stays reviewable (default: 5)",
     )
     p_enf_init.add_argument(
         "--max-diff-lines", type=int, default=200,
-        help="Reject changes with more than N diff lines (default: 200)",
+        help="Reject edits with more than N diff lines so each iteration remains focused (default: 200)",
     )
     p_enf_init.add_argument(
         "--rules-file",
-        help="Path to project rules JSON for convention checking",
+        help="Path to project-specific guardrails checked on every iteration",
     )
 
     # Default: show help when no sub-subcommand given
