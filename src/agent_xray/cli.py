@@ -123,8 +123,18 @@ def _settings(args: argparse.Namespace | CliSettings | None) -> CliSettings:
     )
 
 
+def _safe_print(text: str) -> None:
+    """Print with graceful fallback for terminals that can't encode all Unicode."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        import sys
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        print(text.encode(enc, errors="replace").decode(enc, errors="replace"))
+
+
 def _dump(data: object) -> None:
-    print(json.dumps(data, indent=2))
+    _safe_print(json.dumps(data, indent=2))
 
 
 def _emit(
@@ -133,13 +143,13 @@ def _emit(
     ui = _settings(args)
     if ui.quiet and not final:
         return
-    print(message)
+    _safe_print(message)
 
 
 def _emit_verbose(message: str, args: argparse.Namespace | CliSettings | None) -> None:
     ui = _settings(args)
     if ui.verbose and not ui.quiet:
-        print(message)
+        _safe_print(message)
 
 
 def _paint(text: str, color_key: str, args: argparse.Namespace | CliSettings | None) -> str:
