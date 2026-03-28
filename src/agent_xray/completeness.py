@@ -328,6 +328,25 @@ def check_completeness(tasks: list[AgentTask]) -> CompletenessReport:
     else:
         ok_dims += 1
 
+    # 13. Step count consistency (outcome.total_steps vs actual steps)
+    total_dims += 1
+    ghost_tasks = sum(
+        1 for t in tasks
+        if t.outcome and getattr(t.outcome, "total_steps", None)
+        and t.outcome.total_steps > 0 and len(t.steps) == 0
+    )
+    if ghost_tasks > 0:
+        warnings.append(CompletenessWarning(
+            dimension="step_data_loss",
+            severity="critical",
+            message=f"{ghost_tasks} task(s) have outcome.total_steps > 0 but zero step records. "
+                    f"Step events were lost or written to a different file.",
+            affected_pct=ghost_tasks / len(tasks) * 100,
+            fix_hint="Ensure step events and outcome events are written to the same log file.",
+        ))
+    else:
+        ok_dims += 1
+
     return CompletenessReport(
         warnings=warnings,
         dimensions_checked=total_dims,

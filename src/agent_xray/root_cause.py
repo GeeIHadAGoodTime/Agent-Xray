@@ -824,6 +824,9 @@ def _classify_early_abort(
 ) -> ClassificationDecision | None:
     """Classify tasks that ended before collecting enough evidence."""
 
+    if analysis.step_count == 0:
+        # Zero steps = data loss, not early abort
+        return None
     del task
     if analysis.step_count < config.early_abort_max_steps:
         return ("early_abort", "medium", ["task ended too early to gather evidence"])

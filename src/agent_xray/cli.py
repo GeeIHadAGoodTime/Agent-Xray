@@ -1083,6 +1083,27 @@ def cmd_completeness(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    """Classify failures and build a prioritized fix plan."""
+    def _action() -> int:
+        from .diagnose import build_fix_plan, format_fix_plan_text
+        from .root_cause import classify_failures
+        tasks = _load_tasks_with_format(
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
+        )
+        rules = load_rules(getattr(args, "rules", "default"))
+        grades = grade_tasks(tasks, rules)
+        classifications = classify_failures(tasks, grades)
+        plan = build_fix_plan(classifications)
+        if args.json:
+            _dump([entry.to_dict() for entry in plan])
+        else:
+            _emit(format_fix_plan_text(plan), args, final=True)
+        return 0
+    return _run_command(args, _action)
+
+
 def cmd_rules_list(args: argparse.Namespace) -> int:
     """List available built-in rulesets."""
     from importlib.resources import files as pkg_files
@@ -1409,6 +1430,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pattern_option(p_completeness)
     p_completeness.add_argument("--json", action="store_true", help="Output results as JSON")
     p_completeness.set_defaults(func=cmd_completeness)
+
+    p_diagnose = _add_subparser(
+        sub,
+        "diagnose",
+        help_text="Classify failures and build a prioritized fix plan",
+        example="agent-xray diagnose ./traces --json",
+    )
+    p_diagnose.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
+    p_diagnose.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    p_diagnose.add_argument("--rules", default="default", help="Ruleset name for grading (default: default)")
+    _add_format_option(p_diagnose)
+    _add_pattern_option(p_diagnose)
+    p_diagnose.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_diagnose.set_defaults(func=cmd_diagnose)
 
     p_tui = _add_subparser(
         sub,

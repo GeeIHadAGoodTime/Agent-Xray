@@ -85,6 +85,7 @@ class TaskAnalysis:
     avg_cost_per_step: float
     signal_metrics: dict[str, dict[str, Any]]
     # New metrics — defaults preserve backward compat with manual construction
+    task_failed: bool = False
     rejected_tool_count: int = 0
     timed_out_flag: bool = False
     suspicious_short_flag: bool = False
@@ -106,6 +107,8 @@ class TaskAnalysis:
     final_answer_empty_but_success: bool = False
     # DOM element ref mismatch
     element_ref_mismatches: int = 0
+    # Explicit failure outcome
+    task_failed: bool = False
 
     @property
     def task_id(self) -> str:
@@ -170,6 +173,7 @@ class TaskAnalysis:
             "is_spin": self.is_spin,
             "timeout_like": self.timeout_like,
             "task_completed": self.task_completed,
+            "task_failed": self.task_failed,
             "total_duration_ms": self.total_duration_ms,
             "site_name": self.site_name,
             "final_url": self.final_url,
@@ -210,6 +214,8 @@ class TaskAnalysis:
             "final_answer_empty_but_success": self.final_answer_empty_but_success,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
+            # Explicit failure outcome
+            "task_failed": self.task_failed,
         }
         for detector_name, detector_metrics in self.signal_metrics.items():
             metrics[detector_name] = detector_metrics
@@ -448,12 +454,13 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
         gap = timestamps_ms[i] - timestamps_ms[i - 1]
         if gap > max_step_gap_ms:
             max_step_gap_ms = gap
-    # Step duration trend
+    # Step duration trend (filter out 0ms artifact steps like think/noop)
     step_duration_trend = "stable"
-    if len(step_durations) >= 3:
-        third = len(step_durations) // 3
-        first_third_avg = sum(step_durations[:third]) / max(third, 1)
-        last_third_avg = sum(step_durations[-third:]) / max(third, 1)
+    real_durations = [d for d in step_durations if d > 0]
+    if len(real_durations) >= 3:
+        third = len(real_durations) // 3
+        first_third_avg = sum(real_durations[:third]) / max(third, 1)
+        last_third_avg = sum(real_durations[-third:]) / max(third, 1)
         if first_third_avg > 0 and last_third_avg > 0:
             if last_third_avg < first_third_avg / 2:
                 step_duration_trend = "accelerating"
@@ -527,6 +534,11 @@ def _compute_core_metrics(task: AgentTask) -> dict[str, Any]:
             task.outcome is not None
             and task.outcome.status
             in {"success", "completed", "payment_gate"}
+        ),
+        "task_failed": (
+            task.outcome is not None
+            and task.outcome.status
+            in {"failed", "llm_error", "early_abort"}
         ),
         "error_kinds": dict(error_kinds),
         "total_cost_usd": float(total_cost),

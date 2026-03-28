@@ -218,8 +218,8 @@ class TestCompletenessAllDimensionsOk:
             },
         )
         report = check_completeness([task])
-        assert report.dimensions_checked == 12
-        assert report.dimensions_ok == 12
+        assert report.dimensions_checked == 13
+        assert report.dimensions_ok == 13
         assert report.score == 1.0
         assert report.score_pct == 100
         assert not report.has_critical()
@@ -227,7 +227,7 @@ class TestCompletenessAllDimensionsOk:
 
 
 class TestCompletenessAllDimensionsFailing:
-    """All 12 dimensions fail."""
+    """All 13 dimensions fail."""
 
     def test_all_dimensions_fail(self) -> None:
         step = _step(
@@ -245,8 +245,8 @@ class TestCompletenessAllDimensionsFailing:
             metadata={"prior_conversation_turns": 3},
         )
         report = check_completeness([task])
-        assert report.dimensions_checked == 12
-        assert report.dimensions_ok < 12
+        assert report.dimensions_checked == 13
+        assert report.dimensions_ok < 13
         assert report.has_critical()
         assert len(report.warnings) > 0
 
