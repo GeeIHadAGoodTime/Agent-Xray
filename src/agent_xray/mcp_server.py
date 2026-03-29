@@ -106,7 +106,7 @@ def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
         from agent_xray.enforce import enforce_check as run_enforce_check
 
         record = run_enforce_check(hypothesis=hypothesis, project_root=project_root)
-        return _json_response(_serialize(record))
+        return _compact_json(_serialize(record))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -123,7 +123,7 @@ def enforce_diff(project_root: str = ".") -> str:
     try:
         from agent_xray.enforce import enforce_diff as run_enforce_diff
 
-        return _json_response(run_enforce_diff(project_root=project_root))
+        return _compact_json(run_enforce_diff(project_root=project_root))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -167,7 +167,7 @@ def enforce_guard(project_root: str = ".") -> str:
     try:
         from agent_xray.enforce import enforce_guard as run_enforce_guard
 
-        return _json_response(run_enforce_guard(project_root=project_root))
+        return _compact_json(run_enforce_guard(project_root=project_root))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -184,7 +184,7 @@ def enforce_status(project_root: str = ".") -> str:
     try:
         from agent_xray.enforce import enforce_status as run_enforce_status
 
-        return _json_response(run_enforce_status(project_root))
+        return _compact_json(run_enforce_status(project_root))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -202,7 +202,7 @@ def enforce_challenge(project_root: str = ".") -> str:
         from agent_xray.enforce import enforce_challenge as run_enforce_challenge
 
         result = run_enforce_challenge(project_root=project_root)
-        return _json_response(_serialize(result))
+        return _compact_json(_serialize(result))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -251,7 +251,7 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
         else:
             raise ValueError("format must be one of: text, json, markdown")
 
-        return _json_response({"format": format, "report": rendered})
+        return _compact_json({"format": format, "report": rendered})
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -375,17 +375,22 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto") -> st
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         failures = classify_failures(tasks, grades)
-        return _json_response(
-            {
-                "summary": {
-                    "tasks": len(tasks),
-                    "rules": rule_set.name,
-                    "classified_failures": len(failures),
-                },
-                "distribution": summarize_root_causes(failures),
-                "tasks": [_serialize(result) for result in failures],
-            }
-        )
+
+        # MCP: cap to 20 worst failures sorted by score ascending
+        sorted_failures = sorted(failures, key=lambda f: f.score if hasattr(f, "score") else 0)
+        shown = sorted_failures[:20]
+        payload = {
+            "summary": {
+                "tasks": len(tasks),
+                "rules": rule_set.name,
+                "classified_failures": len(failures),
+            },
+            "distribution": summarize_root_causes(failures),
+            "tasks": [_serialize(result) for result in shown],
+        }
+        if len(failures) > 20:
+            payload["note"] = f"Showing 20 worst of {len(failures)} failures. Use CLI `agent-xray root-cause` for full output."
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -448,8 +453,12 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
             if matched:
                 surface["task_bank_entry"] = _serialize(matched)
 
-        # MCP: truncate verbose tool_result/result_summary strings
+        # MCP: strip duplicate prompt fields and quadratic conversation_history
+        metadata = surface.get("metadata", {})
+        metadata.pop("system_prompt_text", None)
+        metadata.pop("system_context_components", None)
         for step in surface.get("steps", []):
+            step.pop("conversation_history", None)
             for key in ("tool_result", "result_summary"):
                 val = step.get(key)
                 if isinstance(val, str) and len(val) > 500:
@@ -486,11 +495,18 @@ def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
                 "user_text": text[:80],
             })
 
-        return _json_response({
+        # MCP: cap to 25 matches
+        total_matches = len(matches)
+        shown = matches[:25]
+        payload: dict[str, Any] = {
             "query": query,
-            "match_count": len(matches),
-            "matches": matches,
-        })
+            "total_matches": total_matches,
+            "shown": len(shown),
+            "matches": shown,
+        }
+        if total_matches > 25:
+            payload["note"] = "Showing first 25. Use CLI for full results."
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -550,7 +566,7 @@ def compare_runs(left_log_dir: str, right_log_dir: str, rules: str = "default", 
             rules_path=rules if rules != "default" else None,
         )
 
-        return _json_response(_serialize(result))
+        return _compact_json(_serialize(result))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -622,7 +638,7 @@ def report(
             "spins": lambda: report_spins_data(tasks, analyses),
         }
 
-        return _json_response({
+        return _compact_json({
             "report_type": report_type,
             "tasks": len(tasks),
             "rules": rule_set.name,
@@ -655,13 +671,29 @@ def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto
             return _json_response({"error": f"Task {task_id_2!r} not found in {log_dir}"})
 
         result = _serialize(run_diff_tasks(left, right))
-        # MCP: truncate verbose step data
+
+        # MCP: strip duplicate prompt fields, conversation_history, and dedup prompts across sides
+        left_hash = result.get("left", {}).get("metadata", {}).get("system_prompt_hash")
+        right_hash = result.get("right", {}).get("metadata", {}).get("system_prompt_hash")
+        same_prompt = left_hash and right_hash and left_hash == right_hash
+
         for side in ("left", "right"):
-            for step in result.get(side, {}).get("steps", []):
+            side_data = result.get(side, {})
+            metadata = side_data.get("metadata", {})
+            metadata.pop("system_prompt_text", None)
+            metadata.pop("system_context_components", None)
+            if same_prompt:
+                side_data.pop("prompt_text", None)
+            for step in side_data.get("steps", []):
+                step.pop("conversation_history", None)
                 for key in ("tool_result", "result_summary"):
                     val = step.get(key)
                     if isinstance(val, str) and len(val) > 500:
                         step[key] = val[:500] + "..."
+
+        if same_prompt:
+            result["prompt_note"] = f"Both tasks share the same prompt (hash: {left_hash}). Prompt text omitted."
+
         return _compact_json(result)
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -687,7 +719,7 @@ def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
             return _json_response({"error": f"Task {task_id!r} not found in {log_dir}"})
 
         result = reasoning_for_task(task)
-        return _json_response(_serialize(result))
+        return _compact_json(_serialize(result))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -713,10 +745,25 @@ def tree(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
             grades = grade_tasks(tasks, rule_set)
 
         enriched = enriched_tree_for_tasks(tasks, grades)
-        return _json_response({
+
+        # MCP: collapse per-task lists into site-level counts + outcome summary
+        compact_tree: dict[str, dict[str, dict[str, Any]]] = {}
+        for day, sites in enriched.items():
+            compact_tree[day] = {}
+            for site, task_list in sites.items():
+                outcomes: dict[str, int] = {}
+                for t_info in task_list:
+                    outcome = t_info.get("outcome") or t_info.get("grade") or "unknown"
+                    outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                compact_tree[day][site] = {
+                    "count": len(task_list),
+                    **outcomes,
+                }
+        return _compact_json({
             "task_count": len(tasks),
             "rules": rules or "none",
-            "tree": _serialize(enriched),
+            "tree": compact_tree,
+            "note": "Sites collapsed to counts. Use CLI `agent-xray tree` for per-task details.",
         })
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -753,7 +800,7 @@ def golden_rank(
                 for site, ranks in rankings.items()
             },
         }
-        return _json_response(payload)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -823,7 +870,7 @@ def golden_compare(
                     "verdict": "UNMATCHED",
                 })
 
-        return _json_response({
+        return _compact_json({
             "summary": {
                 "tasks": len(tasks),
                 "fixtures_compared": len(results),
@@ -867,10 +914,33 @@ def task_bank_list(path: str) -> str:
         from agent_xray.contrib.task_bank import load_task_bank
 
         entries = load_task_bank(path)
-        return _json_response({
-            "count": len(entries),
-            "entries": entries,
-        })
+
+        # MCP: cap to 30 entries, show category summary, truncate criteria to keys only
+        categories: dict[str, int] = {}
+        for entry in entries:
+            cat = entry.get("category", "uncategorized") if isinstance(entry, dict) else "uncategorized"
+            categories[cat] = categories.get(cat, 0) + 1
+
+        shown_entries = []
+        for entry in entries[:30]:
+            if isinstance(entry, dict):
+                compact = dict(entry)
+                criteria = compact.get("success_criteria", {})
+                if isinstance(criteria, dict):
+                    compact["success_criteria"] = list(criteria.keys())
+                shown_entries.append(compact)
+            else:
+                shown_entries.append(entry)
+
+        payload: dict[str, Any] = {
+            "total_entries": len(entries),
+            "categories": categories,
+            "shown": len(shown_entries),
+            "entries": shown_entries,
+        }
+        if len(entries) > 30:
+            payload["note"] = f"Showing 30 of {len(entries)} entries. Use CLI for full output."
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -889,7 +959,11 @@ def flywheel(log_dir: str, rules: str | None = None, format: str = "auto") -> st
             log_dir,
             rules_path=rules,
         )
-        return _json_response(_serialize(result.to_dict()))
+        payload = _serialize(result.to_dict())
+        # MCP: remove per-task maps (available via grade tool if needed)
+        payload.pop("task_grades", None)
+        payload.pop("task_scores", None)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
