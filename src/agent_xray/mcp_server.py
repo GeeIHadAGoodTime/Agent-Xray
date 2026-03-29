@@ -64,12 +64,12 @@ def enforce_init(
     max_files_per_change: int = 5,
     max_diff_lines: int = 200,
 ) -> str:
-    """Start the enforce workflow by capturing a baseline run and creating session state.
+    """Start a systematic A/B testing flywheel: plan → edit → check → auto-commit or auto-revert → repeat.
 
-    Use this first, before any code change, when you want repeatable before/after evidence.
+    This captures a baseline test run, then each cycle you register a hypothesis (`enforce_plan`), make one small edit, and call `enforce_check`. The engine auto-commits passing changes and auto-reverts failures — you do NOT run git commands yourself. Each cycle ends in exactly one commit or one revert before the next cycle starts.
     Prerequisites: a git repo, a deterministic test command, and the correct project root.
-    Common mistakes: using ad-hoc manual checks, pointing at flaky tests, or initializing after edits already exist.
-    Next step: call `enforce_plan` to register your hypothesis, then make one small edit and call `enforce_check`.
+    Common mistakes: batching multiple changes in one cycle, doing git commits yourself (the engine handles them), or initializing after edits already exist.
+    Next step: call `enforce_plan` to register your first hypothesis, make one small edit, then call `enforce_check`. Repeat this cycle for each change.
     """
     try:
         from agent_xray.enforce import EnforceConfig, enforce_init as run_enforce_init
@@ -95,12 +95,12 @@ def enforce_init(
 
 @server.tool()
 def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
-    """Evaluate one proposed change against the active enforce baseline and return the full change record.
+    """Run the A/B test for one edit: compare before/after, then auto-commit or auto-revert.
 
-    Use this after exactly one small edit, ideally after `enforce_plan`, to measure real before/after movement.
-    Prerequisites: an active session from `enforce_init` and the same deterministic test setup used for baseline.
-    Common mistakes: batching unrelated edits, changing tests to make progress look better, or skipping hypothesis tracking.
-    Next step: if COMMITTED, call `enforce_plan` for the next hypothesis. If REVERTED, revise your approach and call `enforce_plan` again. After several iterations, call `enforce_challenge` to audit for gaming.
+    This is the core of the flywheel. After your edit, this tool runs the test command, compares results against the previous state, audits for gaming, and makes a decision. If COMMITTED, the engine does `git commit` for you. If REVERTED, it does `git reset --hard` for you. You never touch git yourself.
+    Prerequisites: an active session from `enforce_init` and exactly one small edit since the last cycle.
+    Common mistakes: batching unrelated edits in one cycle, doing git commits yourself, changing tests to fake progress, or skipping `enforce_plan`.
+    Next step: if COMMITTED, call `enforce_plan` for your next hypothesis (new cycle). If REVERTED, revise your approach and call `enforce_plan` again. After several cycles, call `enforce_challenge` to audit for gaming.
     """
     try:
         from agent_xray.enforce import enforce_check as run_enforce_check
@@ -134,12 +134,12 @@ def enforce_plan(
     expected_tests: list[str] | None = None,
     project_root: str = ".",
 ) -> str:
-    """Register the next hypothesis and expected test movement before editing code.
+    """Start a new cycle: register what you intend to fix and which tests should move.
 
-    Use this immediately after `enforce_init` or after a previous iteration is resolved, before touching files.
+    This is the first step of each flywheel cycle. Declare your hypothesis BEFORE editing any code. If resuming after a break, call `enforce_guard` first to detect unreviewed changes.
     Prerequisites: an active enforce session and a concrete, falsifiable hypothesis for one change.
-    Common mistakes: vague hypotheses, predicting unrelated tests, or treating plan as optional when you want disciplined iteration history.
-    Next step: make exactly one small edit, optionally call `enforce_diff` to preview scope, then call `enforce_check` to measure the result.
+    Common mistakes: vague hypotheses, editing code before calling plan, predicting unrelated tests, or skipping plan (the engine tracks prediction accuracy).
+    Next step: make exactly one small edit, optionally call `enforce_diff` to preview scope, then call `enforce_check` to run the A/B test. The engine will auto-commit or auto-revert.
     """
     try:
         from agent_xray.enforce import enforce_plan as run_enforce_plan
@@ -191,11 +191,11 @@ def enforce_status(project_root: str = ".") -> str:
 
 @server.tool()
 def enforce_challenge(project_root: str = ".") -> str:
-    """Run the adversarial cross-iteration audit over the current enforce session.
+    """Run the adversarial cross-iteration audit over the flywheel history.
 
-    Use this after one or more checks to catch gaming, scope creep, repeated hot-file churn, and other cumulative failure modes.
-    Prerequisites: an active session with recorded iterations.
-    Common mistakes: relying on per-iteration checks alone or using challenge before any enforce history exists.
+    Use this after several commit/revert cycles to catch gaming, scope creep, repeated hot-file churn, and other cumulative failure modes across the full iteration sequence.
+    Prerequisites: an active session with recorded iterations (at least 2-3 cycles).
+    Common mistakes: relying on per-cycle checks alone or using challenge before any enforce history exists.
     Next step: if clean, call `enforce_report` for a shareable summary. If gaming detected, revert suspect iterations and re-plan.
     """
     try:
@@ -226,11 +226,12 @@ def enforce_reset(project_root: str = ".") -> str:
 
 @server.tool()
 def enforce_report(project_root: str = ".", format: str = "json") -> str:
-    """Generate the final enforce report in text, JSON, or Markdown.
+    """Generate the final flywheel report: all cycles, commits, reverts, gaming signals, and net progress.
 
-    Use this after a session has real history and you want a shareable summary of baseline, iterations, gaming signals, and outcomes.
+    This summarizes the enforce session history, not agent traces — for trace analysis reports, use `report`.
+    Use this after the flywheel has run several cycles and you want a shareable summary of what was committed, what was reverted, and why.
     Prerequisites: an existing enforce session and a valid format of `text`, `json`, or `markdown`.
-    Common mistakes: calling it before initializing a session or treating the report as a substitute for per-iteration checks.
+    Common mistakes: calling it before initializing a session or treating the report as a substitute for per-cycle `enforce_check`.
     Next step: this is typically the last enforce action. Call `enforce_reset` if you want to start a new experiment.
     """
     try:
@@ -260,6 +261,7 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
 def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_bank: str | None = None) -> str:
     """Start here. Analyze agent traces to get grade distribution, root causes, and a fix plan.
 
+    For a site-level overview, try `tree` first. For a single-call alternative that combines grade + root_cause + baseline, use `flywheel`.
     Use this near the start of trace triage when you want the broad picture before drilling into individual tasks.
     Prerequisites: a readable trace directory or JSONL file and, optionally, a valid ruleset name or path.
     High-value path: provide task_bank (path to task_bank.json) for expectation-aware grading that checks each task against its defined success criteria.
@@ -313,8 +315,9 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
     Use this after `analyze` when you need a scored view of which tasks are golden, weak, or broken.
     High-value path: provide task_bank (path to task_bank.json) for expectation-aware grading. This matches each task to its bank entry and evaluates success_criteria (must_reach_url, must_answer_contains, payment_fields_visible, etc.). Without task_bank, grading uses generic signals only.
     Prerequisites: a readable trace selection and a ruleset that matches the task domain.
+    Validate your task_bank first with `task_bank_validate`.
     Common mistakes: grading without a task bank (misses expectation failures), mixing incomparable runs, or assuming grades explain root cause by themselves.
-    Next step: call `root_cause` on the same traces to classify why tasks are failing. For individual task deep-dives, inspect specific task_ids from the results.
+    Next step: call `root_cause` on the same traces to classify why tasks are failing. Use `search_tasks` to find task_ids by keyword, then `surface_task` to inspect them.
     """
     try:
         from agent_xray.grader import grade_tasks, load_rules
@@ -365,7 +368,8 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto") -> st
     Use this after `grade` when you want an evidence-backed shortlist of likely failure modes to investigate next.
     Prerequisites: trace data that grades poorly enough to classify and a ruleset appropriate for the task domain.
     Common mistakes: skipping surface inspection on critical tasks or treating the classifier as ground truth instead of a ranked heuristic.
-    Next step: use the classified root causes to prioritize fixes. Call `completeness` if you suspect missing trace data is skewing results.
+    This classifies failure modes analytically. For a prioritized fix plan with verify commands, call `diagnose` instead.
+    Next step: call `diagnose` on the same log_dir for a prioritized fix plan with investigation targets, or call `completeness` to verify data quality.
     """
     try:
         from agent_xray.grader import grade_tasks, load_rules
@@ -429,6 +433,7 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
 
     Use this when you need to understand exactly what happened inside one task — what tools were available, what the model chose, and why.
     High-value path: provide task_bank (path to task_bank.json) to include matched expectations and success criteria alongside the surface.
+    For reasoning chain details, call `reasoning` on the same task. To compare two specific tasks side-by-side, use `diff_tasks`.
     Next step: if the surface reveals a tool selection problem, call `root_cause` to classify it. If the surface looks correct but the grade is wrong, call `grade` with task_bank to check expectation alignment.
     """
     try:
@@ -515,6 +520,8 @@ def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
 def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
     """Classify failures and build a prioritized fix plan with investigation targets and verify commands.
 
+    This builds on root_cause classification to produce actionable fixes. If you haven't classified failures yet, call `root_cause` first.
+    Validate your task_bank first with `task_bank_validate`.
     Use this after `grade` and `root_cause` when you want an actionable ranked list of what to fix first.
     High-value path: provide task_bank (path to task_bank.json) for expectation-aware failure classification.
     Next step: for each fix-plan entry, call `surface_task` on the investigate_task to understand the failure, then apply the fix and re-run `grade` to verify improvement.
@@ -555,6 +562,7 @@ def compare_runs(left_log_dir: str, right_log_dir: str, rules: str = "default", 
     """Compare two trace sets side by side to find grade shifts, cost deltas, and decision divergences.
 
     Use this when you have a before/after pair of runs (different models, different days, or different prompt versions) and want to quantify what changed.
+    To compare two specific tasks side-by-side, use `diff_tasks`.
     Next step: for each divergence point, call `surface_task` on the task_id to inspect what each run did differently. Call `diagnose` on the worse run to build a fix plan.
     """
     try:
@@ -581,8 +589,9 @@ def report(
 ) -> str:
     """Generate a focused report by type: health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, timeline, or spins.
 
+    This analyzes agent traces, not enforce sessions — for enforce session reports, use `enforce_report`.
     Use this when you need a specific analytical view of the traces rather than the broad `analyze` overview.
-    High-value path: provide task_bank (path to task_bank.json) for expectation-aware reports (especially fixes and broken).
+    High-value path: provide task_bank (path to task_bank.json) for expectation-aware reports (especially fixes and broken). Use `pricing_show` for per-model cost lookup.
     Next step: after reviewing a report, call `surface_task` on specific task_ids that need investigation, or call `diagnose` for a prioritized fix plan.
     """
     try:
@@ -704,7 +713,7 @@ def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
     """Extract the model's reasoning chain for a task, showing how it decided what to do at each step.
 
     Use this when you need to understand the model's internal decision-making, not just its actions.
-    Next step: surface_task for full context.
+    Next step: use findings to guide `diagnose` priorities, or call `surface_task` for the full decision surface if you started with reasoning.
     """
     try:
         from agent_xray.surface import reasoning_for_task
@@ -814,6 +823,7 @@ def golden_compare(
 ) -> str:
     """Regression detection against golden captures. Compares current runs to fixture baselines.
 
+    Create fixtures using `capture_task`.
     Use this after golden_rank to verify that agent quality has not degraded.
     Next step: surface_task on any REGRESSION task.
     """
@@ -888,7 +898,7 @@ def task_bank_validate(path: str) -> str:
     """Check task bank schema and criteria for correctness.
 
     Use this before grading with a task bank to catch schema errors early.
-    Next step: grade with --task-bank.
+    Next step: call `grade` with the `task_bank` parameter set to this file's path.
     """
     try:
         from agent_xray.contrib.task_bank import validate_task_bank
@@ -908,7 +918,7 @@ def task_bank_list(path: str) -> str:
     """List all entries in a task bank, showing task IDs, descriptions, and success criteria.
 
     Use this to inspect what a task bank contains before using it for grading.
-    Next step: grade with --task-bank.
+    Next step: call `grade` with the `task_bank` parameter set to this file's path.
     """
     try:
         from agent_xray.contrib.task_bank import load_task_bank
@@ -973,7 +983,7 @@ def capture_task(log_dir: str, task_id: str, format: str = "auto") -> str:
     """Save a task as a sanitized fixture for replay and regression testing.
 
     Use this to capture a golden or interesting task for future comparison.
-    Next step: replay to compare against future runs.
+    Next step: pass the captured fixture directory to `golden_compare` as `fixtures_dir` to detect regressions against future runs.
     """
     try:
         from pathlib import Path
