@@ -413,6 +413,7 @@ def _run_shell(command: str, cwd: str | None = None, *, timeout: int = 120) -> t
             text=False,
             cwd=cwd,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         stdout = result.stdout.decode("utf-8", errors="replace")
         stderr = result.stderr.decode("utf-8", errors="replace")
