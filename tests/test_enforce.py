@@ -132,8 +132,8 @@ class TestEnforceConfig:
         assert cfg.challenge_every == 5
         assert cfg.require_improvement is True
         assert cfg.allow_test_modification is False
-        assert cfg.git_auto_commit is True
-        assert cfg.git_auto_revert is True
+        assert cfg.git_auto_commit is False
+        assert cfg.git_auto_revert is False
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +410,7 @@ class TestEnforceCheck:
             _git_diff_content_fn=lambda cwd: "+fix",
         )
         assert record.iteration == 1
-        assert record.decision == "COMMITTED"
+        assert record.decision == "RECOMMEND_COMMIT"
         assert record.audit_verdict == "VALID"
         assert record.hypothesis == "fix test_x"
 
@@ -422,12 +422,6 @@ class TestEnforceCheck:
         )
         _save_session(cfg, _baseline(), str(tmp_path))
 
-        reverted = {"called": False}
-
-        def mock_revert(h, cwd):
-            reverted["called"] = True
-            return True
-
         record = enforce_check(
             "bad change",
             project_root=str(tmp_path),
@@ -438,12 +432,12 @@ class TestEnforceCheck:
             _git_diff_fn=lambda cwd: "",
             _git_names_fn=lambda cwd: ["bar.py"],
             _git_commit_fn=lambda msg, cwd: None,
-            _git_revert_fn=mock_revert,
+            _git_revert_fn=lambda h, cwd: True,
             _git_head_fn=lambda cwd: "aaa",
             _git_diff_content_fn=lambda cwd: "",
         )
-        assert record.decision == "REVERTED"
-        assert reverted["called"]
+        assert record.decision == "RECOMMEND_REVERT"
+        assert not record.action_taken
 
     def test_check_revert_on_gaming(self, tmp_path: Path):
         cfg = _config(tmp_path)
@@ -463,7 +457,7 @@ class TestEnforceCheck:
             _git_head_fn=lambda cwd: "bbb",
             _git_diff_content_fn=lambda cwd: "",
         )
-        assert record.decision == "REVERTED"
+        assert record.decision == "RECOMMEND_REVERT"
         assert record.audit_verdict == "GAMING"
 
     def test_sequential_iterations(self, tmp_path: Path):

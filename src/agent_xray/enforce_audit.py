@@ -381,7 +381,7 @@ def challenge_iterations(
 
     # Veto iterations with GAMING verdict
     for it in iterations:
-        if it.audit_verdict == "GAMING" and it.decision != "REVERTED":
+        if it.audit_verdict == "GAMING" and it.decision not in ("REVERTED", "RECOMMEND_REVERT"):
             vetoed.append(it.iteration)
             findings.append(f"Iteration {it.iteration} vetoed: gaming detected but not reverted")
 
@@ -404,7 +404,7 @@ def challenge_iterations(
     # Dependency detection: if two committed changes modify the same function
     committed_files: dict[str, list[int]] = {}
     for it in iterations:
-        if it.decision == "COMMITTED":
+        if it.decision in ("COMMITTED", "RECOMMEND_COMMIT"):
             for f in it.files_modified:
                 committed_files.setdefault(f, []).append(it.iteration)
     for f, iters_list in committed_files.items():
@@ -442,7 +442,7 @@ def challenge_iterations(
     combined_diff_parts: list[str] = []
     combined_files: set[str] = set()
     for it in iterations:
-        if it.decision == "COMMITTED" and it.diff_stat:
+        if it.decision in ("COMMITTED", "RECOMMEND_COMMIT") and it.diff_stat:
             combined_diff_parts.append(it.diff_stat)
             combined_files.update(it.files_modified)
     if combined_diff_parts:
@@ -732,7 +732,7 @@ def analyze_successful_changes(
     - success_rate: float  (committed / total)
     - patterns: list[str]  human-readable observations
     """
-    committed = [r for r in iterations if r.decision == "COMMITTED"]
+    committed = [r for r in iterations if r.decision in ("COMMITTED", "RECOMMEND_COMMIT")]
     total = len(iterations)
 
     if not committed:
@@ -813,17 +813,20 @@ def classify_change_quality(record: ChangeRecord) -> str:
     has_gaming = bool(record.gaming_signals)
     has_reg = bool(record.tests_regressed)
 
+    _commit_decisions = ("COMMITTED", "RECOMMEND_COMMIT")
+    _revert_decisions = ("REVERTED", "RECOMMEND_REVERT")
+
     # HARMFUL: reverted AND (gaming OR large net loss)
-    if record.decision == "REVERTED" and (has_gaming or record.net_improvement < -2):
+    if record.decision in _revert_decisions and (has_gaming or record.net_improvement < -2):
         return "HARMFUL"
 
     # POOR: reverted without gaming, OR zero improvement with regressions
-    if record.decision == "REVERTED" and not has_gaming:
+    if record.decision in _revert_decisions and not has_gaming:
         return "POOR"
     if (
         record.net_improvement == 0
         and has_reg
-        and record.decision == "COMMITTED"
+        and record.decision in _commit_decisions
     ):
         return "POOR"
 
@@ -832,7 +835,7 @@ def classify_change_quality(record: ChangeRecord) -> str:
         record.net_improvement >= 3
         and not has_gaming
         and not has_reg
-        and record.decision == "COMMITTED"
+        and record.decision in _commit_decisions
     ):
         return "EXCELLENT"
 
@@ -840,7 +843,7 @@ def classify_change_quality(record: ChangeRecord) -> str:
     if (
         record.net_improvement >= 1
         and not has_gaming
-        and record.decision == "COMMITTED"
+        and record.decision in _commit_decisions
     ):
         return "GOOD"
 
@@ -848,7 +851,7 @@ def classify_change_quality(record: ChangeRecord) -> str:
     if (
         record.net_improvement == 0
         and not has_reg
-        and record.decision == "COMMITTED"
+        and record.decision in _commit_decisions
     ):
         return "NEUTRAL"
 

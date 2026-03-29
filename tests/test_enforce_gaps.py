@@ -168,8 +168,6 @@ class TestEnforceAuto:
             project_root=str(tmp_path),
             max_iterations=10,
             challenge_every=0,
-            git_auto_commit=False,
-            git_auto_revert=False,
         )
         report = enforce_auto(
             config, "agent-cmd",
@@ -189,8 +187,6 @@ class TestEnforceAuto:
             test_command="test",
             project_root=str(tmp_path),
             max_iterations=50,
-            git_auto_commit=False,
-            git_auto_revert=False,
         )
         report = enforce_auto(
             config, "agent-cmd",
@@ -207,8 +203,6 @@ class TestEnforceAuto:
             project_root=str(tmp_path),
             max_iterations=3,
             challenge_every=0,
-            git_auto_commit=False,
-            git_auto_revert=False,
         )
         report = enforce_auto(
             config, "agent-cmd",
@@ -216,6 +210,30 @@ class TestEnforceAuto:
             _run_shell_fn=lambda cmd, cwd: (0, "ok"),
         )
         assert report.total_iterations <= 3
+
+    def test_auto_uses_configured_test_timeout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        timeouts: list[int] = []
+
+        def mock_run_tests(cmd, cwd, *, timeout=120):
+            timeouts.append(timeout)
+            return _all_pass()
+
+        monkeypatch.setattr("agent_xray.enforce.run_tests", mock_run_tests)
+
+        config = EnforceConfig(
+            test_command="test",
+            project_root=str(tmp_path),
+            max_iterations=1,
+            challenge_every=0,
+            test_timeout=17,
+        )
+        report = enforce_auto(
+            config,
+            "agent-cmd",
+            _run_shell_fn=lambda cmd, cwd: (0, "ok"),
+        )
+        assert report.total_iterations == 0
+        assert timeouts == [17]
 
     def test_agent_command_templates_use_baseline_context_first(self, tmp_path: Path):
         commands: list[str] = []
@@ -249,8 +267,6 @@ class TestEnforceAuto:
             project_root=str(tmp_path),
             max_iterations=1,
             challenge_every=0,
-            git_auto_commit=False,
-            git_auto_revert=False,
         )
         report = enforce_auto(
             config,
@@ -309,8 +325,6 @@ class TestEnforceAuto:
             project_root=str(tmp_path),
             max_iterations=2,
             challenge_every=0,
-            git_auto_commit=False,
-            git_auto_revert=False,
         )
         enforce_auto(
             config,
@@ -396,7 +410,7 @@ class TestMetaAnalysis:
         _save_session(cfg, _baseline(), str(tmp_path))
         stubs = _make_check_stubs()
         record = enforce_check("fix test_x", project_root=str(tmp_path), **stubs)
-        assert record.decision == "COMMITTED"
+        assert record.decision == "RECOMMEND_COMMIT"
         assert record.meta_analysis != {}
         assert "classification" in record.meta_analysis
 
@@ -898,8 +912,23 @@ class TestRegressionRootCause:
             _git_diff_content_fn=lambda cwd: "-import os\n+import sys\n",
         )
         record = enforce_check("bad change", project_root=str(tmp_path), **stubs)
-        assert record.decision == "REVERTED"
+        assert record.decision == "RECOMMEND_REVERT"
         assert record.regression_root_cause != ""
+
+    def test_require_improvement_reverts_neutral_results(self, tmp_path: Path):
+        cfg = EnforceConfig(
+            test_command="test",
+            project_root=str(tmp_path),
+            require_improvement=True,
+        )
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        stubs = _make_check_stubs(
+            _run_tests_fn=lambda cmd, cwd: _baseline(),
+        )
+        record = enforce_check("no-op change", project_root=str(tmp_path), **stubs)
+        assert record.decision == "RECOMMEND_REVERT"
+        assert record.recommended_action == "revert"
 
 
 # ===========================================================================

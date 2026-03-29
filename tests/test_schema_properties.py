@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from hypothesis import given, settings
@@ -160,7 +161,11 @@ def test_coerce_optional_float_matches_contract(value: Any) -> None:
         assert coerced is None
     else:
         try:
-            assert coerced == float(value)
+            expected = float(value)
+            if math.isnan(expected):
+                assert coerced is not None and math.isnan(coerced)
+            else:
+                assert coerced == expected
         except (TypeError, ValueError):
             assert coerced is None
 

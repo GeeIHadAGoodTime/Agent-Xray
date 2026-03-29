@@ -253,10 +253,9 @@ class TaskAnalysis:
             metrics.update(detector_metrics)
         return metrics
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_task: bool = False) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "task_id": self.task_id,
-            "task": self.task.to_dict(),
             "unique_urls": list(self.unique_urls),
             "unique_url_paths": list(self.unique_url_paths),
             "unique_tools": list(self.unique_tools),
@@ -303,6 +302,9 @@ class TaskAnalysis:
             "final_answer_indicates_failure": self.final_answer_contains_failure_keywords,
             "element_ref_mismatches": self.element_ref_mismatches,
         }
+        if include_task:
+            d["task"] = self.task.to_dict()
+        return d
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> TaskAnalysis:
@@ -906,6 +908,9 @@ def _sniff_agent_trace(path: Path) -> bool:
     return False
 
 
+_MAX_SNIFF_FILES = 200  # Only sniff the most recent files to avoid slow scans
+
+
 def _iter_jsonl_files(
     log_dir: Path, days: int | None = None, pattern: str | None = None
 ) -> list[Path]:
@@ -914,8 +919,9 @@ def _iter_jsonl_files(
     glob_pat = pattern or "*.jsonl"
     files = sorted(log_dir.glob(glob_pat))
     if not pattern:
-        # Auto-filter: only keep files that actually contain agent traces
-        files = [f for f in files if _sniff_agent_trace(f)]
+        # Only sniff recent files — scanning thousands of old files is wasteful
+        candidates = files[-_MAX_SNIFF_FILES:] if len(files) > _MAX_SNIFF_FILES else files
+        files = [f for f in candidates if _sniff_agent_trace(f)]
     if days and days > 0:
         return files[-days:]
     return files

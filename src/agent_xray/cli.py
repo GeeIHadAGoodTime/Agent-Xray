@@ -298,7 +298,9 @@ def _select_enforce_reason(decision: str, reasons: list[str]) -> str:
     preferred_terms = {
         "REJECTED": ("change too large", "rule_violation", "rule violation", "guidance:"),
         "REVERTED": ("gaming detected", "regressions detected", "net negative improvement"),
+        "RECOMMEND_REVERT": ("gaming detected", "regressions detected", "net negative improvement"),
         "COMMITTED": ("validated", "no gaming", "no gaming signals detected"),
+        "RECOMMEND_COMMIT": ("validated", "no gaming", "no gaming signals detected"),
     }.get(decision, ())
 
     lowered = [(reason, reason.lower()) for reason in reasons]
@@ -317,9 +319,9 @@ def _select_enforce_reason(decision: str, reasons: list[str]) -> str:
 def _format_enforce_check_summary(record: Any) -> str:
     """Format a clear one-line summary for `enforce check`."""
     primary_reason = _select_enforce_reason(record.decision, record.audit_reasons)
-    if record.decision == "COMMITTED" and not primary_reason:
+    if record.decision in ("COMMITTED", "RECOMMEND_COMMIT") and not primary_reason:
         primary_reason = f"{record.audit_verdict} ({record.net_improvement:+d} tests)"
-    elif record.decision == "COMMITTED" and "no gaming" in primary_reason.lower():
+    elif record.decision in ("COMMITTED", "RECOMMEND_COMMIT") and "no gaming" in primary_reason.lower():
         primary_reason = f"{record.audit_verdict} ({record.net_improvement:+d} tests)"
     elif record.decision == "REJECTED":
         guidance = next(
@@ -339,10 +341,10 @@ def _format_enforce_check_summary(record: Any) -> str:
             summary_label = "REJECTED (rule violation)"
         elif any("change too large" in reason.lower() for reason in record.audit_reasons):
             summary_label = "REJECTED (change too large)"
-    elif record.decision == "REVERTED" and record.audit_verdict == "GAMING":
-        summary_label = "GAMING -> REVERTED"
-    elif record.decision == "REVERTED":
-        summary_label = "REGRESSION -> REVERTED"
+    elif record.decision in ("REVERTED", "RECOMMEND_REVERT") and record.audit_verdict == "GAMING":
+        summary_label = "GAMING -> REVERTED" if record.decision == "REVERTED" else "GAMING -> RECOMMEND_REVERT"
+    elif record.decision in ("REVERTED", "RECOMMEND_REVERT"):
+        summary_label = "REGRESSION -> REVERTED" if record.decision == "REVERTED" else "REGRESSION -> RECOMMEND_REVERT"
 
     summary = f"Iteration {record.iteration}: {summary_label}"
     if primary_reason:
@@ -2383,8 +2385,6 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 challenge_every=getattr(args, "challenge_every", 5),
                 require_improvement=not getattr(args, "no_require_improvement", False),
                 allow_test_modification=getattr(args, "allow_test_modification", False),
-                git_auto_commit=not getattr(args, "no_git_commit", False),
-                git_auto_revert=not getattr(args, "no_git_revert", False),
                 project_root=getattr(args, "project_root", None) or ".",
                 stash_first=getattr(args, "stash_first", False),
                 max_files_per_change=getattr(args, "max_files_per_change", 5),
@@ -2512,8 +2512,6 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 challenge_every=getattr(args, "challenge_every", 5),
                 require_improvement=not getattr(args, "no_require_improvement", False),
                 allow_test_modification=getattr(args, "allow_test_modification", False),
-                git_auto_commit=not getattr(args, "no_git_commit", False),
-                git_auto_revert=not getattr(args, "no_git_revert", False),
                 project_root=getattr(args, "project_root", None) or ".",
                 max_files_per_change=getattr(args, "max_files_per_change", 5),
                 max_diff_lines=getattr(args, "max_diff_lines", 200),
@@ -3320,14 +3318,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow neutral iterations instead of requiring measurable improvement",
     )
     p_enf_init.add_argument(
-        "--no-git-commit", action="store_true",
-        help="Do not auto-commit validated iterations",
-    )
-    p_enf_init.add_argument(
-        "--no-git-revert", action="store_true",
-        help="Do not auto-revert rejected or regressing iterations",
-    )
-    p_enf_init.add_argument(
         "--stash-first", action="store_true",
         help="Temporarily stash unrelated uncommitted work before capturing the baseline",
     )
@@ -3466,14 +3456,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_auto.add_argument(
         "--no-require-improvement", action="store_true",
         help="Allow neutral iterations instead of requiring measurable improvement",
-    )
-    p_enf_auto.add_argument(
-        "--no-git-commit", action="store_true",
-        help="Do not auto-commit validated iterations",
-    )
-    p_enf_auto.add_argument(
-        "--no-git-revert", action="store_true",
-        help="Do not auto-revert rejected or regressing iterations",
     )
     p_enf_auto.add_argument(
         "--max-files-per-change", type=int, default=5,

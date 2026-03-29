@@ -78,10 +78,10 @@ def test_enforce_end_to_end_real_git_repo() -> None:
             hypothesis="Fix add arithmetic bug",
             project_root=str(repo_dir),
         )
-        assert record.decision == "COMMITTED"
+        assert record.decision == "RECOMMEND_COMMIT"
         assert record.after is not None
         assert record.after.failed == 0
-        assert record.commit_hash
+        assert record.commit_hash is None  # Socratic: never auto-commits
 
         status = enforce_status(str(repo_dir))
         assert status["iterations"] == 1

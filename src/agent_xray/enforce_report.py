@@ -202,7 +202,7 @@ def grade_enforce_session(report: EnforceReport) -> dict[str, Any]:
     # +2 per COMMITTED iteration with net_improvement > 0
     good_commits = 0
     for change in report.changes:
-        if change.decision == "COMMITTED" and change.net_improvement > 0:
+        if change.decision in ("COMMITTED", "RECOMMEND_COMMIT") and change.net_improvement > 0:
             good_commits += 1
     if good_commits:
         bonus = good_commits * 2
@@ -266,9 +266,9 @@ def _build_detailed_change_map(
     for change in report.changes:
         for f in change.files_modified:
             totals[f] += 1
-            if change.decision == "COMMITTED":
+            if change.decision in ("COMMITTED", "RECOMMEND_COMMIT"):
                 committed[f] += 1
-            elif change.decision == "REVERTED":
+            elif change.decision in ("REVERTED", "RECOMMEND_REVERT"):
                 reverted[f] += 1
 
     result = []
@@ -370,7 +370,7 @@ def _format_change_text(change: ChangeRecord, *, color: bool = True) -> str:
     verdict_color = "good" if change.audit_verdict == "VALID" else (
         "bad" if change.audit_verdict == "GAMING" else "warn"
     )
-    decision_color = "good" if change.decision == "COMMITTED" else (
+    decision_color = "good" if change.decision in ("COMMITTED", "RECOMMEND_COMMIT") else (
         "warn" if change.decision == "REJECTED" else "bad"
     )
 
@@ -670,7 +670,9 @@ def format_enforce_markdown(report: EnforceReport) -> str:
         for change in report.changes:
             status_label = {
                 "COMMITTED": "COMMITTED",
+                "RECOMMEND_COMMIT": "RECOMMEND_COMMIT",
                 "REVERTED": "REVERTED",
+                "RECOMMEND_REVERT": "RECOMMEND_REVERT",
                 "VETOED": "VETOED",
                 "REJECTED": "REJECTED",
             }.get(change.decision, change.decision)

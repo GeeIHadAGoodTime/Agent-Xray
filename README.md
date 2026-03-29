@@ -716,7 +716,7 @@ Enforce mode turns `agent-xray` into an **advisor** for AI agents making code ch
 
 ### Why enforce mode?
 
-AI agents left to fix failing tests will often game them: weaken assertions, insert hardcoded values, swallow exceptions, or add special-case branches. Enforce mode catches this automatically and reverts bad changes before they accumulate.
+AI agents left to fix failing tests will often game them: weaken assertions, insert hardcoded values, swallow exceptions, or add special-case branches. Enforce mode catches this automatically and surfaces evidence so you can revert bad changes before they accumulate.
 
 ### Quick start
 
@@ -751,7 +751,7 @@ Each `enforce check` iteration:
 5. Flags changes that exceed size limits (max files and diff lines per change)
 6. Checks project-specific rules if a rules file is configured
 7. Surfaces likely root causes for any regressions with evidence
-8. Reports a decision recommendation: **COMMIT** (clear improvement), **REVERT** (regression or gaming detected), or **REJECTED** (size/rule violation)
+8. Reports a decision: **RECOMMEND_COMMIT** (clear improvement), **RECOMMEND_REVERT** (regression or gaming detected), or **REJECTED** (size/rule violation)
 
 The decision is a recommendation with evidence. The calling agent or user decides whether to act on it.
 
@@ -833,7 +833,9 @@ config = EnforceConfig(
 session = enforce_init(config)
 # ... agent makes changes ...
 result = enforce_check(session)
-print(result.decision)  # COMMIT, REVERT, or REJECTED (recommendation with evidence)
+print(result.decision)  # RECOMMEND_COMMIT, RECOMMEND_REVERT, or REJECTED
+print(result.review_summary)  # Socratic summary with evidence
+print(result.recommended_action)  # "commit", "revert", "split", or "investigate"
 
 report = build_enforce_report(session)
 print(format_enforce_text(report))

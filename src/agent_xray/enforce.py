@@ -50,8 +50,9 @@ class EnforceConfig:
     challenge_every: int = 5
     require_improvement: bool = True
     allow_test_modification: bool = False
-    git_auto_commit: bool = True
-    git_auto_revert: bool = True
+    # Legacy fields kept for deserialization of old sessions — always False, never exposed.
+    git_auto_commit: bool = False
+    git_auto_revert: bool = False
     baseline_command: str | None = None
     project_root: str | None = None
     report_path: str | None = None
@@ -61,6 +62,11 @@ class EnforceConfig:
     max_diff_lines: int = 200
     # GAP 3: Project-rule audit awareness
     rules_file: str | None = None
+    # File scoping: limit enforce to specific files in multi-agent repos
+    scope: list[str] | None = None
+    # Test timeout: max seconds for the test command (prevents MCP hangs)
+    # 300s covers most suites; agents can override for longer consultative tasks
+    test_timeout: int = 300
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -142,6 +148,10 @@ class ChangeRecord:
     regression_root_cause: str = ""
     # GAP 3: Rule violations
     rule_violations: list[str] = field(default_factory=list)
+    # Socratic observability: surface evidence, let the agent decide
+    action_taken: bool = False  # Always False — tool never acts on git
+    recommended_action: str = ""  # "commit", "revert", "split", or "investigate"
+    review_summary: str = ""  # Socratic summary for the agent to review
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -386,8 +396,15 @@ def parse_test_output(output: str, exit_code: int) -> TestResult:
 # Shell / git helpers
 # ---------------------------------------------------------------------------
 
-def _run_shell(command: str, cwd: str | None = None) -> tuple[int, str]:
-    """Run a shell command and return (exit_code, combined_output)."""
+_MAX_OUTPUT_CHARS = 64_000  # Keep tail of output — test summaries are at the end
+
+
+def _run_shell(command: str, cwd: str | None = None, *, timeout: int = 120) -> tuple[int, str]:
+    """Run a shell command and return (exit_code, combined_output).
+
+    Output is capped at _MAX_OUTPUT_CHARS (tail-preserved) so verbose test
+    suites don't blow up memory, session files, or MCP responses.
+    """
     try:
         result = subprocess.run(
             command,
@@ -395,13 +412,19 @@ def _run_shell(command: str, cwd: str | None = None) -> tuple[int, str]:
             capture_output=True,
             text=False,
             cwd=cwd,
-            timeout=600,
+            timeout=timeout,
         )
         stdout = result.stdout.decode("utf-8", errors="replace")
         stderr = result.stderr.decode("utf-8", errors="replace")
-        return result.returncode, stdout + stderr
+        combined = stdout + stderr
+        if len(combined) > _MAX_OUTPUT_CHARS:
+            combined = (
+                f"... OUTPUT TRUNCATED (showing last {_MAX_OUTPUT_CHARS // 1000}K chars) ...\n"
+                + combined[-_MAX_OUTPUT_CHARS:]
+            )
+        return result.returncode, combined
     except subprocess.TimeoutExpired:
-        return 1, "Command timed out after 600 seconds"
+        return 1, f"Command timed out after {timeout} seconds"
     except Exception as e:
         return 1, str(e)
 
@@ -419,32 +442,45 @@ def _filter_git_output_lines(output: str) -> list[str]:
     return filtered
 
 
-def _git_diff_stat(cwd: str | None = None) -> str:
+def _git_diff_stat(cwd: str | None = None, *, scope: list[str] | None = None) -> str:
     """Get git diff --stat for staged and unstaged changes."""
-    _, out = _run_shell(
-        f'git diff --stat HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
-    )
+    if scope:
+        pathspecs = " ".join(f'"{f}"' for f in scope)
+        cmd = f'git diff --stat HEAD -- {pathspecs}'
+    else:
+        cmd = f'git diff --stat HEAD -- . ":(exclude){SESSION_DIR_NAME}"'
+    _, out = _run_shell(cmd, cwd)
     return "\n".join(_filter_git_output_lines(out))
 
 
-def _git_diff_names(cwd: str | None = None) -> list[str]:
+def _git_diff_names(cwd: str | None = None, *, scope: list[str] | None = None) -> list[str]:
     """Get list of modified file names."""
-    _, out = _run_shell(
-        f'git diff --name-only HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
-    )
+    if scope:
+        pathspecs = " ".join(f'"{f}"' for f in scope)
+        cmd = f'git diff --name-only HEAD -- {pathspecs}'
+    else:
+        cmd = f'git diff --name-only HEAD -- . ":(exclude){SESSION_DIR_NAME}"'
+    _, out = _run_shell(cmd, cwd)
     return _filter_git_output_lines(out)
 
 
-def _git_stage_all(cwd: str | None = None) -> bool:
+def _git_stage_all(cwd: str | None = None, *, scope: list[str] | None = None) -> bool:
+    if scope:
+        # Only stage scoped files — do NOT touch other agents' work
+        for f in scope:
+            code, _ = _run_shell(f'git add -- "{f}"', cwd)
+            if code != 0:
+                return False
+        return True
     code, _ = _run_shell(
         f'git add -A -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
     )
     return code == 0
 
 
-def _git_commit(message: str, cwd: str | None = None) -> str | None:
+def _git_commit(message: str, cwd: str | None = None, *, scope: list[str] | None = None) -> str | None:
     """Commit staged changes. Returns commit hash or None."""
-    _git_stage_all(cwd)
+    _git_stage_all(cwd, scope=scope)
     code, out = _run_shell(f'git commit -m "{message}"', cwd)
     if code != 0:
         return None
@@ -453,8 +489,13 @@ def _git_commit(message: str, cwd: str | None = None) -> str | None:
     return hash_out.strip() or None
 
 
-def _git_revert_to(commit_hash: str, cwd: str | None = None) -> bool:
-    """Hard reset to a given commit."""
+def _git_revert_to(commit_hash: str, cwd: str | None = None, *, scope: list[str] | None = None) -> bool:
+    """Revert to a given commit. When scope is set, only revert scoped files."""
+    if scope:
+        # Only revert scoped files — do NOT touch other agents' work
+        pathspecs = " ".join(f'"{f}"' for f in scope)
+        code, _ = _run_shell(f"git checkout {commit_hash} -- {pathspecs}", cwd)
+        return code == 0
     code, _ = _run_shell(f"git reset --hard {commit_hash}", cwd)
     return code == 0
 
@@ -483,11 +524,14 @@ def _git_has_uncommitted_changes(cwd: str | None = None) -> bool:
     return bool(_filter_git_output_lines(out))
 
 
-def _git_diff_content(cwd: str | None = None) -> str:
+def _git_diff_content(cwd: str | None = None, *, scope: list[str] | None = None) -> str:
     """Get full diff content."""
-    _, out = _run_shell(
-        f'git diff HEAD -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
-    )
+    if scope:
+        pathspecs = " ".join(f'"{f}"' for f in scope)
+        cmd = f'git diff HEAD -- {pathspecs}'
+    else:
+        cmd = f'git diff HEAD -- . ":(exclude){SESSION_DIR_NAME}"'
+    _, out = _run_shell(cmd, cwd)
     return out
 
 
@@ -535,6 +579,14 @@ def _maybe_add_session_dir_to_gitignore(project_root: str | None = None) -> None
 # Session persistence
 # ---------------------------------------------------------------------------
 
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content atomically: temp file + os.replace to prevent corruption."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
 def _save_session(
     config: EnforceConfig,
     baseline: TestResult,
@@ -551,8 +603,8 @@ def _save_session(
         "head_hash_at_init": _git_head_hash(project_root),
         "stash_saved": stash_saved,
     }
-    (sd / "session.json").write_text(json.dumps(session_data, indent=2), encoding="utf-8")
-    (sd / "baseline.json").write_text(json.dumps(baseline.to_dict(), indent=2), encoding="utf-8")
+    _atomic_write(sd / "session.json", json.dumps(session_data, indent=2))
+    _atomic_write(sd / "baseline.json", json.dumps(baseline.to_dict(), indent=2))
     return sd
 
 
@@ -576,13 +628,13 @@ def _update_session_iteration_count(project_root: str | None, count: int) -> Non
     session_path = sd / "session.json"
     data = json.loads(session_path.read_text(encoding="utf-8"))
     data["iteration_count"] = count
-    session_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _atomic_write(session_path, json.dumps(data, indent=2))
 
 
 def _save_iteration(record: ChangeRecord, project_root: str | None = None) -> Path:
     sd = _session_dir(project_root)
     path = sd / "iterations" / f"{record.iteration:03d}.json"
-    path.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
+    _atomic_write(path, json.dumps(record.to_dict(), indent=2))
     _update_session_iteration_count(project_root, record.iteration)
     return path
 
@@ -602,7 +654,7 @@ def _load_iterations(project_root: str | None = None) -> list[ChangeRecord]:
 def _save_challenge(result: ChallengeResult, index: int, project_root: str | None = None) -> Path:
     sd = _session_dir(project_root)
     path = sd / "challenges" / f"challenge_{index:03d}.json"
-    path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+    _atomic_write(path, json.dumps(result.to_dict(), indent=2))
     return path
 
 
@@ -762,7 +814,7 @@ def _save_plan(hypothesis: str, expected_tests: list[str], project_root: str | N
         "expected_tests": expected_tests,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    (sd / "current_plan.json").write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
+    _atomic_write(sd / "current_plan.json", json.dumps(plan_data, indent=2))
 
 
 def _load_plan(project_root: str | None) -> dict[str, Any] | None:
@@ -870,9 +922,9 @@ def _load_project_rules(rules_file: str | None) -> dict[str, Any] | None:
         return None
 
 
-def run_tests(test_command: str, cwd: str | None = None) -> TestResult:
+def run_tests(test_command: str, cwd: str | None = None, *, timeout: int = 120) -> TestResult:
     """Run the test command and parse results."""
-    exit_code, output = _run_shell(test_command, cwd)
+    exit_code, output = _run_shell(test_command, cwd, timeout=timeout)
     return parse_test_output(output, exit_code)
 
 
@@ -955,7 +1007,11 @@ def enforce_init(
     Returns the baseline result and session directory path.
     """
     project_root = config.project_root
-    runner = _run_tests_fn or run_tests
+    test_timeout = config.test_timeout
+    if _run_tests_fn:
+        runner = _run_tests_fn
+    else:
+        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
     sd = _ensure_session_dir(project_root)
 
     stash_saved = False
@@ -1003,14 +1059,42 @@ def enforce_check(
     iterations = _load_iterations(project_root)
     iteration_num = len(iterations) + 1
 
-    runner = _run_tests_fn or run_tests
+    test_timeout = config.test_timeout
+    if _run_tests_fn:
+        runner = _run_tests_fn
+    else:
+        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
     audit_fn = _audit_fn or audit_change
-    diff_stat_fn = _git_diff_fn or _git_diff_stat
-    diff_names_fn = _git_names_fn or _git_diff_names
-    commit_fn = _git_commit_fn or _git_commit
-    revert_fn = _git_revert_fn or _git_revert_to
     head_fn = _git_head_fn or _git_head_hash
-    diff_content_fn = _git_diff_content_fn or _git_diff_content
+    scope = config.scope
+
+    # When scope is set and no test-injection override, create scope-aware wrappers.
+    # Injected test functions are unaware of scope and that's fine — tests control
+    # the fake git output directly.
+    if _git_diff_fn:
+        diff_stat_fn = _git_diff_fn
+    else:
+        diff_stat_fn = lambda cwd: _git_diff_stat(cwd, scope=scope)
+
+    if _git_names_fn:
+        diff_names_fn = _git_names_fn
+    else:
+        diff_names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
+
+    if _git_commit_fn:
+        commit_fn = _git_commit_fn
+    else:
+        commit_fn = lambda msg, cwd: _git_commit(msg, cwd, scope=scope)
+
+    if _git_revert_fn:
+        revert_fn = _git_revert_fn
+    else:
+        revert_fn = lambda hash, cwd: _git_revert_to(hash, cwd, scope=scope)
+
+    if _git_diff_content_fn:
+        diff_content_fn = _git_diff_content_fn
+    else:
+        diff_content_fn = lambda cwd: _git_diff_content(cwd, scope=scope)
 
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -1086,48 +1170,90 @@ def enforce_check(
     if plan is None and not hypothesis:
         reasons.append("No enforce_plan was registered before this check (prediction tracking disabled)")
 
-    # Decision logic
-    decision = "COMMITTED"
+    same_failed_tests = (
+        set(before.test_names_failed) == set(after.test_names_failed)
+        if before.test_names_failed or after.test_names_failed
+        else True
+    )
+    no_test_improvement = (
+        after.passed == before.passed
+        and after.failed == before.failed
+        and after.errors == before.errors
+        and same_failed_tests
+        and not improved
+        and not regressed
+    )
+
+    # Decision logic — determine the raw verdict first, then map to
+    # Socratic (recommend) or auto-action names depending on config.
+    raw_decision = "COMMIT"
+    recommended_action = "commit"
     commit_hash = None
 
     # GAP 7: Change-size enforcement
     diff_line_count = _diff_line_count(diff_content)
     reject_reason = _change_reject_reason(config, files_modified, diff_line_count)
     if reject_reason:
-        decision = "REJECTED"
+        raw_decision = "REJECTED"
+        recommended_action = "split"
         reasons.append(reject_reason)
         reasons.append("Guidance: Split this change into smaller iterations touching fewer files.")
     elif verdict == "GAMING":
-        decision = "REVERTED"
-        reasons.append("Gaming detected -- auto-reverting")
+        raw_decision = "REVERT"
+        recommended_action = "revert"
+        reasons.append("Gaming detected -- recommend reverting")
     elif regressed and config.require_improvement:
-        decision = "REVERTED"
+        raw_decision = "REVERT"
+        recommended_action = "revert"
         reasons.append(f"Regressions detected: {', '.join(regressed[:5])}")
     elif net < 0 and config.require_improvement:
-        decision = "REVERTED"
+        raw_decision = "REVERT"
+        recommended_action = "revert"
         reasons.append("Net negative improvement")
-    elif net == 0 and config.require_improvement and not improved:
-        decision = "COMMITTED"  # Allow neutral changes unless they regress
+    elif config.require_improvement and no_test_improvement:
+        raw_decision = "REVERT"
+        recommended_action = "revert"
+        reasons.append("No test improvement detected")
+
+    # Map raw verdict to Socratic recommendation (never auto-act)
+    if raw_decision == "REJECTED":
+        decision = "REJECTED"
+    elif raw_decision == "COMMIT":
+        decision = "RECOMMEND_COMMIT"
+    elif raw_decision == "REVERT":
+        decision = "RECOMMEND_REVERT"
+    else:
+        decision = raw_decision
+
+    # Handle ambiguous signals — override recommended_action to "investigate"
+    if raw_decision == "COMMIT" and gaming_signals and verdict != "GAMING":
+        recommended_action = "investigate"
+    elif raw_decision == "REVERT" and improved and regressed:
+        recommended_action = "investigate"
 
     # GAP 12: Regression root cause
     regression_root_cause = ""
     if regressed:
         regression_root_cause = _heuristic_regression_cause(diff_content, regressed, files_modified)
 
-    # Execute decision
-    if decision == "COMMITTED" and config.git_auto_commit:
-        msg = f"enforce: iteration {iteration_num}"
-        if hypothesis:
-            msg += f" - {hypothesis[:72]}"
-        commit_hash = commit_fn(msg, project_root)
-    elif decision == "REVERTED" and config.git_auto_revert:
-        revert_fn(head_before, project_root)
-    # REJECTED: don't commit or revert -- leave changes for the agent to split
+    # Socratic: surface evidence only — never commit or revert
+    action_taken = False
 
-    # GAP 2: Meta-analysis for committed changes
+    # GAP 2: Meta-analysis for committed/recommend-commit changes
     meta = {}
-    if decision == "COMMITTED":
+    if raw_decision == "COMMIT":
         meta = _meta_analyze(before, after, diff_content, files_modified)
+
+    # Build Socratic review summary
+    audit_note = f"Audit: {verdict}"
+    if gaming_signals:
+        audit_note += f" ({', '.join(gaming_signals[:3])})"
+    review_summary = (
+        f"{len(improved)} improved, {len(regressed)} regressed (net {'+' if net >= 0 else ''}{net}). "
+        f"{audit_note}. "
+        f"{len(files_modified)} file(s), {diff_line_count} diff line(s). "
+        f"Recommend: {recommended_action}."
+    )
 
     record = ChangeRecord(
         iteration=iteration_num,
@@ -1157,6 +1283,9 @@ def enforce_check(
         prediction_match_pct=pred_match_pct,
         regression_root_cause=regression_root_cause,
         rule_violations=rule_violations,
+        action_taken=action_taken,
+        recommended_action=recommended_action,
+        review_summary=review_summary,
     )
 
     _save_iteration(record, project_root)
@@ -1206,8 +1335,17 @@ def enforce_diff(
             *max_display_lines*.
     """
     config, _, _ = _load_session(project_root)
-    names_fn = _git_names_fn or _git_diff_names
-    diff_content_fn = _git_diff_content_fn or _git_diff_content
+    scope = config.scope
+
+    if _git_names_fn:
+        names_fn = _git_names_fn
+    else:
+        names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
+
+    if _git_diff_content_fn:
+        diff_content_fn = _git_diff_content_fn
+    else:
+        diff_content_fn = lambda cwd: _git_diff_content(cwd, scope=scope)
 
     files = names_fn(project_root)
     diff_content = diff_content_fn(project_root)
@@ -1244,25 +1382,43 @@ def enforce_guard(
     """Check if uncommitted changes exist that weren't processed through enforce (GAP 10).
 
     Returns a dict with status and any warnings.
+    When scope is set, separates in-scope vs out-of-scope uncommitted changes.
     """
     head_fn = _git_head_fn or _git_head_hash
-    names_fn = _git_names_fn or _git_diff_names
 
     try:
         config, baseline, session_data = _load_session(project_root)
     except FileNotFoundError:
         return {"status": "no_session", "warnings": ["No enforcement session active."]}
 
+    scope = config.scope
+
+    # For names, apply scope-awareness unless test injection overrides
+    if _git_names_fn:
+        scoped_names_fn = _git_names_fn
+        all_names_fn = _git_names_fn
+    else:
+        scoped_names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
+        all_names_fn = lambda cwd: _git_diff_names(cwd, scope=None)
+
     iterations = _load_iterations(project_root)
     current_head = head_fn(project_root)
-    uncommitted = names_fn(project_root)
+    uncommitted = scoped_names_fn(project_root)
 
     warnings_list: list[str] = []
+    out_of_scope_files: list[str] = []
+
     if uncommitted:
         warnings_list.append(
             f"Found {len(uncommitted)} uncommitted file(s) not processed through enforce_check: "
             f"{', '.join(uncommitted[:5])}"
         )
+
+    # When scoped, report out-of-scope changes as informational (not blocking)
+    if scope and not _git_names_fn:
+        all_uncommitted = all_names_fn(project_root)
+        scope_set = set(scope)
+        out_of_scope_files = [f for f in all_uncommitted if f not in scope_set]
 
     last_known_hash = session_data.get("head_hash_at_init", "")
     if iterations:
@@ -1271,13 +1427,16 @@ def enforce_guard(
                 last_known_hash = it.commit_hash
                 break
 
-    return {
+    result: dict[str, Any] = {
         "status": "warning" if warnings_list else "clean",
         "warnings": warnings_list,
         "current_head": current_head,
         "last_known_hash": last_known_hash,
         "uncommitted_files": uncommitted,
     }
+    if out_of_scope_files:
+        result["out_of_scope_changes"] = out_of_scope_files
+    return result
 
 
 def enforce_status(project_root: str | None = None) -> dict[str, Any]:
@@ -1285,8 +1444,8 @@ def enforce_status(project_root: str | None = None) -> dict[str, Any]:
     config, baseline, session_data = _load_session(project_root)
     iterations = _load_iterations(project_root)
 
-    committed = sum(1 for i in iterations if i.decision == "COMMITTED")
-    reverted = sum(1 for i in iterations if i.decision == "REVERTED")
+    committed = sum(1 for i in iterations if i.decision in ("COMMITTED", "RECOMMEND_COMMIT"))
+    reverted = sum(1 for i in iterations if i.decision in ("REVERTED", "RECOMMEND_REVERT"))
     vetoed = sum(1 for i in iterations if i.decision == "VETOED")
     gaming = sum(1 for i in iterations if i.audit_verdict == "GAMING")
 
@@ -1364,8 +1523,8 @@ def build_enforce_report(project_root: str | None = None) -> EnforceReport:
     iterations = _load_iterations(project_root)
     challenges = _load_challenges(project_root)
 
-    committed = sum(1 for i in iterations if i.decision == "COMMITTED")
-    reverted = sum(1 for i in iterations if i.decision == "REVERTED")
+    committed = sum(1 for i in iterations if i.decision in ("COMMITTED", "RECOMMEND_COMMIT"))
+    reverted = sum(1 for i in iterations if i.decision in ("REVERTED", "RECOMMEND_REVERT"))
     vetoed = sum(1 for i in iterations if i.decision == "VETOED")
     rejected = sum(1 for i in iterations if i.decision == "REJECTED")
     gaming = sum(1 for i in iterations if i.audit_verdict == "GAMING")
@@ -1420,7 +1579,7 @@ def build_enforce_report(project_root: str | None = None) -> EnforceReport:
     # Cumulative diff of all committed changes (combine diff_stats)
     committed_diffs: list[str] = []
     for it in iterations:
-        if it.decision == "COMMITTED" and it.diff_stat:
+        if it.decision in ("COMMITTED", "RECOMMEND_COMMIT") and it.diff_stat:
             committed_diffs.append(it.diff_stat)
     cumulative_diff = "\n".join(committed_diffs) if committed_diffs else ""
 
@@ -1463,7 +1622,11 @@ def enforce_auto(
     3. Stop when max_iterations reached or all tests pass
     4. Generate and return report
     """
-    runner = _run_tests_fn or run_tests
+    test_timeout = config.test_timeout
+    if _run_tests_fn:
+        runner = _run_tests_fn
+    else:
+        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
     shell_fn = _run_shell_fn or _run_shell
     project_root = config.project_root
 
@@ -1486,7 +1649,11 @@ def enforce_auto(
         )
 
         # Step 2: Run agent command
-        shell_fn(rendered_agent_cmd, project_root)
+        agent_exit, _ = shell_fn(rendered_agent_cmd, project_root)
+
+        # Skip check if agent failed AND produced no changes (no point measuring)
+        if agent_exit != 0 and not _git_diff_names(project_root, scope=config.scope):
+            continue
 
         # Step 3: enforce_check
         record = enforce_check(
