@@ -23,6 +23,11 @@
 ### Added
 - `--site` filter on `search` CLI (parity with MCP `search_tasks`)
 
+## [1.25.1] - 2026-03-30
+
+### Changed
+- Version bump for PyPI publish (v1.25.0 had packaging conflict)
+
 ## [1.25.0] - 2026-03-30
 
 ### Added
@@ -38,11 +43,15 @@
 - `triage` CLI subcommand — the #1 adoption entry point
 - Next-step hints in `inspect_task` output for progressive disclosure
 
+## [1.23.1] - 2026-03-30
+
+### Fixed
+- Empty-after-filter handling and input validation in `grade_filter`
+
 ## [1.23.0] - 2026-03-30
 
 ### Fixed
 - `grade_filter` used hardcoded default rules instead of caller's rules — now passes through correctly
-- Empty-after-filter handling and input validation in `grade_filter`
 
 ### Added
 - `grade_filter` parameter on `triage`, `grade`, `root_cause`, `diagnose` MCP tools

@@ -183,6 +183,30 @@ def test_zero_tokens_returns_zero():
     assert cost == 0.0
 
 
+# -- Round 12 regression: Anthropic cached_input rates -----------------------
+
+
+@pytest.mark.parametrize("model,expected_cached", [
+    ("claude-3.5-sonnet-20241022", 0.30),
+    ("claude-sonnet-4-20250514", 0.30),
+    ("claude-opus-4-20250514", 1.50),
+    ("claude-haiku-4-20250414", 0.08),
+    ("claude-sonnet-4-6-20260320", 0.30),
+    ("claude-opus-4-6-20260320", 1.50),
+    ("claude-haiku-4-5-20251001", 0.08),
+])
+def test_anthropic_cached_input_is_10pct_of_input(model, expected_cached):
+    """Anthropic cached_input should be ~10% of input, not ~50%."""
+    data = load_pricing()
+    info = data.get("models", {}).get(model)
+    assert info is not None, f"Model {model} not found in pricing"
+    assert "cached_input" in info, f"Model {model} missing cached_input"
+    assert info["cached_input"] == pytest.approx(expected_cached, abs=0.01), (
+        f"Model {model}: cached_input={info['cached_input']}, expected={expected_cached} "
+        f"(~10% of input={info['input']})"
+    )
+
+
 # -- list_models --------------------------------------------------------------
 
 

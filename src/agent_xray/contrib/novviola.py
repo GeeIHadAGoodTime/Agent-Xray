@@ -195,7 +195,7 @@ PROMPT_BUG_PATTERNS: list[tuple[str, str, str]] = [
 
 # Prompt section name -> NOVVIOLA file mapping (for prompt_section= evidence)
 # After prompt consolidation (2026-03-27), most sections were merged into
-# minimal_core.py. Only response_format.py and music.py remain as separate files.
+# minimal_core.py. Only response_format.py remains as a separate file.
 PROMPT_SECTION_FILE_MAP: dict[str, str] = {
     "research": "services/llm/prompts/sections/minimal_core.py",
     "tools": "mcp_servers/core_tools/server.py",
@@ -206,7 +206,7 @@ PROMPT_SECTION_FILE_MAP: dict[str, str] = {
     "response_format": "services/llm/prompts/sections/response_format.py",
     "proactive": "services/llm/prompts/sections/minimal_core.py",
     "minimal_core": "services/llm/prompts/sections/minimal_core.py",
-    "music": "services/llm/prompts/sections/music.py",
+    "music": "services/llm/prompts/sections/minimal_core.py",
 }
 
 

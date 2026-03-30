@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from agent_xray import TaskBank, TaskBankEntry, load_task_bank
-from agent_xray.contrib.task_bank import ALLOWED_ANSWER_TYPES, validate_task_bank_entries
+from agent_xray.contrib.task_bank import (
+    ALLOWED_ANSWER_TYPES,
+    evaluate_task_criteria,
+    validate_task_bank_entries,
+)
 
 
 def _write_task_bank(path: Path, payload: object) -> Path:
@@ -155,3 +159,59 @@ def test_validate_task_bank_entries_reports_unknown_criteria_as_warning() -> Non
     assert result.errors == []
     assert result.warnings
     assert "unknown criterion 'local_florist_allowed'" in result.warnings[0]
+
+
+# -- Round 12 regressions: evaluate_task_criteria correctness ----------------
+
+
+def _make_task_with_tools(tool_names: list[str]) -> object:
+    """Create a minimal task-like object with the given tool calls."""
+    from agent_xray.schema import AgentStep, AgentTask
+    steps = []
+    for name in tool_names:
+        steps.append(AgentStep.from_dict({
+            "step_number": len(steps) + 1,
+            "tool_name": name,
+            "tool_result": "ok",
+        }))
+    return AgentTask(
+        task_id="test",
+        task_text="test task",
+        steps=steps,
+    )
+
+
+def test_no_browser_needed_fails_when_browser_used():
+    """Round 12 fix: no_browser_needed=true must FAIL when browser tools are present."""
+    from agent_xray.analyzer import analyze_task
+    task = _make_task_with_tools(["browser_navigate", "browser_click", "ask_user"])
+    analysis = analyze_task(task)
+    criteria = {"no_browser_needed": True}
+    results = evaluate_task_criteria(task, analysis, criteria)
+    assert any("[FAIL]" in r and "no_browser_needed" in r for r in results), (
+        f"Expected FAIL for no_browser_needed when browser tools used, got: {results}"
+    )
+
+
+def test_no_browser_needed_passes_when_no_browser():
+    """no_browser_needed=true should PASS when no browser tools are present."""
+    from agent_xray.analyzer import analyze_task
+    task = _make_task_with_tools(["web_search", "ask_user"])
+    analysis = analyze_task(task)
+    criteria = {"no_browser_needed": True}
+    results = evaluate_task_criteria(task, analysis, criteria)
+    assert any("[PASS]" in r and "no_browser_needed" in r for r in results), (
+        f"Expected PASS for no_browser_needed without browser tools, got: {results}"
+    )
+
+
+def test_unknown_criterion_fails_not_passes():
+    """Round 12 fix: unknown criteria must FAIL, not silently PASS."""
+    from agent_xray.analyzer import analyze_task
+    task = _make_task_with_tools(["web_search"])
+    analysis = analyze_task(task)
+    criteria = {"totally_made_up_criterion": True}
+    results = evaluate_task_criteria(task, analysis, criteria)
+    assert any("[FAIL]" in r and "totally_made_up_criterion" in r for r in results), (
+        f"Expected FAIL for unknown criterion, got: {results}"
+    )
