@@ -154,12 +154,11 @@ def _load_tasks(
     *,
     days: int | None = None,
     site: str | None = None,
-    grade_filter: str | None = None,
     outcome: str | None = None,
 ) -> list[Any]:
     from agent_xray.analyzer import load_adapted_tasks, load_tasks
 
-    # Cache key: (log_dir, format, days) — site/grade are post-filters
+    # Cache key: (log_dir, format, days) — site/outcome are post-filters
     cache_key = (log_dir, format_name, days)
     current_mtime = _dir_mtime(log_dir)
 
@@ -187,15 +186,28 @@ def _load_tasks(
     if outcome:
         outcome_lower = outcome.lower()
         tasks = [t for t in tasks if t.outcome is not None and outcome_lower in t.outcome.status.lower()]
-    if grade_filter:
-        # Pre-filter using default rules. Callers may re-grade with a different
-        # ruleset — that's intentional (different rules can assign different grades).
-        from agent_xray.grader import grade_tasks, load_rules
-        rules = load_rules("default")
-        graded = {g.task_id: g.grade for g in grade_tasks(tasks, rules)}
-        grade_upper = grade_filter.upper()
-        tasks = [t for t in tasks if graded.get(t.task_id, "").upper() == grade_upper]
     return tasks
+
+
+def _filter_by_grade(tasks: list[Any], grades: list[Any], grade_filter: str | None) -> tuple[list[Any], list[Any]]:
+    """Filter tasks and their corresponding grades by grade value.
+
+    Applied AFTER the caller grades with its own rules/task_bank, so the filter
+    matches the actual grades in the output (not a stale default-rules pre-filter).
+    Returns (filtered_tasks, filtered_grades).
+    """
+    if not grade_filter:
+        return tasks, grades
+    grade_upper = grade_filter.upper()
+    grade_map = {g.task_id: g for g in grades}
+    filtered_tasks = []
+    filtered_grades = []
+    for t in tasks:
+        g = grade_map.get(t.task_id)
+        if g and g.grade.upper() == grade_upper:
+            filtered_tasks.append(t)
+            filtered_grades.append(g)
+    return filtered_tasks, filtered_grades
 
 
 def _resolve_task(tasks: list[Any], task_id: str) -> Any:
@@ -222,12 +234,15 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
         from agent_xray.root_cause import classify_failures
         from agent_xray.surface import surface_for_task
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
         if not tasks:
             return _json_response({"error": "No tasks found", "hint": "Check log_dir path and days filter. Note: outcome filters by task status (failed/success), grade_filter filters by xray grade (BROKEN/WEAK/OK/GOOD/GOLDEN)."})
 
         rules = load_rules()
         grades = grade_tasks(tasks, rules)
+        tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
+        if not tasks:
+            return _json_response({"error": "No tasks match grade_filter", "hint": f"No tasks graded as {grade_filter!r}. Try without grade_filter to see all grades."})
 
         # Grade distribution
         dist: dict[str, int] = {}
@@ -507,7 +522,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
     try:
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -515,6 +530,8 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
             grades = grade_with_task_bank(tasks, task_bank, rule_set)
         else:
             grades = grade_tasks(tasks, rule_set)
+
+        tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
 
         distribution: dict[str, int] = {}
         for result in grades:
@@ -553,9 +570,10 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
+        tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
         failures = classify_failures(tasks, grades)
 
         # MCP: cap to 20 worst failures sorted by score ascending
@@ -726,7 +744,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -735,6 +753,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
         else:
             grades = grade_tasks(tasks, rule_set)
 
+        tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
         failures = classify_failures(tasks, grades)
         plan = build_fix_plan(failures, log_dir=log_dir)
 

@@ -267,7 +267,7 @@ README says reports can be text/json/markdown. It does not document that the rep
   - README: `README.md:170-178`
   - code: `cli.py:88-96`, `tests/test_adapters.py:31-95`
 
-- README has no MCP server section even though `agent-xray-mcp` is a packaged entrypoint and `mcp_server.py` exposes 13 tools.
+- README has no MCP server section even though `agent-xray-mcp` is a packaged entrypoint and `mcp_server.py` exposes 48 tools.
   - README: no mention of `agent-xray-mcp`
   - code: `pyproject.toml:127-128`, `mcp_server.py:43-300`
 

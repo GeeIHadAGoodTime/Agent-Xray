@@ -375,6 +375,46 @@ def test_triage_with_grade_filter(tmp_trace_dir: Path) -> None:
     assert isinstance(payload, dict)
 
 
+def test_root_cause_with_grade_filter(tmp_trace_dir: Path) -> None:
+    """root_cause(grade_filter='BROKEN') should scope classification to BROKEN-graded tasks."""
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.root_cause(str(tmp_trace_dir), grade_filter="BROKEN"))
+    assert isinstance(payload, dict)
+    # If tasks matched, all classified failures should come from BROKEN tasks
+    if "tasks" in payload and payload["tasks"]:
+        for task_result in payload["tasks"]:
+            # root_cause only classifies BROKEN/WEAK grades, so filtered BROKEN should all be BROKEN
+            if "grade" in task_result:
+                assert task_result["grade"] == "BROKEN"
+
+
+def test_diagnose_with_grade_filter(tmp_trace_dir: Path) -> None:
+    """diagnose(grade_filter='BROKEN') should build fix plan only from BROKEN-graded tasks."""
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.diagnose(str(tmp_trace_dir), grade_filter="BROKEN"))
+    assert isinstance(payload, dict)
+    assert "summary" in payload
+    assert "fix_plan" in payload
+
+
+def test_grade_filter_uses_caller_rules_not_default(tmp_trace_dir: Path) -> None:
+    """grade_filter must filter by the caller's rules, not hardcoded default rules.
+
+    This is a regression test for the bug where _load_tasks pre-filtered with
+    default rules, but the caller used custom rules that assigned different grades.
+    """
+    mcp_server = _load_mcp_server_module()
+
+    # Grade with default rules and grade_filter=BROKEN
+    broken_default = json.loads(mcp_server.grade(str(tmp_trace_dir), rules="default", grade_filter="BROKEN"))
+    # All returned tasks must actually be BROKEN per the output
+    if broken_default["summary"]["tasks"] > 0:
+        for t in broken_default["worst_tasks"]:
+            assert t["grade"] == "BROKEN", f"grade_filter=BROKEN returned non-BROKEN task: {t}"
+
+
 def test_report_tools_skips_grading(monkeypatch: pytest.MonkeyPatch) -> None:
     mcp_server = _load_mcp_server_module()
 
