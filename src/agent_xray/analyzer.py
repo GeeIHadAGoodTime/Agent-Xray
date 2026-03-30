@@ -625,49 +625,83 @@ def _step_cost(step: AgentStep, pricing_data: dict[str, Any] | None = None) -> f
 def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None = None) -> dict[str, Any]:
     urls = _unique_urls(task)
     url_paths = _unique_url_paths(urls)
-    tool_sequence = [step.tool_name for step in task.sorted_steps]
-    unique_tools = sorted(set(tool_sequence))
-    repeat_tool, repeat_count = _max_consecutive_repeat(tool_sequence)
-    errors = sum(1 for step in task.steps if step.error)
+
+    # --- Single pass over sorted_steps: collect all per-step metrics at once ---
+    sorted_steps = task.sorted_steps
+    tool_sequence: list[str] = []
+    errors = 0
     error_kinds: Counter[str] = Counter()
     soft_error_kinds: Counter[str] = Counter()
     no_tools_steps = 0
     hallucinated_tools = 0
-    for step in task.sorted_steps:
-        if _tools_available(step) == []:
-            no_tools_steps += 1
-        error_kind = classify_error(step.error)
-        if error_kind:
-            error_kinds[error_kind] += 1
-        if error_kind == "unknown_tool":
-            hallucinated_tools += 1
-        # Detect logical failures in tool_result content (no error field)
-        if not step.error:
+    total_cost = 0.0
+    rejected_tool_count = 0
+    context_usages: list[float] = []
+    cache_read_tokens_total = 0
+    cache_creation_tokens_total = 0
+    step_durations: list[int] = []
+    timestamps_ms: list[int] = []
+    duration_sum_fallback = 0
+
+    for step in sorted_steps:
+        # Tool sequence
+        tool_sequence.append(step.tool_name)
+        # Error counting + classification
+        if step.error:
+            errors += 1
+            error_kind = classify_error(step.error)
+            if error_kind:
+                error_kinds[error_kind] += 1
+            if error_kind == "unknown_tool":
+                hallucinated_tools += 1
+        else:
             soft_kind = classify_soft_error(step.tool_result)
             if soft_kind:
                 soft_error_kinds[soft_kind] += 1
-    total_cost = sum(_step_cost(step, pricing_data) for step in task.steps)
-    # Consume rejected_tools across all steps
-    rejected_tool_count = sum(
-        len(step.tools.rejected_tools or [])
-        for step in task.steps
-        if step.tools
-    )
-    # Consume production outcome flags
+        # No-tools detection
+        if _tools_available(step) == []:
+            no_tools_steps += 1
+        # Cost
+        total_cost += _step_cost(step, pricing_data)
+        # Rejected tools
+        if step.tools and step.tools.rejected_tools:
+            rejected_tool_count += len(step.tools.rejected_tools)
+        # Context usage
+        if step.model and step.model.context_usage_pct is not None:
+            context_usages.append(step.model.context_usage_pct)
+        # Cache tokens
+        if step.model:
+            cache_read_tokens_total += step.model.cache_read_tokens or 0
+            cache_creation_tokens_total += step.model.cache_creation_tokens or 0
+        # Duration
+        if step.duration_ms is not None:
+            step_durations.append(step.duration_ms)
+        duration_sum_fallback += step.duration_ms or 0
+        # Timestamps
+        if step.timestamp is not None:
+            try:
+                ts_float = float(step.timestamp)
+                timestamps_ms.append(int(ts_float * 1000))
+            except (TypeError, ValueError):
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(str(step.timestamp))
+                    timestamps_ms.append(int(dt.timestamp() * 1000))
+                except (TypeError, ValueError):
+                    pass
+
+    unique_tools = sorted(set(tool_sequence))
+    repeat_tool, repeat_count = _max_consecutive_repeat(tool_sequence)
+
+    # --- Outcome flags (no step iteration needed) ---
     outcome_meta = task.outcome.metadata if task.outcome else {}
     timed_out_flag = bool(outcome_meta.get("timed_out", False))
     suspicious_short_flag = bool(outcome_meta.get("suspicious_short", False))
-    # Final answer analysis
     final_answer = (task.outcome.final_answer or "") if task.outcome else ""
     final_answer_length = len(final_answer.strip())
     has_final_answer = final_answer_length > 0
-    # Context usage peak
-    context_usages = [
-        step.model.context_usage_pct
-        for step in task.steps
-        if step.model and step.model.context_usage_pct is not None
-    ]
-    # Also check final_context_usage_pct from outcome
+
+    # Context usage peak (include outcome metadata)
     final_ctx = outcome_meta.get("final_context_usage_pct")
     if final_ctx is not None:
         try:
@@ -675,46 +709,16 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         except (TypeError, ValueError):
             pass
     max_context_usage_pct = max(context_usages) if context_usages else 0.0
-    # Production data stores context_usage_pct already in percentage units
-    # (0.5 means 0.5%, not 50%). Do NOT normalize.
-    # Cache token totals
-    cache_read_tokens_total = sum(
-        step.model.cache_read_tokens or 0
-        for step in task.steps
-        if step.model
-    )
-    cache_creation_tokens_total = sum(
-        step.model.cache_creation_tokens or 0
-        for step in task.steps
-        if step.model
-    )
-    # --- Temporal patterns ---
-    sorted_steps = task.sorted_steps
-    step_durations = [s.duration_ms for s in sorted_steps if s.duration_ms is not None]
+
+    # --- Temporal patterns (computed from collected lists, no re-iteration) ---
     avg_step_duration_ms = (
         (sum(step_durations) / len(step_durations)) if step_durations else 0.0
     )
-    # Max gap between consecutive step timestamps
     max_step_gap_ms = 0
-    timestamps_ms: list[int] = []
-    for s in sorted_steps:
-        if s.timestamp is not None:
-            try:
-                # Try numeric epoch first, then ISO-8601
-                ts_float = float(s.timestamp)
-                timestamps_ms.append(int(ts_float * 1000))
-            except (TypeError, ValueError):
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.fromisoformat(str(s.timestamp))
-                    timestamps_ms.append(int(dt.timestamp() * 1000))
-                except (TypeError, ValueError):
-                    pass
     for i in range(1, len(timestamps_ms)):
         gap = timestamps_ms[i] - timestamps_ms[i - 1]
         if gap > max_step_gap_ms:
             max_step_gap_ms = gap
-    # Step duration trend (filter out 0ms artifact steps like think/noop)
     step_duration_trend = "stable"
     real_durations = [d for d in step_durations if d > 0]
     if len(real_durations) >= 3:
@@ -780,7 +784,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         "total_duration_ms": (
             int(task.outcome.total_duration_s * 1000)
             if task.outcome and task.outcome.total_duration_s
-            else sum(step.duration_ms or 0 for step in task.steps)
+            else duration_sum_fallback
         ),
         "hallucinated_tools": hallucinated_tools,
         "no_tools_steps": no_tools_steps,

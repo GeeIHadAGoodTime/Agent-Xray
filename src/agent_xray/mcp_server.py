@@ -123,17 +123,29 @@ def _extract_site(task: Any) -> str:
 # Task loading with mtime-based cache (MCP server stays alive across calls)
 # ---------------------------------------------------------------------------
 _task_cache: dict[tuple[str, str, int | None], tuple[float, list[Any]]] = {}
+_dir_mtime_cache: dict[str, tuple[float, float]] = {}  # log_dir -> (dir_mtime, max_file_mtime)
 _CACHE_MAX_ENTRIES = 8
 
 
 def _dir_mtime(log_dir: str) -> float:
-    """Fast mtime check: max mtime of .jsonl files in the directory."""
+    """Fast mtime check: max mtime of .jsonl files, with dir-level short-circuit."""
     from pathlib import Path
     root = Path(log_dir)
     if root.is_file():
         return root.stat().st_mtime
+    # Short-circuit: if the directory mtime hasn't changed, skip per-file glob
+    try:
+        dir_mt = root.stat().st_mtime
+    except OSError:
+        return 0.0
+    prev = _dir_mtime_cache.get(log_dir)
+    if prev and prev[0] == dir_mt:
+        return prev[1]
+    # Directory changed — rescan individual file mtimes
     mtimes = [f.stat().st_mtime for f in root.glob("*.jsonl")]
-    return max(mtimes) if mtimes else 0.0
+    max_mt = max(mtimes) if mtimes else 0.0
+    _dir_mtime_cache[log_dir] = (dir_mt, max_mt)
+    return max_mt
 
 
 def _load_tasks(

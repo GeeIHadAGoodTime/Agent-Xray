@@ -931,11 +931,16 @@ class AgentTask:
     day: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     outcome: TaskOutcome | None = None
+    _sorted_steps_cache: list[AgentStep] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def sorted_steps(self) -> list[AgentStep]:
-        """Return steps ordered by their ``step`` index."""
-        return sorted(self.steps, key=lambda step: step.step)
+        """Return steps ordered by their ``step`` index (cached after first access)."""
+        if self._sorted_steps_cache is None:
+            self._sorted_steps_cache = sorted(self.steps, key=lambda step: step.step)
+        return self._sorted_steps_cache
 
     @classmethod
     def from_steps(

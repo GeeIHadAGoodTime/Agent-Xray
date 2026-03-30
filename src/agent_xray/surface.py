@@ -526,7 +526,7 @@ def surface_for_task(
                 "role": "tool_call",
                 "content": (
                     f"{step.tool_name} "
-                    f"{json.dumps(step.tool_input, sort_keys=True, ensure_ascii=True)}"
+                    f"{json.dumps(step.tool_input, ensure_ascii=True)}"
                 ),
             }
         )
@@ -1089,7 +1089,7 @@ def format_surface_text(surface: dict[str, Any]) -> str:
         lines.extend(
             [
                 f"decision: {step['tool_name']} "
-                f"{json.dumps(step['tool_input'], sort_keys=True, ensure_ascii=True)}",
+                f"{json.dumps(step['tool_input'], ensure_ascii=True)}",
                 f"reasoning: {step['llm_reasoning'] or '(none)'}",
                 f"result: {step['tool_result_summary'] or '(empty)'}",
             ]
@@ -1109,7 +1109,7 @@ def format_reasoning_text(reasoning: dict[str, Any]) -> str:
         lines.append(step["reasoning"] or "(no reasoning)")
         lines.append(
             f"-> {step['decision']['tool_name']} "
-            f"{json.dumps(step['decision']['tool_input'], sort_keys=True, ensure_ascii=True)}"
+            f"{json.dumps(step['decision']['tool_input'], ensure_ascii=True)}"
         )
         if step.get("error"):
             lines.append(f"!! {step['error']}")
