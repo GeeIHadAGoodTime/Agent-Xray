@@ -706,7 +706,7 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
@@ -896,7 +896,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -981,7 +981,7 @@ def report(
         if report_type not in _REPORT_TYPES:
             return _json_response({"error": f"Unknown report_type: {report_type!r}. Choose from: {', '.join(_REPORT_TYPES)}"})
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, dedupe=True)
         grades: list[Any] = []
         rule_name = rules
         needs_grades = report_type in _GRADE_DEPENDENT_REPORT_TYPES or report_type in ("overhead", "prompt-impact", "compare")
