@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.22.0 | Audit date: 2026-03-30
+Version: 1.23.0 | Audit date: 2026-03-30
 
 ---
 
@@ -197,7 +197,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 |------------|--------------|-------------|
 | `--days N` | `days` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
 | `--site SITE` | `site` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
-| `--grade GRADE` | `grade_filter` | triage, grade, root_cause, diagnose (filters by xray grade: BROKEN/WEAK/OK/GOOD/GOLDEN) |
+| `--grade GRADE` | `grade_filter` | triage, grade, root_cause, diagnose (filters by xray grade: BROKEN/WEAK/OK/GOOD/GOLDEN — uses caller's rules, not default) |
 | `--outcome STATUS` | `outcome` | triage, grade, root_cause, diagnose (filters by task status: failed/success — NOT the same as grade) |
 | `--rules PATH` | `rules` | grade, root_cause, diagnose, tree, golden_rank, compare_runs |
 | `--task-bank PATH` | `task_bank` | analyze, grade, diagnose |
@@ -754,8 +754,8 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 ## Dark Abilities (CLI-only, Not in MCP)
 
-> **Status: Nearly all gaps CLOSED as of v1.20.0 (2026-03-30).**
-> 48 MCP tools total. 26 new MCP tools added across five audit rounds. Workflow hints now include correct parameter names and task IDs.
+> **Status: Nearly all gaps CLOSED as of v1.23.0 (2026-03-30).**
+> 48 MCP tools total. 26 new MCP tools added across seven audit rounds. grade_filter uses caller's rules (not hardcoded default). Workflow hints include correct parameter names and task IDs.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 
@@ -801,6 +801,15 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 - `outcome` filter -- added to triage, grade, root_cause, diagnose
 - Workflow hints fixed: correct parameter names (`left_log_dir`/`right_log_dir`), task IDs included, required params shown
 - Docstrings updated: outcome param documented on all tools that accept it
+
+**Round 6 (v1.22.0):**
+- `grade_filter` exposed on triage, grade, root_cause, diagnose MCP tools
+- Docstrings clarify outcome (task status) vs grade_filter (xray grade)
+
+**Round 7 (v1.23.0, challenger audit):**
+- **grade_filter correctness fix**: Moved filtering from `_load_tasks` (hardcoded default rules) into each caller after grading with its own rules/task_bank. Eliminates double-grading and fixes semantic mismatch when custom rules assign different grades than default.
+- `_filter_by_grade()` helper: takes (tasks, grades, grade_filter), returns filtered tuples
+- 3 new tests: root_cause/diagnose grade_filter, caller-rules regression test
 
 ---
 
