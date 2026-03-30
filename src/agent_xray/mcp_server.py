@@ -119,6 +119,23 @@ def _extract_site(task: Any) -> str:
     return "unknown"
 
 
+# ---------------------------------------------------------------------------
+# Task loading with mtime-based cache (MCP server stays alive across calls)
+# ---------------------------------------------------------------------------
+_task_cache: dict[tuple[str, str, int | None], tuple[float, list[Any]]] = {}
+_CACHE_MAX_ENTRIES = 8
+
+
+def _dir_mtime(log_dir: str) -> float:
+    """Fast mtime check: max mtime of .jsonl files in the directory."""
+    from pathlib import Path
+    root = Path(log_dir)
+    if root.is_file():
+        return root.stat().st_mtime
+    mtimes = [f.stat().st_mtime for f in root.glob("*.jsonl")]
+    return max(mtimes) if mtimes else 0.0
+
+
 def _load_tasks(
     log_dir: str,
     format_name: str,
@@ -129,13 +146,28 @@ def _load_tasks(
 ) -> list[Any]:
     from agent_xray.analyzer import load_adapted_tasks, load_tasks
 
-    if format_name != "auto":
-        tasks = load_adapted_tasks(log_dir, format=format_name)
-    else:
-        tasks = load_tasks(log_dir, days=days)
-        if not tasks:
-            tasks = load_adapted_tasks(log_dir, format="auto")
+    # Cache key: (log_dir, format, days) — site/grade are post-filters
+    cache_key = (log_dir, format_name, days)
+    current_mtime = _dir_mtime(log_dir)
 
+    cached = _task_cache.get(cache_key)
+    if cached and cached[0] >= current_mtime:
+        tasks = list(cached[1])  # shallow copy to avoid mutation
+    else:
+        if format_name != "auto":
+            tasks = load_adapted_tasks(log_dir, format=format_name)
+        else:
+            tasks = load_tasks(log_dir, days=days)
+            if not tasks:
+                tasks = load_adapted_tasks(log_dir, format="auto")
+
+        # Store in cache (evict oldest if full)
+        if len(_task_cache) >= _CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(_task_cache))
+            del _task_cache[oldest_key]
+        _task_cache[cache_key] = (current_mtime, tasks)
+
+    # Post-filters (not cached — applied fresh each call)
     if site:
         site_lower = site.lower()
         tasks = [t for t in tasks if site_lower in _extract_site(t).lower()]
