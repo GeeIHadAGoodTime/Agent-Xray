@@ -413,154 +413,137 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
 
 
 @server.tool()
-def enforce_init(
-    test_command: str,
-    project_root: str = ".",
-    max_iterations: int = 50,
-    stash_first: bool = False,
-    max_files_per_change: int = 5,
-    max_diff_lines: int = 200,
-    scope: list[str] | None = None,
-    test_timeout: int = 300,
-) -> str:
-    """Start a systematic A/B testing flywheel: plan -> edit -> check -> review evidence -> commit or revert -> repeat."""
+def enforce(verb: str = "auto", hypothesis: str = "", project_root: str = ".", format: str = "json") -> str:
+    """Run the enforce discipline workflow.
+
+    Enforce helps maintain investigation discipline by tracking hypotheses,
+    checking progress, and preventing common debugging anti-patterns.
+
+    Verbs:
+      auto      - Full automated workflow: init + check + guard (DEFAULT, recommended)
+      init      - Start a new investigation with a hypothesis
+      check     - Evaluate current progress against hypothesis
+      plan      - Show the current investigation plan
+      diff      - Show what changed since investigation started
+      guard     - Check for anti-patterns (spin detection, scope creep)
+      status    - Current enforce state summary
+      challenge - Challenge your own conclusions
+      reset     - Reset enforce state for a fresh investigation
+      report    - Generate investigation report (use format='json' or 'markdown')
+
+    Most users should just call enforce() with default verb='auto'.
+    """
     try:
-        from agent_xray.enforce import EnforceConfig, enforce_init as run_enforce_init
+        import inspect
 
-        config = EnforceConfig(
-            test_command=test_command,
-            project_root=project_root,
-            max_iterations=max_iterations,
-            stash_first=stash_first,
-            max_files_per_change=max_files_per_change,
-            max_diff_lines=max_diff_lines,
-            scope=scope,
-            test_timeout=test_timeout,
-        )
-        baseline, session_dir = run_enforce_init(config)
-        return _compact_json(
-            {
-                "baseline": _serialize(baseline),
-                "session_dir": str(session_dir),
-            }
-        )
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_check(hypothesis: str = "", project_root: str = ".") -> str:
-    """Run the A/B test for one edit: compare before/after tests, audit for gaming, and surface the full evidence with a recommendation."""
-    try:
-        from agent_xray.enforce import enforce_check as run_enforce_check
-
-        record = run_enforce_check(hypothesis=hypothesis, project_root=project_root)
-        return _compact_json(_truncate_test_result_outputs(_serialize(record)))
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_diff(project_root: str = ".") -> str:
-    """Preview the current diff and whether enforce would reject it for scope before you spend a test run."""
-    try:
-        from agent_xray.enforce import enforce_diff as run_enforce_diff
-
-        return _compact_json(run_enforce_diff(project_root=project_root))
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_plan(
-    hypothesis: str,
-    expected_tests: list[str] | None = None,
-    project_root: str = ".",
-) -> str:
-    """Start a new cycle: register what you intend to fix and which tests should move."""
-    try:
-        from agent_xray.enforce import enforce_plan as run_enforce_plan
-
-        return _compact_json(
-            run_enforce_plan(
-                hypothesis=hypothesis,
-                expected_tests=expected_tests,
-                project_root=project_root,
-            )
-        )
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_guard(project_root: str = ".") -> str:
-    """Check whether there are unreviewed working-tree changes outside the enforce loop."""
-    try:
-        from agent_xray.enforce import enforce_guard as run_enforce_guard
-
-        return _compact_json(run_enforce_guard(project_root=project_root))
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_status(project_root: str = ".") -> str:
-    """Read the current enforce session state, including baseline, counts, and pending history."""
-    try:
-        from agent_xray.enforce import enforce_status as run_enforce_status
-
-        return _compact_json(_truncate_test_result_outputs(run_enforce_status(project_root)))
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_challenge(project_root: str = ".") -> str:
-    """Run the adversarial cross-iteration audit over the flywheel history and surface cumulative patterns for review."""
-    try:
-        from agent_xray.enforce import enforce_challenge as run_enforce_challenge
-
-        result = run_enforce_challenge(project_root=project_root)
-        return _compact_json(_serialize(result))
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_reset(project_root: str = ".") -> str:
-    """Abandon the current enforce session and remove its persisted session state."""
-    try:
-        from agent_xray.enforce import enforce_reset as run_enforce_reset
-
-        return _json_response({"success": run_enforce_reset(project_root)})
-    except Exception as e:
-        return _json_response({"error": str(e)})
-
-
-@server.tool()
-def enforce_report(project_root: str = ".", format: str = "json") -> str:
-    """Generate the final flywheel report: all cycles, evidence, recommendations, gaming signals, and net progress."""
-    try:
-        from agent_xray.enforce import build_enforce_report
+        import agent_xray.enforce as enforce_module
         from agent_xray.enforce_report import (
             format_enforce_json,
             format_enforce_markdown,
             format_enforce_text,
         )
 
-        report = build_enforce_report(project_root)
-        if format == "text":
-            rendered: Any = format_enforce_text(report, color=False)
-        elif format == "markdown":
-            rendered = format_enforce_markdown(report)
-        elif format == "json":
-            rendered = json.loads(format_enforce_json(report))
-        else:
-            raise ValueError("format must be one of: text, json, markdown")
+        def _pretty_json(payload: Any) -> str:
+            return json.dumps(payload, indent=2)
 
-        return _compact_json({"format": format, "report": rendered})
+        def _invoke_simple(func: Any, **kwargs: Any) -> Any:
+            signature = inspect.signature(func)
+            parameters = signature.parameters
+            accepts_varkw = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            call_kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if accepts_varkw or key in parameters
+            }
+            missing_required = [
+                name
+                for name, parameter in parameters.items()
+                if parameter.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+                and parameter.default is inspect.Parameter.empty
+                and name not in call_kwargs
+            ]
+            if missing_required:
+                raise ValueError(
+                    f"{func.__name__} is not available through the simplified MCP enforce tool; "
+                    f"underlying function requires: {', '.join(missing_required)}"
+                )
+            return func(**call_kwargs)
+
+        verb_key = (verb or "auto").strip().lower()
+        payload: Any
+
+        if verb_key == "auto":
+            payload = _serialize(
+                _invoke_simple(
+                    enforce_module.enforce_auto,
+                    hypothesis=hypothesis,
+                    project_root=project_root,
+                )
+            )
+        elif verb_key == "init":
+            payload = _serialize(
+                _invoke_simple(
+                    enforce_module.enforce_init,
+                    hypothesis=hypothesis,
+                    project_root=project_root,
+                )
+            )
+        elif verb_key == "check":
+            payload = _truncate_test_result_outputs(
+                _serialize(
+                    enforce_module.enforce_check(
+                        hypothesis=hypothesis,
+                        project_root=project_root,
+                    )
+                )
+            )
+        elif verb_key == "plan":
+            payload = _serialize(
+                enforce_module.enforce_plan(
+                    hypothesis=hypothesis,
+                    project_root=project_root,
+                )
+            )
+        elif verb_key == "diff":
+            payload = _serialize(enforce_module.enforce_diff(project_root=project_root))
+        elif verb_key == "guard":
+            payload = _serialize(enforce_module.enforce_guard(project_root=project_root))
+        elif verb_key == "status":
+            payload = _truncate_test_result_outputs(
+                _serialize(enforce_module.enforce_status(project_root))
+            )
+        elif verb_key == "challenge":
+            payload = _serialize(enforce_module.enforce_challenge(project_root=project_root))
+        elif verb_key == "reset":
+            payload = {"success": enforce_module.enforce_reset(project_root)}
+        elif verb_key == "report":
+            report = enforce_module.build_enforce_report(project_root)
+            if format == "text":
+                rendered: Any = format_enforce_text(report, color=False)
+            elif format == "markdown":
+                rendered = format_enforce_markdown(report)
+            elif format == "json":
+                rendered = json.loads(format_enforce_json(report))
+            else:
+                raise ValueError("format must be one of: text, json, markdown")
+            payload = {"format": format, "report": rendered}
+        else:
+            raise ValueError(
+                "verb must be one of: auto, init, check, plan, diff, guard, status, "
+                "challenge, reset, report"
+            )
+
+        return _pretty_json(payload)
     except Exception as e:
-        return _json_response({"error": str(e)})
+        return json.dumps({"error": str(e)}, indent=2)
 
 
 @server.tool()
@@ -920,7 +903,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
                 "fix_plan_entries": len(plan),
             },
             "fix_plan": [_serialize(entry) for entry in plan],
-            "next": f"inspect_task(log_dir=log_dir, task_id='{plan[0].investigate_task}') to replay top fix target, enforce_init(test_command='<cmd>') then enforce_plan(hypothesis='<why>') to start fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after" if plan and plan[0].investigate_task else "enforce_init(test_command='<cmd>') then enforce_plan(hypothesis='<why>') to start disciplined fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after",
+            "next": f"inspect_task(log_dir=log_dir, task_id='{plan[0].investigate_task}') to replay top fix target, enforce(hypothesis='<why>') to start fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after" if plan and plan[0].investigate_task else "enforce(hypothesis='<why>') to start disciplined fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after",
         })
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -1845,7 +1828,7 @@ def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
             "next": {
                 "signals": f"signal_detect(log_dir=log_dir, task_id='{task.task_id}') for domain-specific signals (commerce, research, planning)",
                 "compare": f"diff_tasks(log_dir=log_dir, task_id_a='<good_task_id>', task_id_b='{task.task_id}') to compare with a working task",
-                "fix": f"diagnose(log_dir=log_dir) for prioritized fix plan, then enforce_init(test_command='<cmd>') to start fixing",
+                "fix": f"diagnose(log_dir=log_dir) for prioritized fix plan, then enforce(hypothesis='<why>') to start fixing",
             },
         }
 

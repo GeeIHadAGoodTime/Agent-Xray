@@ -38,15 +38,7 @@ def readme_text() -> str:
 # ===================================================================
 
 MCP_TOOLS = [
-    "enforce_init",
-    "enforce_check",
-    "enforce_diff",
-    "enforce_plan",
-    "enforce_guard",
-    "enforce_status",
-    "enforce_challenge",
-    "enforce_reset",
-    "enforce_report",
+    "enforce",
     "analyze",
     "grade",
     "root_cause",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import json
 import re
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -12,15 +11,7 @@ import pytest
 
 
 MCP_TOOL_NAMES = [
-    "enforce_init",
-    "enforce_check",
-    "enforce_diff",
-    "enforce_plan",
-    "enforce_guard",
-    "enforce_status",
-    "enforce_challenge",
-    "enforce_reset",
-    "enforce_report",
+    "enforce",
     "analyze",
     "grade",
     "root_cause",
@@ -75,53 +66,10 @@ def _load_mcp_server_module():
     return importlib.import_module("agent_xray.mcp_server")
 
 
-def _create_git_repo(repo: Path) -> None:
-    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(
-        ["git", "config", "user.name", "Agent Xray Tests"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "agent-xray-tests@example.com"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    (repo / "calc.py").write_text(
-        "def add(a: int, b: int) -> int:\n"
-        "    return a - b\n",
-        encoding="utf-8",
-    )
-    tests_dir = repo / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_calc.py").write_text(
-        "from calc import add\n\n\n"
-        "def test_add() -> None:\n"
-        "    assert add(2, 3) == 5\n",
-        encoding="utf-8",
-    )
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial broken fixture"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _pytest_command() -> str:
-    return subprocess.list2cmdline([sys.executable, "-m", "pytest", "tests", "-q"])
-
-
 def test_server_module_imports_without_error() -> None:
     module = _load_mcp_server_module()
     assert module.server is not None
-    assert callable(module.enforce_init)
+    assert callable(module.enforce)
     assert callable(module.analyze)
 
 
@@ -153,7 +101,7 @@ def test_server_module_can_import_with_mocked_fastmcp(monkeypatch: pytest.Monkey
 
     module = importlib.import_module("agent_xray.mcp_server")
     assert module.server.name == "agent-xray"
-    assert "enforce_init" in module.server.tools
+    assert "enforce" in module.server.tools
     assert "grade" in module.server.tools
 
     monkeypatch.delitem(sys.modules, "agent_xray.mcp_server", raising=False)
@@ -168,111 +116,149 @@ def test_main_runs_stdio_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     assert called == ["stdio"]
 
 
-def test_enforce_init_tool(tmp_path: Path) -> None:
+def test_enforce_tool_dispatches_verbs(monkeypatch: pytest.MonkeyPatch) -> None:
     mcp_server = _load_mcp_server_module()
 
-    _create_git_repo(tmp_path)
-
-    payload = json.loads(
-        mcp_server.enforce_init(
-            test_command=_pytest_command(),
-            project_root=str(tmp_path),
-            max_iterations=5,
-        )
-    )
-
-    assert payload["baseline"]["failed"] == 1
-    assert Path(payload["session_dir"]).exists()
-
-
-def test_enforce_check_tool(tmp_path: Path) -> None:
-    mcp_server = _load_mcp_server_module()
-
-    _create_git_repo(tmp_path)
-    json.loads(
-        mcp_server.enforce_init(
-            test_command=_pytest_command(),
-            project_root=str(tmp_path),
-            max_iterations=5,
-        )
-    )
-
-    (tmp_path / "calc.py").write_text(
-        "def add(a: int, b: int) -> int:\n"
-        "    return a + b\n",
-        encoding="utf-8",
-    )
-
-    payload = json.loads(
-        mcp_server.enforce_check(
-            hypothesis="Fix add arithmetic bug",
-            project_root=str(tmp_path),
-        )
-    )
-
-    assert payload["decision"] == "RECOMMEND_COMMIT"
-    assert payload["after"]["failed"] == 0
-    assert payload["commit_hash"] is None  # Socratic: never auto-commits
-
-
-def test_enforce_init_tool_passes_stash_first(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    mcp_server = _load_mcp_server_module()
-    from agent_xray.enforce import TestResult
-
-    captured: dict[str, object] = {}
-
-    def mock_enforce_init(config):
-        captured["stash_first"] = config.stash_first
-        return (
-            TestResult(
-                exit_code=0,
-                passed=1,
-                failed=0,
-                errors=0,
-                skipped=0,
-                total=1,
-                duration_seconds=0.1,
-                output="ok",
-            ),
-            Path("session-dir"),
-        )
-
-    monkeypatch.setattr("agent_xray.enforce.enforce_init", mock_enforce_init)
-
-    payload = json.loads(
-        mcp_server.enforce_init(
-            test_command="pytest",
-            project_root=".",
-            stash_first=True,
-        )
-    )
-
-    assert captured["stash_first"] is True
-    assert payload["session_dir"] == "session-dir"
-
-
-def test_enforce_diff_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    mcp_server = _load_mcp_server_module()
+    long_output = "x" * 800
+    calls: list[tuple[str, str, str]] = []
 
     monkeypatch.setattr(
+        "agent_xray.enforce.enforce_auto",
+        lambda hypothesis="", project_root=".": (
+            calls.append(("auto", hypothesis, project_root))
+            or {"verb": "auto", "hypothesis": hypothesis, "project_root": project_root}
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_init",
+        lambda hypothesis="", project_root=".": (
+            calls.append(("init", hypothesis, project_root))
+            or {"verb": "init", "hypothesis": hypothesis, "project_root": project_root}
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_check",
+        lambda hypothesis="", project_root=".": (
+            calls.append(("check", hypothesis, project_root))
+            or {
+                "decision": "RECOMMEND_COMMIT",
+                "before": {
+                    "passed": 1,
+                    "failed": 1,
+                    "errors": 0,
+                    "total": 2,
+                    "output": long_output,
+                },
+                "after": {
+                    "passed": 2,
+                    "failed": 0,
+                    "errors": 0,
+                    "total": 2,
+                    "output": long_output,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_plan",
+        lambda hypothesis="", project_root=".": (
+            calls.append(("plan", hypothesis, project_root))
+            or {"status": "plan_registered", "hypothesis": hypothesis}
+        ),
+    )
+    monkeypatch.setattr(
         "agent_xray.enforce.enforce_diff",
-        lambda project_root=".": {
-            "files": ["src/foo.py"],
-            "file_count": 1,
-            "diff_lines": ["+new line"],
-            "diff_line_count": 1,
-            "would_reject": False,
-            "reject_reason": "",
-        },
+        lambda project_root=".": (
+            calls.append(("diff", "", project_root))
+            or {"file_count": 1, "diff_lines": ["+new line"], "would_reject": False}
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_guard",
+        lambda project_root=".": (
+            calls.append(("guard", "", project_root))
+            or {"status": "clean", "warnings": []}
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_status",
+        lambda project_root=".": (
+            calls.append(("status", "", project_root))
+            or {
+                "session_active": True,
+                "last_result": {
+                    "passed": 3,
+                    "failed": 1,
+                    "errors": 0,
+                    "total": 4,
+                    "output": long_output,
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_challenge",
+        lambda project_root=".": (
+            calls.append(("challenge", "", project_root))
+            or {"changes_reviewed": 1, "findings": ["challenge"]}
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_reset",
+        lambda project_root=".": (
+            calls.append(("reset", "", project_root))
+            or True
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_xray.enforce.build_enforce_report",
+        lambda project_root=".": (
+            calls.append(("report", "", project_root))
+            or {"project_root": project_root, "summary": "ok"}
+        ),
+    )
+    monkeypatch.setattr("agent_xray.enforce_report.format_enforce_markdown", lambda report: "# report")
+    monkeypatch.setattr("agent_xray.enforce_report.format_enforce_text", lambda report, color=False: "report")
+    monkeypatch.setattr(
+        "agent_xray.enforce_report.format_enforce_json",
+        lambda report: json.dumps({"formatted": report}),
     )
 
-    payload = json.loads(mcp_server.enforce_diff(project_root="."))
+    auto_payload = json.loads(mcp_server.enforce(hypothesis="auto hypothesis", project_root="repo"))
+    init_payload = json.loads(mcp_server.enforce(verb="init", hypothesis="init hypothesis", project_root="repo"))
+    check_payload = json.loads(mcp_server.enforce(verb="check", hypothesis="check hypothesis", project_root="repo"))
+    plan_payload = json.loads(mcp_server.enforce(verb="plan", hypothesis="plan hypothesis", project_root="repo"))
+    diff_payload = json.loads(mcp_server.enforce(verb="diff", project_root="repo"))
+    guard_payload = json.loads(mcp_server.enforce(verb="guard", project_root="repo"))
+    status_payload = json.loads(mcp_server.enforce(verb="status", project_root="repo"))
+    challenge_payload = json.loads(mcp_server.enforce(verb="challenge", project_root="repo"))
+    reset_payload = json.loads(mcp_server.enforce(verb="reset", project_root="repo"))
+    report_payload = json.loads(mcp_server.enforce(verb="report", project_root="repo", format="markdown"))
 
-    assert payload["file_count"] == 1
-    assert payload["would_reject"] is False
-    assert payload["diff_lines"] == ["+new line"]
+    assert auto_payload["verb"] == "auto"
+    assert init_payload["verb"] == "init"
+    assert check_payload["decision"] == "RECOMMEND_COMMIT"
+    assert len(check_payload["before"]["output"]) == 500
+    assert plan_payload["status"] == "plan_registered"
+    assert diff_payload["diff_lines"] == ["+new line"]
+    assert guard_payload["status"] == "clean"
+    assert status_payload["session_active"] is True
+    assert len(status_payload["last_result"]["output"]) == 500
+    assert challenge_payload["changes_reviewed"] == 1
+    assert reset_payload == {"success": True}
+    assert report_payload == {"format": "markdown", "report": "# report"}
+    assert calls == [
+        ("auto", "auto hypothesis", "repo"),
+        ("init", "init hypothesis", "repo"),
+        ("check", "check hypothesis", "repo"),
+        ("plan", "plan hypothesis", "repo"),
+        ("diff", "", "repo"),
+        ("guard", "", "repo"),
+        ("status", "", "repo"),
+        ("challenge", "", "repo"),
+        ("reset", "", "repo"),
+        ("report", "", "repo"),
+    ]
 
 
 def test_analyze_tool(tmp_trace_dir: Path) -> None:
@@ -510,71 +496,6 @@ def test_search_tasks_caps_matches_and_uses_last_page_url(
     assert "Stopped after 25 matches" in payload["note"]
 
 
-def test_enforce_check_truncates_large_test_output(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    mcp_server = _load_mcp_server_module()
-
-    long_output = "x" * 800
-    monkeypatch.setattr(
-        "agent_xray.enforce.enforce_check",
-        lambda hypothesis="", project_root=".": {
-            "decision": "RECOMMEND_COMMIT",
-            "before": {
-                "passed": 1,
-                "failed": 1,
-                "errors": 0,
-                "total": 2,
-                "output": long_output,
-                "test_names_failed": ["tests/test_calc.py::test_add"],
-            },
-            "after": {
-                "passed": 2,
-                "failed": 0,
-                "errors": 0,
-                "total": 2,
-                "output": long_output,
-                "test_names_passed": ["tests/test_calc.py::test_add"],
-            },
-        },
-    )
-
-    payload = json.loads(mcp_server.enforce_check(project_root="."))
-
-    assert len(payload["before"]["output"]) == 500
-    assert payload["before"]["test_names_failed"] == ["tests/test_calc.py::test_add"]
-    assert len(payload["after"]["output"]) == 500
-    assert payload["after"]["test_names_passed"] == ["tests/test_calc.py::test_add"]
-
-
-def test_enforce_status_truncates_large_test_output(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    mcp_server = _load_mcp_server_module()
-
-    long_output = "y" * 900
-    monkeypatch.setattr(
-        "agent_xray.enforce.enforce_status",
-        lambda project_root=".": {
-            "session_active": True,
-            "last_result": {
-                "passed": 3,
-                "failed": 1,
-                "errors": 0,
-                "total": 4,
-                "output": long_output,
-                "test_names_failed": ["tests/test_api.py::test_status"],
-            },
-        },
-    )
-
-    payload = json.loads(mcp_server.enforce_status(project_root="."))
-
-    assert payload["session_active"] is True
-    assert len(payload["last_result"]["output"]) == 500
-    assert payload["last_result"]["test_names_failed"] == ["tests/test_api.py::test_status"]
-
-
 def test_tree_includes_sample_task_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     mcp_server = _load_mcp_server_module()
 
@@ -615,6 +536,10 @@ def test_mcp_tool_descriptions_are_trimmed_for_schema_efficiency() -> None:
         doc = tool_func.__doc__
         assert doc is not None, f"{name} has no docstring"
         stripped = doc.strip()
+        if name == "enforce":
+            assert "Run the enforce discipline workflow." in stripped
+            assert "Most users should just call enforce()" in stripped
+            continue
         assert "\n" not in stripped, f"{name} docstring should be a single compact line"
         for marker in BANNED_DOCSTRING_MARKERS:
             assert marker not in stripped, f"{name} docstring should omit {marker!r}"
@@ -937,13 +862,11 @@ def test_grade_next_hint_includes_log_dir(tmp_trace_dir: Path) -> None:
 
 
 def test_diagnose_next_hint_shows_required_params(tmp_trace_dir: Path) -> None:
-    """diagnose()'s next hint must show enforce_init's required test_command param."""
+    """diagnose()'s next hint must reference the unified enforce MCP tool."""
     mcp_server = _load_mcp_server_module()
     payload = json.loads(mcp_server.diagnose(str(tmp_trace_dir)))
     hint = payload.get("next", "")
-    # enforce_init requires test_command
-    assert "test_command=" in hint, f"diagnose next hint should include test_command=, got: {hint}"
-    # enforce_plan requires hypothesis
+    assert "enforce(" in hint, f"diagnose next hint should reference enforce(...), got: {hint}"
     assert "hypothesis=" in hint, f"diagnose next hint should include hypothesis=, got: {hint}"
     # compare_runs should use correct param names
     assert "left_log_dir=" in hint, f"diagnose next hint should use left_log_dir=, got: {hint}"
