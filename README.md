@@ -696,6 +696,9 @@ Supporting pieces:
 | `task_bank_show` | shows a single task bank entry by ID or prefix match |
 | `format_detect` | auto-detects the trace format of a log file with confidence score |
 | `triage` | **START HERE** — one-call investigation: grades, surfaces worst failure, returns fix plan |
+| `gaming_audit` | run 9 gaming detectors on a diff (test-gaming, hardcoded values, mock injection) |
+| `pricing_update` | fetch latest model pricing from GitHub and update local cache |
+| `inspect_task` | comprehensive single-task report: grade + root cause + surface + reasoning in one call |
 
 Run the MCP server over stdio with:
 

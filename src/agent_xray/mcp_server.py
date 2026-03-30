@@ -1542,6 +1542,111 @@ def format_detect(log_path: str) -> str:
         return _json_response({"error": str(e)})
 
 
+@server.tool()
+def gaming_audit(diff: str, files_modified: list[str] | None = None) -> str:
+    """Run 9 gaming detectors on a diff to check for test-gaming, hardcoded values, mock injection, etc."""
+    try:
+        from agent_xray.enforce_audit import audit_change, classify_diff_quality
+
+        verdict, reasons, signal_names = audit_change(diff, files_modified)
+        quality = classify_diff_quality(diff, files_modified or [], 0)
+        return _compact_json({
+            "verdict": verdict,
+            "quality": quality,
+            "reasons": reasons,
+            "signals": signal_names,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def pricing_update() -> str:
+    """Fetch latest model pricing from GitHub and update the local cache."""
+    try:
+        from agent_xray.pricing import update_pricing_cache
+
+        ok, msg = update_pricing_cache()
+        return _json_response({"success": ok, "message": msg})
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
+    """Comprehensive single-task report: grade + root cause + surface (step-by-step) + reasoning chain in one call."""
+    try:
+        from agent_xray.analyzer import analyze_task
+        from agent_xray.grader import grade_task, load_rules
+        from agent_xray.root_cause import classify_task as classify_rc
+        from agent_xray.surface import reasoning_for_task, surface_for_task
+
+        tasks = _load_tasks(log_dir, format)
+        task = _resolve_task(tasks, task_id)
+        rules = load_rules()
+        analysis = analyze_task(task)
+        grade = grade_task(task, rules, analysis=analysis)
+        rc = classify_rc(task, grade)
+
+        # Compact surface (tool sequence + errors only)
+        surface = surface_for_task(task)
+        steps = surface.get("steps", [])
+        compact_steps = []
+        for s in steps:
+            entry: dict[str, Any] = {"step": s.get("step", 0), "tool": s.get("tool_name", "")}
+            if s.get("error"):
+                entry["error"] = str(s["error"])[:300]
+            result = s.get("tool_result", "")
+            if isinstance(result, str) and len(result) > 150:
+                entry["result"] = result[:150] + "..."
+            elif result:
+                entry["result"] = str(result)[:150]
+            compact_steps.append(entry)
+
+        # Compact reasoning chain
+        reasoning = reasoning_for_task(task)
+        chain = []
+        for r in reasoning.get("reasoning_chain", []):
+            chain.append({
+                "step": r.get("step"),
+                "reasoning": (r.get("reasoning") or "")[:200],
+                "tool": r.get("decision", {}).get("tool_name", ""),
+            })
+
+        payload: dict[str, Any] = {
+            "task_id": task.task_id,
+            "user_text": (task.task_text or "")[:150],
+            "grade": grade.grade,
+            "score": grade.score,
+            "root_cause": rc.root_cause if rc else None,
+            "confidence": rc.confidence if rc else None,
+            "evidence": rc.evidence[:3] if rc and rc.evidence else [],
+            "steps": compact_steps,
+            "reasoning_chain": chain,
+            "site": analysis.site_name,
+            "metrics": {
+                "errors": analysis.errors,
+                "total_steps": len(task.steps),
+                "total_cost_usd": analysis.total_cost_usd,
+                "duration_ms": analysis.total_duration_ms,
+            },
+        }
+
+        result = json.dumps(payload, separators=(",", ":"))
+        if len(result) > _MCP_MAX_CHARS:
+            # Trim reasoning chain first, then step results
+            for r in chain:
+                r["reasoning"] = (r.get("reasoning") or "")[:80] + "..."
+            for s in compact_steps:
+                if "result" in s:
+                    s["result"] = s["result"][:60] + "..."
+            result = json.dumps(payload, separators=(",", ":"))
+
+        return result
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
 def main() -> None:
     """Run the agent-xray MCP server over stdio transport."""
     server.run(transport="stdio")

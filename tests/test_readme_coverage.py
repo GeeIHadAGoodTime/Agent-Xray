@@ -80,6 +80,9 @@ MCP_TOOLS = [
     "task_bank_show",
     "format_detect",
     "triage",
+    "gaming_audit",
+    "pricing_update",
+    "inspect_task",
 ]
 
 

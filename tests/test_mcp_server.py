@@ -54,6 +54,9 @@ MCP_TOOL_NAMES = [
     "task_bank_show",
     "format_detect",
     "triage",
+    "gaming_audit",
+    "pricing_update",
+    "inspect_task",
 ]
 
 BANNED_DOCSTRING_MARKERS = (
