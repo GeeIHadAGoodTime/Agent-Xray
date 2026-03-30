@@ -988,9 +988,9 @@ def _change_reject_reason(
         hint = "break into smaller iterations"
         if len(files_modified) > config.max_files_per_change * 4:
             hint = (
-                "this looks like a stash pop or merge — did something restore "
-                "unrelated changes? Revert them with 'git checkout .' or "
-                "'git stash' before retrying enforce_check"
+                "this looks like a stash pop or merge brought in unrelated "
+                "changes — re-stash them with 'git stash push' before "
+                "retrying enforce_check"
             )
         return (
             f"Change too large: {len(files_modified)} files exceeds limit of "
