@@ -55,7 +55,10 @@ class ResearchDetector:
         for step in task.sorted_steps:
             for candidate in self._iter_sources(step):
                 for url in self.URL_RE.findall(candidate):
-                    host = urlparse(url).netloc.lower()
+                    try:
+                        host = urlparse(url).netloc.lower()
+                    except ValueError:
+                        continue
                     if host:
                         domains.add(host)
         return len(domains)
