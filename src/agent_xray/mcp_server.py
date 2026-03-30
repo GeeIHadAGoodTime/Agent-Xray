@@ -211,8 +211,8 @@ def _resolve_task(tasks: list[Any], task_id: str) -> Any:
 
 
 @server.tool()
-def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan (filterable by days/site/outcome)."""
+def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+    """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan (filterable by days/site/outcome/grade_filter)."""
     try:
         from agent_xray.analyzer import analyze_task
         from agent_xray.diagnose import build_fix_plan
@@ -220,9 +220,9 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
         from agent_xray.root_cause import classify_failures
         from agent_xray.surface import surface_for_task
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
         if not tasks:
-            return _json_response({"error": "No tasks found", "hint": "Check log_dir path and days filter"})
+            return _json_response({"error": "No tasks found", "hint": "Check log_dir path and days filter. Note: outcome filters by task status (failed/success), grade_filter filters by xray grade (BROKEN/WEAK/OK/GOOD/GOLDEN)."})
 
         rules = load_rules()
         grades = grade_tasks(tasks, rules)
@@ -500,12 +500,12 @@ def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_b
 
 
 @server.tool()
-def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """Grade traces against a ruleset and return scored per-task details (filterable by days/site/outcome)."""
+def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+    """Grade traces against a ruleset and return scored per-task details — outcome filters by task status (failed/success), grade_filter filters by xray grade (BROKEN/WEAK/OK/GOOD/GOLDEN)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -545,13 +545,13 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
 
 
 @server.tool()
-def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site/outcome)."""
+def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+    """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site/outcome/grade_filter)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         failures = classify_failures(tasks, grades)
@@ -717,14 +717,14 @@ def search_tasks(log_dir: str, query: str, format: str = "auto", days: int | Non
 
 
 @server.tool()
-def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site/outcome)."""
+def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+    """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site/outcome/grade_filter)."""
     try:
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, grade_filter=grade_filter)
         rule_set = load_rules(rules)
 
         if task_bank:

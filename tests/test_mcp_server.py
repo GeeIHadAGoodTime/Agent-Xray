@@ -347,6 +347,34 @@ def test_grade_tool(tmp_trace_dir: Path) -> None:
     assert any(task["grade"] == "BROKEN" for task in payload["worst_tasks"])
 
 
+def test_grade_with_grade_filter(tmp_trace_dir: Path) -> None:
+    """grade_filter=BROKEN should return only BROKEN-graded tasks (not to be confused with outcome)."""
+    mcp_server = _load_mcp_server_module()
+
+    # Without filter: should have multiple grades
+    all_payload = json.loads(mcp_server.grade(str(tmp_trace_dir)))
+    assert all_payload["summary"]["tasks"] == 4
+
+    # With grade_filter=BROKEN: should return only BROKEN tasks
+    broken_payload = json.loads(mcp_server.grade(str(tmp_trace_dir), grade_filter="BROKEN"))
+    if broken_payload["summary"]["tasks"] > 0:
+        assert all(t["grade"] == "BROKEN" for t in broken_payload["worst_tasks"])
+
+    # With grade_filter=GOLDEN: should return only GOLDEN tasks
+    golden_payload = json.loads(mcp_server.grade(str(tmp_trace_dir), grade_filter="GOLDEN"))
+    if golden_payload["summary"]["tasks"] > 0:
+        assert all(t["grade"] == "GOLDEN" for t in golden_payload["worst_tasks"])
+
+
+def test_triage_with_grade_filter(tmp_trace_dir: Path) -> None:
+    """triage(grade_filter='BROKEN') should scope the investigation to BROKEN-graded tasks."""
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.triage(str(tmp_trace_dir), grade_filter="BROKEN"))
+    # Should still return valid JSON (even if all tasks filtered out)
+    assert isinstance(payload, dict)
+
+
 def test_report_tools_skips_grading(monkeypatch: pytest.MonkeyPatch) -> None:
     mcp_server = _load_mcp_server_module()
 

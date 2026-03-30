@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.21.0 | Audit date: 2026-03-30
+Version: 1.22.0 | Audit date: 2026-03-30
 
 ---
 
@@ -197,8 +197,8 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 |------------|--------------|-------------|
 | `--days N` | `days` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
 | `--site SITE` | `site` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
-| `--grade GRADE` | `grade_filter` | (via `_load_tasks` internal) |
-| `--outcome STATUS` | `outcome` | triage, grade, root_cause, diagnose |
+| `--grade GRADE` | `grade_filter` | triage, grade, root_cause, diagnose (filters by xray grade: BROKEN/WEAK/OK/GOOD/GOLDEN) |
+| `--outcome STATUS` | `outcome` | triage, grade, root_cause, diagnose (filters by task status: failed/success — NOT the same as grade) |
 | `--rules PATH` | `rules` | grade, root_cause, diagnose, tree, golden_rank, compare_runs |
 | `--task-bank PATH` | `task_bank` | analyze, grade, diagnose |
 
