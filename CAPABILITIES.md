@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.12.1 | Audit date: 2026-03-29
+Version: 1.15.0 | Audit date: 2026-03-29
 
 ---
 
@@ -728,8 +728,8 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 ## Dark Abilities (CLI-only, Not in MCP)
 
-> **Status: Most gaps CLOSED as of commit 4a6bc19 (2026-03-29).**
-> 9 new MCP tools + 3 report types + filtering params added.
+> **Status: Nearly all gaps CLOSED as of v1.15.0 (2026-03-29).**
+> 41 MCP tools total. 13 new MCP tools + 3 report types + filtering params added across two audit rounds.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 
@@ -743,6 +743,7 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 ### CLOSED Gaps (Now in MCP)
 
+**Round 1 (commit 4a6bc19):**
 - `replay` -- MCP tool added
 - `validate-targets` -- MCP tool `validate_targets` added
 - `baseline capture/list` -- MCP tools `baseline_capture`, `baseline_list` added
@@ -751,6 +752,12 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 - `golden profiles` -- MCP tool `golden_profiles` added
 - `--days`, `--site`, `--grade` filters -- Added to `analyze`, `grade`, `root_cause`, `diagnose`, `tree`, `search_tasks`, `report`
 - `overhead`, `prompt-impact`, `compare` reports -- Added to `report()` tool
+
+**Round 2 (v1.15.0, challenger audit):**
+- `pricing list` -- MCP tool `pricing_list` added (full model pricing table)
+- `baseline generate` -- MCP tool `baseline_generate` added (naked prompt generation)
+- `task-bank show` -- MCP tool `task_bank_show` added (individual entry lookup)
+- `format detect` -- MCP tool `format_detect` added (auto-detect trace format with confidence)
 
 ---
 
