@@ -28,25 +28,20 @@ MCP_TOOL_NAMES = [
     "golden_compare",
     "task_bank_validate",
     "task_bank_list",
-    "flywheel",
     "capture_task",
     "pricing_show",
     "replay",
     "validate_targets",
     "rules_list",
     "rules_show",
-    "rules_init",
     "baseline_capture",
     "baseline_list",
     "golden_best",
     "golden_profiles",
-    "pricing_list",
-    "baseline_generate",
     "task_bank_show",
     "format_detect",
     "triage",
     "gaming_audit",
-    "pricing_update",
     "inspect_task",
     "signal_detect",
     "match_task",
@@ -742,6 +737,8 @@ def test_triage_returns_grade_distribution(tmp_path: Path) -> None:
     assert worst_failure is not None
     assert worst_failure["task_id"] == "broken-task"
     suggestions = payload["suggested_next_tools"]
+    assert suggestions[0].startswith("surface_task(")
+    assert suggestions[1].startswith("reasoning(")
     assert any(s.startswith("diff_tasks(") for s in suggestions)
     assert any(s.startswith("inspect_task(") for s in suggestions)
     assert any(s.startswith("signal_detect(") for s in suggestions)
@@ -751,7 +748,7 @@ def test_triage_returns_grade_distribution(tmp_path: Path) -> None:
 
 
 def test_triage_suggested_next_tools_use_real_param_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    """triage() should emit directly callable suggestion strings with the real MCP parameter names."""
+    """triage() should emit suggestion strings that use the real MCP parameter names."""
     mcp_server = _load_mcp_server_module()
 
     tasks = [
@@ -793,14 +790,21 @@ def test_triage_suggested_next_tools_use_real_param_names(monkeypatch: pytest.Mo
     payload = json.loads(mcp_server.triage("traces"))
 
     assert payload["suggested_next_tools"] == [
+        "surface_task(log_dir='traces', task_id='broken-1') - Full step-by-step replay showing what the agent saw at each step",
+        "reasoning(log_dir='traces', task_id='broken-1') - LLM reasoning chain: why the model made each decision",
+        "inspect_task(log_dir='traces', task_id='broken-1')",
         "diff_tasks(log_dir='traces', task_id_a='golden-0', task_id_b='broken-1')",
         "golden_rank(log_dir='traces')",
-        "inspect_task(log_dir='traces', task_id='broken-1')",
         "signal_detect(log_dir='traces', task_id='broken-1')",
-        "compare_runs(left_log_dir='traces', right_log_dir='traces_after')",
+        "compare_runs(left_log_dir='traces', right_log_dir='<second_log_dir>') - provide the post-fix trace directory to verify improvement",
         "tree(log_dir='traces')",
     ]
     assert "next" not in payload
+
+
+def test_mcp_registered_tool_count_is_36() -> None:
+    source = (Path(__file__).resolve().parent.parent / "src" / "agent_xray" / "mcp_server.py").read_text(encoding="utf-8")
+    assert len(re.findall(r"@server\.tool\(\)\s+def\s+(\w+)\(", source)) == 36
 
 
 def test_dedupe_tasks_keeps_latest_trace_for_normalized_task_text() -> None:

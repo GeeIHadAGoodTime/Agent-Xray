@@ -333,6 +333,22 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
         )
         log_dir_literal = repr(str(log_dir))
         suggestions = []
+        if worst:
+            suggestions.append(
+                "surface_task("
+                f"log_dir={log_dir_literal}, "
+                f"task_id={repr(worst.task_id)})"
+                " - Full step-by-step replay showing what the agent saw at each step"
+            )
+            suggestions.append(
+                "reasoning("
+                f"log_dir={log_dir_literal}, "
+                f"task_id={repr(worst.task_id)})"
+                " - LLM reasoning chain: why the model made each decision"
+            )
+            suggestions.append(
+                f"inspect_task(log_dir={log_dir_literal}, task_id={repr(worst.task_id)})"
+            )
         if golden_candidates and broken_candidates:
             suggestions.append(
                 "diff_tasks("
@@ -344,15 +360,12 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
             suggestions.append(f"golden_rank(log_dir={log_dir_literal})")
         if worst:
             suggestions.append(
-                f"inspect_task(log_dir={log_dir_literal}, task_id={repr(worst.task_id)})"
-            )
-            suggestions.append(
                 f"signal_detect(log_dir={log_dir_literal}, task_id={repr(worst.task_id)})"
             )
         suggestions.append(
             "compare_runs("
             f"left_log_dir={log_dir_literal}, "
-            f"right_log_dir={repr(f'{log_dir}_after')})"
+            "right_log_dir='<second_log_dir>') - provide the post-fix trace directory to verify improvement"
         )
         if len(tasks) >= 20:
             suggestions.append(f"tree(log_dir={log_dir_literal})")
@@ -1321,7 +1334,6 @@ def task_bank_list(path: str) -> str:
         return _json_response({"error": str(e)})
 
 
-@server.tool()
 def flywheel(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
     """Full quality loop in one call: grade + root cause + baseline comparison. Note: flywheel loads all tasks internally; use grade/diagnose with days/site for filtered analysis."""
     try:
@@ -1490,7 +1502,6 @@ def rules_show(name: str) -> str:
         return _json_response({"error": str(e)})
 
 
-@server.tool()
 def rules_init(base: str = "default") -> str:
     """Generate a scaffold for a custom ruleset based on an existing one. Returns JSON you can save and customize."""
     try:
@@ -1608,7 +1619,6 @@ def golden_profiles() -> str:
         return _json_response({"error": str(e)})
 
 
-@server.tool()
 def pricing_list() -> str:
     """List all known models with input/output/cached token pricing per 1M tokens."""
     try:
@@ -1635,7 +1645,6 @@ def pricing_list() -> str:
         return _json_response({"error": str(e)})
 
 
-@server.tool()
 def baseline_generate(log_dir: str, task_id: str, format: str = "auto") -> str:
     """Generate a naked prompt (system message only, no tools/history) for baseline comparison."""
     try:
@@ -1719,7 +1728,6 @@ def gaming_audit(diff: str, files_modified: list[str] | None = None, allow_test_
         return _json_response({"error": str(e)})
 
 
-@server.tool()
 def pricing_update() -> str:
     """Fetch latest model pricing from GitHub and update the local cache."""
     try:
