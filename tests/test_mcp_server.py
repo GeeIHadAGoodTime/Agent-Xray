@@ -715,6 +715,64 @@ def test_triage_returns_grade_distribution(tmp_path: Path) -> None:
     assert worst_failure["task_id"] == "broken-task"
 
 
+def test_triage_next_hints_use_correct_param_names(tmp_path: Path) -> None:
+    """Workflow hints must reference real parameter names so agents can copy-paste them."""
+    mcp_server = _load_mcp_server_module()
+    log_dir = tmp_path / "hint-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "broken-task",
+                "Buy headset on shop.example.test.",
+                [
+                    _make_step("broken-task", 1, "browser_snapshot",
+                               tool_result="Spinner.", error="Timeout.",
+                               page_url="https://shop.example.test/checkout",
+                               llm_reasoning="Checking."),
+                ],
+                task_category="commerce", status="failed", final_answer=None,
+            ),
+        ],
+    )
+    payload = json.loads(mcp_server.triage(str(log_dir)))
+    hints = payload.get("next", {})
+    # compare_runs hint must use left_log_dir/right_log_dir, never old/new
+    after_fix = hints.get("after_fix", "")
+    assert "left_log_dir=" in after_fix, f"compare_runs hint should use left_log_dir=, got: {after_fix}"
+    assert "right_log_dir=" in after_fix, f"compare_runs hint should use right_log_dir=, got: {after_fix}"
+    assert "old_log_dir" not in after_fix
+    assert "old_dir" not in after_fix
+    # deep_dive should use log_dir= and task_id=
+    deep = hints.get("deep_dive", "")
+    assert "log_dir=" in deep
+    assert "task_id=" in deep
+
+
+def test_grade_next_hint_includes_log_dir(tmp_trace_dir: Path) -> None:
+    """grade()'s next hint must include log_dir for diagnose() so agents can execute it."""
+    mcp_server = _load_mcp_server_module()
+    payload = json.loads(mcp_server.grade(str(tmp_trace_dir)))
+    hint = payload.get("next", "")
+    # diagnose hint must include log_dir=
+    assert "diagnose(log_dir=" in hint, f"grade next hint should include diagnose(log_dir=), got: {hint}"
+    # compare_runs must use left_log_dir/right_log_dir
+    assert "left_log_dir=" in hint, f"grade next hint should use left_log_dir=, got: {hint}"
+
+
+def test_diagnose_next_hint_shows_required_params(tmp_trace_dir: Path) -> None:
+    """diagnose()'s next hint must show enforce_init's required test_command param."""
+    mcp_server = _load_mcp_server_module()
+    payload = json.loads(mcp_server.diagnose(str(tmp_trace_dir)))
+    hint = payload.get("next", "")
+    # enforce_init requires test_command
+    assert "test_command=" in hint, f"diagnose next hint should include test_command=, got: {hint}"
+    # enforce_plan requires hypothesis
+    assert "hypothesis=" in hint, f"diagnose next hint should include hypothesis=, got: {hint}"
+    # compare_runs should use correct param names
+    assert "left_log_dir=" in hint, f"diagnose next hint should use left_log_dir=, got: {hint}"
+
+
 def test_inspect_task_returns_comprehensive_report(tmp_path: Path) -> None:
     mcp_server = _load_mcp_server_module()
 
