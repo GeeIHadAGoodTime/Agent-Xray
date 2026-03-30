@@ -50,6 +50,41 @@ def test_cli_grade_subprocess(tmp_trace_dir: Path) -> None:
     assert any(item["task_id"] == "broken-task" for item in payload["tasks"])
 
 
+def test_cli_grade_subprocess_dedupes_duplicate_task_text(
+    write_trace_dir,
+    golden_task: AgentTask,
+    broken_task: AgentTask,
+    clone_task,
+) -> None:
+    older = clone_task(golden_task, "golden-old")
+    newer = clone_task(golden_task, "golden-new")
+
+    older.task_text = "Buy   the wireless headset and complete checkout on shop.example.test."
+    newer.task_text = "  buy the wireless headset and complete checkout on shop.example.test.  "
+
+    for index, step in enumerate(older.steps, start=1):
+        step.timestamp = f"2026-03-26T12:{index:02d}:00Z"
+    if older.outcome is not None:
+        older.outcome.timestamp = "2026-03-26T12:59:00Z"
+
+    for index, step in enumerate(newer.steps, start=1):
+        step.timestamp = f"2026-03-27T12:{index:02d}:00Z"
+    if newer.outcome is not None:
+        newer.outcome.timestamp = "2026-03-27T12:59:00Z"
+
+    trace_dir = write_trace_dir("grade-dedupe-cli", [older, newer, broken_task])
+
+    result = _run_cli("grade", str(trace_dir), "--json")
+    payload = _json_output(result)
+
+    assert result.returncode == 0
+    assert payload["summary"]["tasks"] == 2
+    task_ids = {item["task_id"] for item in payload["tasks"]}
+    assert "golden-new" in task_ids
+    assert "golden-old" not in task_ids
+    assert "broken-task" in task_ids
+
+
 def test_cli_surface_subprocess(tmp_trace_dir: Path) -> None:
     result = _run_cli("surface", "golden-task", "--log-dir", str(tmp_trace_dir), "--json")
     payload = _json_output(result)

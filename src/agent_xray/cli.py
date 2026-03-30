@@ -25,6 +25,7 @@ from .contrib.task_bank import (
     load_task_bank as load_task_bank_entries,
     validate_task_bank as validate_task_bank_file,
 )
+from .dedup import _dedupe_tasks
 from .flywheel import run_flywheel
 from .grader import GradeResult, grade_tasks, load_rules
 from .replay import format_replay_text, replay_fixture
@@ -1028,6 +1029,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
             args.log_dir, days=args.days, format_name=args.format,
             pattern=getattr(args, "pattern", None), settings=args,
         )
+        tasks = _dedupe_tasks(tasks)
         rules = load_rules(args.rules)
         pre_grades = (
             _grade_tasks_for_cli(tasks, rules, args)

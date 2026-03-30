@@ -850,6 +850,70 @@ def test_triage_loads_tasks_with_dedupe(monkeypatch: pytest.MonkeyPatch) -> None
     assert calls["kwargs"]["dedupe"] is True
 
 
+def test_analyze_loads_tasks_with_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
+    mcp_server = _load_mcp_server_module()
+    calls: dict[str, object] = {}
+    task = types.SimpleNamespace(task_id="task-1", task_text="One task", steps=[])
+    grade = types.SimpleNamespace(task_id="task-1", grade="OK", score=20, reasons=[])
+
+    def fake_load_tasks(log_dir, format, **kwargs):
+        calls["kwargs"] = kwargs
+        return [task]
+
+    monkeypatch.setattr(mcp_server, "_load_tasks", fake_load_tasks)
+    monkeypatch.setattr("agent_xray.grader.load_rules", lambda rules=None: types.SimpleNamespace(name="default"))
+    monkeypatch.setattr("agent_xray.grader.grade_tasks", lambda tasks_arg, rules_arg: [grade])
+    monkeypatch.setattr("agent_xray.analyzer.analyze_task", lambda task_arg: types.SimpleNamespace(site_name="example.com"))
+
+    payload = json.loads(mcp_server.analyze("traces"))
+
+    assert "error" not in payload
+    assert calls["kwargs"]["dedupe"] is True
+
+
+def test_search_tasks_loads_tasks_with_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
+    mcp_server = _load_mcp_server_module()
+    calls: dict[str, object] = {}
+    task = types.SimpleNamespace(
+        task_id="task-1",
+        task_text="Checkout order for customer",
+        steps=[types.SimpleNamespace(page_url="https://shop.example.com/checkout", browser=None)],
+        outcome=types.SimpleNamespace(status="success"),
+    )
+
+    def fake_load_tasks(log_dir, format, **kwargs):
+        calls["kwargs"] = kwargs
+        return [task]
+
+    monkeypatch.setattr(mcp_server, "_load_tasks", fake_load_tasks)
+
+    payload = json.loads(mcp_server.search_tasks("traces", query="checkout"))
+
+    assert "error" not in payload
+    assert calls["kwargs"]["dedupe"] is True
+
+
+def test_tree_loads_tasks_with_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
+    mcp_server = _load_mcp_server_module()
+    calls: dict[str, object] = {}
+    task = types.SimpleNamespace(task_id="task-1")
+
+    def fake_load_tasks(log_dir, format, **kwargs):
+        calls["kwargs"] = kwargs
+        return [task]
+
+    monkeypatch.setattr(mcp_server, "_load_tasks", fake_load_tasks)
+    monkeypatch.setattr(
+        "agent_xray.surface.enriched_tree_for_tasks",
+        lambda tasks_arg, grades=None: {"20260330": {"shop.example.com": [{"task_id": "task-1", "outcome": "success"}]}},
+    )
+
+    payload = json.loads(mcp_server.tree("traces"))
+
+    assert "error" not in payload
+    assert calls["kwargs"]["dedupe"] is True
+
+
 def test_grade_next_hint_includes_log_dir(tmp_trace_dir: Path) -> None:
     """grade()'s next hint must include log_dir for diagnose() so agents can execute it."""
     mcp_server = _load_mcp_server_module()
