@@ -10,6 +10,7 @@ from agent_xray.diagnose import build_fix_plan
 from agent_xray.grader import grade_tasks, load_rules
 from agent_xray.reports import report_health, report_health_data
 from agent_xray.root_cause import classify_failures
+from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
 from agent_xray.surface import surface_for_task
 
 
@@ -59,6 +60,37 @@ def test_pipeline_with_browser_flow_rules(tmp_trace_dir: Path) -> None:
     grades = grade_tasks(tasks, rules)
     grade_map = {g.task_id: g for g in grades}
     assert grade_map["golden-task"].grade == "GOLDEN"
+
+
+def test_simple_ruleset_lifts_short_successful_tasks() -> None:
+    task = AgentTask.from_steps(
+        [
+            AgentStep(
+                task_id="simple-task",
+                step=1,
+                tool_name="search_query",
+                tool_input={"q": "set a timer for 10 minutes"},
+                tool_result="Timer set for 10 minutes.",
+                timestamp="2026-03-30T12:00:00Z",
+            )
+        ],
+        task_id="simple-task",
+        task_text="Set a timer for 10 minutes.",
+        task_category="utility",
+        outcome=TaskOutcome(
+            task_id="simple-task",
+            status="success",
+            final_answer="Timer set for 10 minutes.",
+            total_steps=1,
+            timestamp="2026-03-30T12:00:05Z",
+        ),
+    )
+
+    default_grade = grade_tasks([task], load_rules("default"))[0]
+    simple_grade = grade_tasks([task], load_rules("simple"))[0]
+
+    assert default_grade.grade == "OK"
+    assert simple_grade.grade == "GOLDEN"
 
 
 def test_pipeline_json_roundtrip(tmp_trace_dir: Path) -> None:

@@ -149,6 +149,44 @@ def _dir_mtime(log_dir: str) -> float:
     return max_mt
 
 
+def _normalize_task_text(task: Any) -> str:
+    import re
+
+    text = str(getattr(task, "task_text", None) or "").strip().lower()
+    normalized = re.sub(r"\s+", " ", text)
+    return normalized or str(getattr(task, "task_id", ""))
+
+
+def _task_recency_key(task: Any) -> tuple[str, int, str]:
+    latest_timestamp = ""
+    for step in getattr(task, "steps", []) or []:
+        timestamp = str(getattr(step, "timestamp", "") or "")
+        if timestamp > latest_timestamp:
+            latest_timestamp = timestamp
+    outcome = getattr(task, "outcome", None)
+    outcome_timestamp = str(getattr(outcome, "timestamp", "") or "")
+    if outcome_timestamp > latest_timestamp:
+        latest_timestamp = outcome_timestamp
+    return (
+        latest_timestamp,
+        len(getattr(task, "steps", []) or []),
+        str(getattr(task, "task_id", "")),
+    )
+
+
+def _dedupe_tasks(tasks: list[Any]) -> list[Any]:
+    """Keep only the latest trace per normalized task text."""
+    deduped: dict[str, tuple[tuple[str, int, str], int, Any]] = {}
+    for index, task in enumerate(tasks):
+        normalized = _normalize_task_text(task)
+        recency = _task_recency_key(task)
+        existing = deduped.get(normalized)
+        if existing is None or (recency, index) >= (existing[0], existing[1]):
+            deduped[normalized] = (recency, index, task)
+    keep_ids = {id(entry[2]) for entry in deduped.values()}
+    return [task for task in tasks if id(task) in keep_ids]
+
+
 def _load_tasks(
     log_dir: str,
     format_name: str,
@@ -156,6 +194,7 @@ def _load_tasks(
     days: int | None = None,
     site: str | None = None,
     outcome: str | None = None,
+    dedupe: bool = False,
 ) -> list[Any]:
     from agent_xray.analyzer import load_adapted_tasks, load_tasks
 
@@ -181,6 +220,8 @@ def _load_tasks(
         _task_cache[cache_key] = (current_mtime, tasks)
 
     # Post-filters (not cached — applied fresh each call)
+    if dedupe:
+        tasks = _dedupe_tasks(tasks)
     if site:
         site_lower = site.lower()
         tasks = [t for t in tasks if site_lower in _extract_site(t).lower()]
@@ -229,16 +270,15 @@ def _resolve_task(tasks: list[Any], task_id: str) -> Any:
 
 
 @server.tool()
-def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None, dedupe: bool = True) -> str:
     """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan (filterable by days/site/outcome/grade_filter)."""
     try:
-        from agent_xray.analyzer import analyze_task
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
         from agent_xray.surface import surface_for_task
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=dedupe)
         if not tasks:
             return _json_response({"error": "No tasks found", "hint": "Check log_dir path and days filter. Note: outcome filters by task status (failed/success), grade_filter filters by xray grade (BROKEN/WEAK/OK/GOOD/GOLDEN)."})
 
@@ -293,25 +333,79 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
                 "steps": compact_steps,
             }
 
+        # Context-sensitive tool suggestions based on what triage found
+        suggestions: list[str] = []
+        golden_count = dist.get("GOLDEN", 0)
+        broken_count = dist.get("BROKEN", 0)
+        golden_candidates = sorted(
+            (g for g in grades if g.grade == "GOLDEN"),
+            key=lambda g: g.score,
+            reverse=True,
+        )
+        broken_candidates = sorted(
+            (g for g in grades if g.grade == "BROKEN"),
+            key=lambda g: g.score,
+        )
+        if worst:
+            suggestions.append(f"inspect_task(log_dir='{log_dir}', task_id='{worst.task_id}') — full deep-dive on worst task")
+        if golden_count > 0 and broken_count > 0 and worst:
+            golden_ids = [g.task_id for g in grades if g.grade == "GOLDEN"]
+            suggestions.append(f"diff_tasks(log_dir='{log_dir}', task_id_a='{golden_ids[0]}', task_id_b='{worst.task_id}') — compare GOLDEN vs BROKEN to learn what works")
+        if golden_count >= 3:
+            suggestions.append(f"golden_rank(log_dir='{log_dir}') — rank {golden_count} GOLDENs by efficiency to find best exemplar")
+        if worst:
+            suggestions.append(f"signal_detect(log_dir='{log_dir}', task_id='{worst.task_id}') — domain-specific signals (commerce, research, coding)")
+        suggestions.append("compare_runs(left_log_dir='<before>', right_log_dir='<after>') — ALWAYS run after a fix to verify improvement across ALL tasks")
+        if len(tasks) > 20:
+            suggestions.append(f"tree(log_dir='{log_dir}') — hierarchical view of all {len(tasks)} tasks by day/site/grade")
+
+        golden_candidates = sorted(
+            (g for g in grades if g.grade == "GOLDEN"),
+            key=lambda g: (-g.score, g.task_id),
+        )
+        broken_candidates = sorted(
+            (g for g in grades if g.grade == "BROKEN"),
+            key=lambda g: (g.score, g.task_id),
+        )
+        log_dir_literal = repr(str(log_dir))
+        suggestions = []
+        if golden_candidates and broken_candidates:
+            suggestions.append(
+                "diff_tasks("
+                f"log_dir={log_dir_literal}, "
+                f"task_id_a={repr(golden_candidates[0].task_id)}, "
+                f"task_id_b={repr(broken_candidates[0].task_id)})"
+            )
+        if golden_count >= 3:
+            suggestions.append(f"golden_rank(log_dir={log_dir_literal})")
+        if worst:
+            suggestions.append(
+                f"inspect_task(log_dir={log_dir_literal}, task_id={repr(worst.task_id)})"
+            )
+            suggestions.append(
+                f"signal_detect(log_dir={log_dir_literal}, task_id={repr(worst.task_id)})"
+            )
+        suggestions.append(
+            "compare_runs("
+            f"left_log_dir={log_dir_literal}, "
+            f"right_log_dir={repr(f'{log_dir}_after')})"
+        )
+        if len(tasks) >= 20:
+            suggestions.append(f"tree(log_dir={log_dir_literal})")
+
         payload: dict[str, Any] = {
             "summary": {
                 "tasks": len(tasks),
                 "grade_distribution": dist,
-                "broken_count": dist.get("BROKEN", 0),
-                "golden_count": dist.get("GOLDEN", 0),
+                "broken_count": broken_count,
+                "golden_count": golden_count,
             },
             "worst_task": worst_surface,
             "fix_plan": [
                 {"root_cause": fp.root_cause, "priority": fp.priority, "targets": fp.targets, "hint": fp.fix_hint, "task_id": fp.investigate_task}
                 for fp in fix_plan[:5]
             ] if fix_plan else [],
-            "next": {
-                "deep_dive": f"inspect_task(log_dir=log_dir, task_id='{worst.task_id}')" if worst else None,
-                "reasoning": f"reasoning(log_dir=log_dir, task_id='{worst.task_id}')" if worst else None,
-                "compare_good_vs_bad": f"diff_tasks(log_dir=log_dir, task_id_a='<good_task_id>', task_id_b='{worst.task_id}')" if worst else None,
-                "after_fix": "compare_runs(left_log_dir='<before_dir>', right_log_dir='<after_dir>') to verify improvement",
-                "signals": f"signal_detect(log_dir=log_dir, task_id='{worst.task_id}') for domain-specific signals" if worst else None,
-            },
+            "suggested_next_tools": suggestions,
         }
         return _compact_json(payload)
     except Exception as e:
@@ -562,7 +656,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
     try:
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -978,19 +1072,19 @@ def report(
 
 
 @server.tool()
-def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto") -> str:
+def diff_tasks(log_dir: str, task_id_a: str, task_id_b: str, format: str = "auto") -> str:
     """Compare two tasks side by side: tool sequences, timing, outcomes. Use to see what a successful task did differently from a failed one."""
     try:
         from agent_xray.surface import diff_tasks as run_diff_tasks
 
         tasks = _load_tasks(log_dir, format)
         task_map = {t.task_id: t for t in tasks}
-        left = task_map.get(task_id_1)
-        right = task_map.get(task_id_2)
+        left = task_map.get(task_id_a)
+        right = task_map.get(task_id_b)
         if left is None:
-            return _json_response({"error": f"Task {task_id_1!r} not found in {log_dir}"})
+            return _json_response({"error": f"Task {task_id_a!r} not found in {log_dir}"})
         if right is None:
-            return _json_response({"error": f"Task {task_id_2!r} not found in {log_dir}"})
+            return _json_response({"error": f"Task {task_id_b!r} not found in {log_dir}"})
 
         result = _serialize(run_diff_tasks(left, right))
 

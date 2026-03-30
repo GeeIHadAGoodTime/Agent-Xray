@@ -816,40 +816,113 @@ def test_triage_returns_grade_distribution(tmp_path: Path) -> None:
     assert grades
     assert worst_failure is not None
     assert worst_failure["task_id"] == "broken-task"
+    suggestions = payload["suggested_next_tools"]
+    assert any(s.startswith("diff_tasks(") for s in suggestions)
+    assert any(s.startswith("inspect_task(") for s in suggestions)
+    assert any(s.startswith("signal_detect(") for s in suggestions)
+    assert any(s.startswith("compare_runs(") for s in suggestions)
+    assert not any(s.startswith("golden_rank(") for s in suggestions)
+    assert not any(s.startswith("tree(") for s in suggestions)
 
 
-def test_triage_next_hints_use_correct_param_names(tmp_path: Path) -> None:
-    """Workflow hints must reference real parameter names so agents can copy-paste them."""
+def test_triage_suggested_next_tools_use_real_param_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """triage() should emit directly callable suggestion strings with the real MCP parameter names."""
     mcp_server = _load_mcp_server_module()
-    log_dir = tmp_path / "hint-logs"
-    _write_log(
-        log_dir,
+
+    tasks = [
+        types.SimpleNamespace(task_id=f"golden-{index}", task_text=f"Golden task {index}", steps=[types.SimpleNamespace(timestamp=f"2026-03-30T12:0{index}:00Z")])
+        for index in range(3)
+    ]
+    tasks.extend(
         [
-            _make_task(
-                "broken-task",
-                "Buy headset on shop.example.test.",
-                [
-                    _make_step("broken-task", 1, "browser_snapshot",
-                               tool_result="Spinner.", error="Timeout.",
-                               page_url="https://shop.example.test/checkout",
-                               llm_reasoning="Checking."),
-                ],
-                task_category="commerce", status="failed", final_answer=None,
-            ),
-        ],
+            types.SimpleNamespace(task_id="broken-1", task_text="Broken task", steps=[types.SimpleNamespace(timestamp="2026-03-30T12:10:00Z")]),
+            types.SimpleNamespace(task_id="ok-1", task_text="OK task 1", steps=[types.SimpleNamespace(timestamp="2026-03-30T12:11:00Z")]),
+        ]
     )
-    payload = json.loads(mcp_server.triage(str(log_dir)))
-    hints = payload.get("next", {})
-    # compare_runs hint must use left_log_dir/right_log_dir, never old/new
-    after_fix = hints.get("after_fix", "")
-    assert "left_log_dir=" in after_fix, f"compare_runs hint should use left_log_dir=, got: {after_fix}"
-    assert "right_log_dir=" in after_fix, f"compare_runs hint should use right_log_dir=, got: {after_fix}"
-    assert "old_log_dir" not in after_fix
-    assert "old_dir" not in after_fix
-    # deep_dive should use log_dir= and task_id=
-    deep = hints.get("deep_dive", "")
-    assert "log_dir=" in deep
-    assert "task_id=" in deep
+    tasks.extend(
+        types.SimpleNamespace(task_id=f"ok-{index}", task_text=f"Other task {index}", steps=[types.SimpleNamespace(timestamp=f"2026-03-30T12:{index:02d}:30Z")])
+        for index in range(2, 19)
+    )
+    grades = [
+        types.SimpleNamespace(task_id="golden-0", grade="GOLDEN", score=95),
+        types.SimpleNamespace(task_id="golden-1", grade="GOLDEN", score=90),
+        types.SimpleNamespace(task_id="golden-2", grade="GOLDEN", score=85),
+        types.SimpleNamespace(task_id="broken-1", grade="BROKEN", score=-4),
+    ]
+    grades.extend(
+        types.SimpleNamespace(task_id=task.task_id, grade="OK", score=25)
+        for task in tasks
+        if task.task_id not in {"golden-0", "golden-1", "golden-2", "broken-1"}
+    )
+
+    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format, **kw: tasks)
+    monkeypatch.setattr("agent_xray.grader.load_rules", lambda: types.SimpleNamespace(name="default"))
+    monkeypatch.setattr("agent_xray.grader.grade_tasks", lambda tasks_arg, rules_arg: grades)
+    monkeypatch.setattr("agent_xray.root_cause.classify_failures", lambda tasks_arg, grades_arg: [])
+    monkeypatch.setattr("agent_xray.diagnose.build_fix_plan", lambda results: [])
+    monkeypatch.setattr(
+        "agent_xray.surface.surface_for_task",
+        lambda task: {"steps": [{"step": 1, "tool_name": "browser_snapshot", "error": "Timeout"}]},
+    )
+
+    payload = json.loads(mcp_server.triage("traces"))
+
+    assert payload["suggested_next_tools"] == [
+        "diff_tasks(log_dir='traces', task_id_a='golden-0', task_id_b='broken-1')",
+        "golden_rank(log_dir='traces')",
+        "inspect_task(log_dir='traces', task_id='broken-1')",
+        "signal_detect(log_dir='traces', task_id='broken-1')",
+        "compare_runs(left_log_dir='traces', right_log_dir='traces_after')",
+        "tree(log_dir='traces')",
+    ]
+    assert "next" not in payload
+
+
+def test_dedupe_tasks_keeps_latest_trace_for_normalized_task_text() -> None:
+    mcp_server = _load_mcp_server_module()
+
+    older = types.SimpleNamespace(
+        task_id="task-old",
+        task_text="Buy   headset",
+        steps=[types.SimpleNamespace(timestamp="2026-03-30T10:00:00Z")],
+    )
+    newer = types.SimpleNamespace(
+        task_id="task-new",
+        task_text="  buy headset  ",
+        steps=[types.SimpleNamespace(timestamp="2026-03-30T11:00:00Z")],
+    )
+    distinct = types.SimpleNamespace(
+        task_id="task-other",
+        task_text="Research observability",
+        steps=[types.SimpleNamespace(timestamp="2026-03-30T09:00:00Z")],
+    )
+
+    deduped = mcp_server._dedupe_tasks([older, newer, distinct])
+
+    assert [task.task_id for task in deduped] == ["task-new", "task-other"]
+
+
+def test_triage_loads_tasks_with_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
+    mcp_server = _load_mcp_server_module()
+    calls: dict[str, object] = {}
+    task = types.SimpleNamespace(task_id="task-1", task_text="One task", steps=[types.SimpleNamespace(timestamp="2026-03-30T12:00:00Z")])
+    grade = types.SimpleNamespace(task_id="task-1", grade="OK", score=20)
+
+    def fake_load_tasks(log_dir, format, **kwargs):
+        calls["kwargs"] = kwargs
+        return [task]
+
+    monkeypatch.setattr(mcp_server, "_load_tasks", fake_load_tasks)
+    monkeypatch.setattr("agent_xray.grader.load_rules", lambda: types.SimpleNamespace(name="default"))
+    monkeypatch.setattr("agent_xray.grader.grade_tasks", lambda tasks_arg, rules_arg: [grade])
+    monkeypatch.setattr("agent_xray.root_cause.classify_failures", lambda tasks_arg, grades_arg: [])
+    monkeypatch.setattr("agent_xray.diagnose.build_fix_plan", lambda results: [])
+    monkeypatch.setattr("agent_xray.surface.surface_for_task", lambda task_arg: {"steps": []})
+
+    payload = json.loads(mcp_server.triage("traces"))
+
+    assert "error" not in payload
+    assert calls["kwargs"]["dedupe"] is True
 
 
 def test_grade_next_hint_includes_log_dir(tmp_trace_dir: Path) -> None:
@@ -1183,3 +1256,19 @@ def test_triage_empty_dir(tmp_path: Path) -> None:
 
     assert isinstance(payload, dict)
     assert payload["error"] == "No tasks found"
+
+
+def test_simple_ruleset_is_packaged_and_loadable() -> None:
+    rules_path = Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules" / "simple.json"
+    payload = json.loads(rules_path.read_text(encoding="utf-8"))
+
+    assert rules_path.exists()
+    assert payload["name"] == "simple"
+    assert payload["grade_thresholds"] == {
+        "GOLDEN": 3,
+        "GOOD": 2,
+        "OK": 1,
+        "WEAK": 0,
+    }
+    assert payload["signals"][0]["gte"] == 1
+    assert payload["signals"][1]["gte"] == 1
