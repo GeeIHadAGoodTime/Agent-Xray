@@ -57,6 +57,8 @@ MCP_TOOL_NAMES = [
     "gaming_audit",
     "pricing_update",
     "inspect_task",
+    "signal_detect",
+    "match_task",
 ]
 
 BANNED_DOCSTRING_MARKERS = (

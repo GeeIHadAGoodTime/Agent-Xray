@@ -699,6 +699,8 @@ Supporting pieces:
 | `gaming_audit` | run 9 gaming detectors on a diff (test-gaming, hardcoded values, mock injection) |
 | `pricing_update` | fetch latest model pricing from GitHub and update local cache |
 | `inspect_task` | comprehensive single-task report: grade + root cause + surface + reasoning in one call |
+| `signal_detect` | run signal detectors on a single task, optionally filtering to one detector by name |
+| `match_task` | fuzzy-match a task to the best task bank entry by user text, site, and category |
 
 Run the MCP server over stdio with:
 

@@ -1647,6 +1647,58 @@ def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
         return _json_response({"error": str(e)})
 
 
+@server.tool()
+def signal_detect(log_dir: str, task_id: str, detector: str | None = None, format: str = "auto") -> str:
+    """Run signal detectors on a single task, optionally filtering to one detector by name."""
+    try:
+        from agent_xray.signals import discover_detectors, run_detection
+
+        tasks = _load_tasks(log_dir, format)
+        task = _resolve_task(tasks, task_id)
+        all_detectors = discover_detectors()
+
+        if detector:
+            matched = [d for d in all_detectors if d.name.lower() == detector.lower()]
+            if not matched:
+                available = [d.name for d in all_detectors]
+                return _json_response({"error": f"Detector {detector!r} not found. Available: {available}"})
+            results = run_detection(task, detectors=matched)
+        else:
+            results = run_detection(task, detectors=all_detectors)
+
+        return _compact_json({
+            "task_id": task.task_id,
+            "detectors_run": list(results.keys()),
+            "signals": results,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def match_task(log_dir: str, task_id: str, bank_path: str, format: str = "auto") -> str:
+    """Fuzzy-match a task to the best task bank entry by user text, site, and category."""
+    try:
+        from agent_xray.analyzer import analyze_task
+        from agent_xray.contrib.task_bank import load_task_bank, match_task_to_bank
+
+        tasks = _load_tasks(log_dir, format)
+        task = _resolve_task(tasks, task_id)
+        bank = load_task_bank(bank_path)
+        analysis = analyze_task(task)
+        matched = match_task_to_bank(task, bank, analysis=analysis)
+
+        if matched is None:
+            return _json_response({"task_id": task.task_id, "match": None, "note": "No bank entry matched above threshold"})
+
+        return _compact_json({
+            "task_id": task.task_id,
+            "match": matched,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
 def main() -> None:
     """Run the agent-xray MCP server over stdio transport."""
     server.run(transport="stdio")

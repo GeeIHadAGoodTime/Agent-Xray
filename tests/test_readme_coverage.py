@@ -83,6 +83,8 @@ MCP_TOOLS = [
     "gaming_audit",
     "pricing_update",
     "inspect_task",
+    "signal_detect",
+    "match_task",
 ]
 
 
