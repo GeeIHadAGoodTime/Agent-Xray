@@ -1678,6 +1678,11 @@ def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
                 "total_cost_usd": analysis.total_cost_usd,
                 "duration_ms": analysis.total_duration_ms,
             },
+            "next": {
+                "signals": f"signal_detect(log_dir=log_dir, task_id='{task.task_id}') for domain-specific signals (commerce, research, planning)",
+                "compare": f"diff_tasks(log_dir=log_dir, task_id_a='<good_task_id>', task_id_b='{task.task_id}') to compare with a working task",
+                "fix": f"diagnose(log_dir=log_dir) for prioritized fix plan, then enforce_init(test_command='<cmd>') to start fixing",
+            },
         }
 
         result = json.dumps(payload, separators=(",", ":"))
