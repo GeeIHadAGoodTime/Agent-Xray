@@ -320,6 +320,7 @@ Most commands accept cross-cutting flags for filtering, output format, and envir
 | Command | What it does | Example |
 | --- | --- | --- |
 | `agent-xray triage <log-dir>` | **START HERE** — grade distribution + worst failure step-by-step + fix plan | `agent-xray triage ./traces --json` |
+| `agent-xray inspect <task-id> [log-dir]` | All-in-one single-task investigator: grade + root cause + surface + reasoning | `agent-xray inspect task-123 ./traces --json` |
 | `agent-xray analyze <log-dir>` | Grades a trace set and returns a high-level distribution summary | `agent-xray analyze ./traces --rules browser_flow --task-bank ./task_bank.json` |
 | `agent-xray surface <task-id> [log-dir]` | Reconstructs the full decision surface for one task | `agent-xray surface golden-task ./traces --json` |
 | `agent-xray reasoning <task-id> [log-dir]` | Extracts the reasoning chain for a task | `agent-xray reasoning golden-task ./traces` |
@@ -349,6 +350,7 @@ Most commands accept cross-cutting flags for filtering, output format, and envir
 | `agent-xray watch <file>` | Live-tails a JSONL file and grades tasks as they complete | `agent-xray watch ./traces/agent-steps-20260328.jsonl --rules browser_flow` |
 | `agent-xray completeness <log-dir>` | Checks trace completeness across observability dimensions | `agent-xray completeness ./traces --json` |
 | `agent-xray diagnose <log-dir>` | Builds a prioritized fix plan from root causes and validates targets when `--project-root` is set | `agent-xray diagnose ./traces --project-root . --json` |
+| `agent-xray signal-detect <task-id> <log-dir>` | Runs domain signal detectors (commerce, coding, research, etc.) on a single task | `agent-xray signal-detect task-123 ./traces --json` |
 | `agent-xray validate-targets --project-root <dir>` | Validates fix-plan file-path targets on disk | `agent-xray validate-targets --project-root . --resolver novviola` |
 
 ### Rules, pricing, golden, baseline, and task-bank subcommands

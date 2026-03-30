@@ -120,6 +120,7 @@ def test_mcp_tools_exhaustive() -> None:
 
 CLI_TOP_LEVEL_COMMANDS = [
     "triage",
+    "inspect",
     "analyze",
     "surface",
     "reasoning",
@@ -131,6 +132,7 @@ CLI_TOP_LEVEL_COMMANDS = [
     "compare",
     "completeness",
     "diagnose",
+    "signal-detect",
     "validate-targets",
     "report",
     "watch",

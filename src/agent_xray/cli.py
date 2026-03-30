@@ -72,7 +72,7 @@ from .reports import (
     report_tools_data,
     report_tools_markdown,
 )
-from .root_cause import ClassificationConfig, classify_failures
+from .root_cause import ClassificationConfig, classify_failures, classify_task as classify_rc
 from .root_cause import format_root_causes_text, summarize_root_causes
 from .schema import AgentTask
 from .surface import (
@@ -916,6 +916,112 @@ def cmd_triage(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Comprehensive single-task report: grade + root cause + surface + reasoning in one call."""
+    def _action() -> int:
+        from .grader import grade_task
+
+        tasks = _load(args)
+        task = resolve_task(tasks, args.task_id)
+        rules = load_rules(getattr(args, "rules", None) or "default")
+        analysis = analyze_task(task)
+        grade = grade_task(task, rules, analysis=analysis)
+        rc = classify_rc(task, grade, analysis=analysis)
+
+        # Compact surface (tool sequence + errors only)
+        surface = surface_for_task(task)
+        steps = surface.get("steps", [])
+        compact_steps = []
+        for s in steps:
+            entry: dict[str, Any] = {"step": s.get("step", 0), "tool": s.get("tool_name", "")}
+            if s.get("error"):
+                entry["error"] = str(s["error"])[:300]
+            result = s.get("tool_result", "")
+            if isinstance(result, str) and len(result) > 150:
+                entry["result"] = result[:150] + "..."
+            elif result:
+                entry["result"] = str(result)[:150]
+            compact_steps.append(entry)
+
+        # Compact reasoning chain
+        reasoning = reasoning_for_task(task)
+        chain = []
+        for r in reasoning.get("reasoning_chain", []):
+            chain.append({
+                "step": r.get("step"),
+                "reasoning": (r.get("reasoning") or "")[:200],
+                "tool": r.get("decision", {}).get("tool_name", ""),
+            })
+
+        log_dir = _resolve_log_dir(args)
+        payload: dict[str, Any] = {
+            "task_id": task.task_id,
+            "user_text": (task.task_text or "")[:150],
+            "grade": grade.grade,
+            "score": grade.score,
+            "root_cause": rc.root_cause if rc else None,
+            "confidence": rc.confidence if rc else None,
+            "evidence": rc.evidence[:3] if rc and rc.evidence else [],
+            "steps": compact_steps,
+            "reasoning_chain": chain,
+            "site": analysis.site_name,
+            "metrics": {
+                "errors": analysis.errors,
+                "total_steps": len(task.steps),
+                "total_cost_usd": analysis.total_cost_usd,
+                "duration_ms": analysis.total_duration_ms,
+            },
+        }
+
+        if getattr(args, "json", False):
+            _dump(payload)
+        else:
+            lines: list[str] = []
+            lines.append("=== INSPECT: %s ===" % task.task_id)
+            lines.append("Task: %s" % (task.task_text or "")[:120])
+            lines.append("Site: %s" % analysis.site_name)
+            lines.append("Grade: %s (score=%s)" % (grade.grade, grade.score))
+            if rc:
+                lines.append("Root cause: %s (confidence=%s)" % (rc.root_cause, rc.confidence))
+                for ev in (rc.evidence or [])[:3]:
+                    lines.append("  - %s" % ev)
+            lines.append("")
+            lines.append("Metrics: %d steps, %d errors, $%.4f, %dms" % (
+                len(task.steps),
+                analysis.errors,
+                analysis.total_cost_usd or 0,
+                analysis.total_duration_ms or 0,
+            ))
+            lines.append("")
+            lines.append("Steps:")
+            for s in compact_steps[:15]:
+                err_part = " ERROR: %s" % str(s.get("error", ""))[:80] if s.get("error") else ""
+                lines.append("  %d. %s%s" % (s["step"], s["tool"], err_part))
+            if len(compact_steps) > 15:
+                lines.append("  ... (%d more steps)" % (len(compact_steps) - 15))
+            if chain:
+                lines.append("")
+                lines.append("Reasoning chain:")
+                for r in chain[:10]:
+                    tool_part = " -> %s" % r["tool"] if r.get("tool") else ""
+                    lines.append("  step %s: %s%s" % (
+                        r.get("step", "?"),
+                        (r.get("reasoning") or "")[:120],
+                        tool_part,
+                    ))
+                if len(chain) > 10:
+                    lines.append("  ... (%d more)" % (len(chain) - 10))
+            lines.append("")
+            lines.append("Next:")
+            lines.append("  >> agent-xray surface %s %s" % (task.task_id, log_dir))
+            lines.append("  >> agent-xray reasoning %s %s" % (task.task_id, log_dir))
+            lines.append("  >> agent-xray diff <other_task_id> %s %s" % (task.task_id, log_dir))
+            _emit("\n".join(lines), args, final=True)
+        return 0
+
+    return _run_command(args, _action)
+
+
 def cmd_grade(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load_tasks_with_format(
@@ -1691,6 +1797,51 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
                 text += "\n\nNext: agent-xray validate-targets --project-root {root}  # check all fix paths are current".format(root=project_root)
             _emit(text, args, final=True)
         return 0
+    return _run_command(args, _action)
+
+
+def cmd_signal_detect(args: argparse.Namespace) -> int:
+    """Run signal detectors on a single task."""
+    def _action() -> int:
+        from .signals import discover_detectors, run_detection
+
+        tasks = _load(args)
+        task = resolve_task(tasks, args.task_id)
+        all_detectors = discover_detectors()
+
+        detector_name = getattr(args, "detector", None)
+        if detector_name:
+            matched = [d for d in all_detectors if d.name.lower() == detector_name.lower()]
+            if not matched:
+                available = [d.name for d in all_detectors]
+                _emit(f"Detector {detector_name!r} not found. Available: {available}", args, final=True)
+                return 1
+            results = run_detection(task, detectors=matched)
+        else:
+            results = run_detection(task, detectors=all_detectors)
+
+        if args.json:
+            _dump({
+                "task_id": task.task_id,
+                "detectors_run": list(results.keys()),
+                "signals": results,
+            })
+        else:
+            lines: list[str] = []
+            lines.append(f"Task: {task.task_id}")
+            lines.append(f"Detectors run: {len(results)}")
+            lines.append("")
+            for name, metrics in results.items():
+                lines.append(f"--- {name} ---")
+                if isinstance(metrics, dict):
+                    for key, value in metrics.items():
+                        lines.append(f"  {key}: {value}")
+                else:
+                    lines.append(f"  {metrics}")
+                lines.append("")
+            _emit("\n".join(lines), args, final=True)
+        return 0
+
     return _run_command(args, _action)
 
 
@@ -2732,6 +2883,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_triage.add_argument("--json", action="store_true", help="Output results as JSON")
     p_triage.set_defaults(func=cmd_triage)
 
+    # inspect — single-task deep dive
+    p_inspect = _add_subparser(
+        sub,
+        "inspect",
+        help_text="All-in-one single-task investigator: grade + root cause + surface + reasoning",
+        example="agent-xray inspect task-123 ./traces --json",
+    )
+    p_inspect.add_argument("task_id", help="Task ID or prefix to search for")
+    p_inspect.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file (also accepted via --log-dir). "
+        "Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_inspect.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_inspect.add_argument(
+        "--rules",
+        help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
+    )
+    p_inspect.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_task_bank_option(p_inspect)
+    _add_format_option(p_inspect)
+    _add_pattern_option(p_inspect)
+    p_inspect.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_inspect.set_defaults(func=cmd_inspect)
+
     p_analyze = _add_subparser(
         sub,
         "analyze",
@@ -3045,6 +3224,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Project root to validate fix target paths against (env: AGENT_XRAY_PROJECT_ROOT)",
     )
     p_diagnose.set_defaults(func=cmd_diagnose)
+
+    p_signal_detect = _add_subparser(
+        sub,
+        "signal-detect",
+        help_text="Run domain signal detectors on a single task",
+        example="agent-xray signal-detect task-123 ./traces --json",
+    )
+    p_signal_detect.add_argument("task_id", help="Task ID or prefix to search for")
+    p_signal_detect.add_argument(
+        "log_dir_pos", nargs="?", default=None,
+        help="Directory or .jsonl file (also accepted via --log-dir). "
+        "Defaults to AGENT_XRAY_LOG_DIR env var if set.",
+    )
+    p_signal_detect.add_argument(
+        "--log-dir", dest="log_dir_opt",
+        help="Directory or .jsonl file containing agent traces",
+    )
+    p_signal_detect.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    p_signal_detect.add_argument(
+        "--detector",
+        help="Run only the named detector (e.g. commerce, coding, research, multi_agent, memory, planning)",
+    )
+    _add_format_option(p_signal_detect)
+    _add_pattern_option(p_signal_detect)
+    p_signal_detect.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_signal_detect.set_defaults(func=cmd_signal_detect)
 
     p_validate_targets = _add_subparser(
         sub,

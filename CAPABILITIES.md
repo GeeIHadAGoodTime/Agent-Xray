@@ -813,6 +813,22 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 - `_filter_by_grade()` helper: takes (tasks, grades, grade_filter), returns filtered tuples
 - 3 new tests: root_cause/diagnose grade_filter, caller-rules regression test
 
+**Round 8 (v1.24.0, challenger audit):**
+- `triage` CLI subcommand added (was MCP-only)
+- `send_task.py` numbered action ladder for BROKEN/WEAK results
+- `inspect_task` next hints for progressive disclosure
+- NOVVIOLA resolver auto-registration in send_task.py
+
+**Round 9 (v1.25.0, challenger audit):**
+- `preflight_diff` MCP tool + `enforce preflight-diff` CLI — checks git diff against project guardrails
+- `golden min_steps` wired to MCP `report()` and CLI `--min-steps`
+- `surface_task` MCP: per-criterion PASS/FAIL evaluation from task bank (was raw entry only)
+
+**Intentional Asymmetries (not gaps):**
+- `watch`/`record`/`tui`/`quickstart` are CLI-only (streaming/interactive, can't work via MCP)
+- `instrument`/`pytest_plugin` are library-only Python APIs (not CLI/MCP surface)
+- `contrib/novviola.py` is project-specific, activated via `register()` or send_task.py auto-registration
+
 ---
 
 ## Hidden/Underutilized Features
