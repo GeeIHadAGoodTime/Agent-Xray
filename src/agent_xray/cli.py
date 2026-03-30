@@ -2226,6 +2226,8 @@ def cmd_search(args: argparse.Namespace) -> int:
         else:
             allowed = None
 
+        site_filter = (getattr(args, "site", None) or "").lower()
+
         for task in tasks:
             text = task.task_text or ""
             if query not in text.lower():
@@ -2233,6 +2235,8 @@ def cmd_search(args: argparse.Namespace) -> int:
             if allowed and grade_map.get(task.task_id, "") not in allowed:
                 continue
             analysis = analyze_task(task)
+            if site_filter and site_filter not in (analysis.site_name or "").lower():
+                continue
             entry: dict[str, Any] = {
                 "task_id": task.task_id,
                 "grade": grade_map.get(task.task_id, ""),
@@ -3287,6 +3291,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--grade", dest="grade_filter", default=None,
         help="Only include tasks with this grade (comma-separated: BROKEN,WEAK)",
+    )
+    p_search.add_argument(
+        "--site", default=None,
+        help="Only include tasks from this site (case-insensitive substring match)",
     )
     p_search.add_argument("--json", action="store_true", help="Output results as JSON")
     p_search.set_defaults(func=cmd_search)

@@ -828,6 +828,19 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 - `watch`/`record`/`tui`/`quickstart` are CLI-only (streaming/interactive, can't work via MCP)
 - `instrument`/`pytest_plugin` are library-only Python APIs (not CLI/MCP surface)
 - `contrib/novviola.py` is project-specific, activated via `register()` or send_task.py auto-registration
+- `enforce_auto` is CLI-only (requires `--agent-cmd` shell command, not suited for MCP)
+- MCP `report()` has fewer filter params than CLI (bucket, grade_filter, outcome missing) — by design for simplicity
+
+**Round 10 (v1.25.1, challenger audit):**
+- Dead `--task-bank` flag removed from inspect CLI
+- Doc counts fixed (48→49 MCP tools, version→1.25.1)
+- 9 parameter asymmetries cataloged (P1-P9), most intentional
+
+**Round 11 (v1.25.1, challenger audit):**
+- CLI `search --site` added for parity with MCP site filter
+- OTel adapter directory glob fixed (.json files now discovered)
+- format_detect directory input handling fixed
+- MCP test coverage: 16/49 tools (32.7%) directly tested
 
 ---
 
