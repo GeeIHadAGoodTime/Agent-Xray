@@ -835,6 +835,87 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return _run_command(args, _action)
 
 
+def cmd_triage(args: argparse.Namespace) -> int:
+    """One-call investigation: grade distribution, worst failure surfaced step-by-step, and fix plan."""
+    def _action() -> int:
+        from .diagnose import build_fix_plan
+
+        tasks = _load_tasks_with_format(
+            args.log_dir, days=args.days, format_name=args.format,
+            pattern=getattr(args, "pattern", None), settings=args,
+        )
+        tasks = _apply_filters(args, tasks)
+        if not tasks:
+            _emit("No tasks found.", args, final=True)
+            return 0
+
+        rules = load_rules()
+        grades = grade_tasks(tasks, rules)
+        dist = _grade_distribution(grades)
+        task_map = {t.task_id: t for t in tasks}
+
+        # Worst task
+        sorted_grades = sorted(grades, key=lambda g: g.score)
+        worst = sorted_grades[0] if sorted_grades else None
+
+        # Root causes + fix plan
+        failure_grades = [g for g in grades if g.grade in ("BROKEN", "WEAK")]
+        rc_results = classify_failures(
+            [task_map[g.task_id] for g in failure_grades if g.task_id in task_map],
+            failure_grades,
+        ) if failure_grades else []
+        fix_plan = build_fix_plan(rc_results) if rc_results else []
+
+        # Surface worst task
+        worst_surface = None
+        if worst and worst.task_id in task_map:
+            worst_surface = surface_for_task(task_map[worst.task_id])
+
+        if args.json:
+            compact_steps = []
+            if worst_surface:
+                for s in worst_surface.get("steps", []):
+                    entry: dict[str, Any] = {"tool": s.get("tool_name", ""), "step": s.get("step", 0)}
+                    if s.get("error"):
+                        entry["error"] = str(s["error"])[:200]
+                    compact_steps.append(entry)
+            _dump({
+                "summary": {"tasks": len(tasks), "grade_distribution": dist},
+                "worst_task": {
+                    "task_id": worst.task_id,
+                    "grade": worst.grade,
+                    "score": worst.score,
+                    "user_text": (task_map[worst.task_id].task_text or "")[:120],
+                    "steps": compact_steps,
+                } if worst else None,
+                "fix_plan": [asdict(fp) for fp in fix_plan[:5]] if fix_plan else [],
+            })
+        else:
+            log_dir = args.log_dir
+            lines: list[str] = []
+            lines.append(f"=== TRIAGE: {len(tasks)} tasks ===")
+            lines.append(f"Grades: {', '.join(f'{k}={v}' for k, v in sorted(dist.items()))}")
+            if worst:
+                lines.append(f"\nWorst: {worst.task_id} ({worst.grade}, score={worst.score})")
+                lines.append(f"  Task: {(task_map[worst.task_id].task_text or '')[:100]}")
+                if worst_surface:
+                    for s in worst_surface.get("steps", [])[:10]:
+                        err_part = f" ERROR: {str(s.get('error', ''))[:80]}" if s.get("error") else ""
+                        lines.append(f"  step {s.get('step', '?')}: {s.get('tool_name', '?')}{err_part}")
+                lines.append(f"\n  >> agent-xray surface {worst.task_id} {log_dir}")
+                lines.append(f"  >> agent-xray reasoning {worst.task_id} --log-dir {log_dir}")
+            if fix_plan:
+                lines.append("\nFix plan:")
+                for i, fp in enumerate(fix_plan[:5], 1):
+                    lines.append(f"  {i}. [{fp.priority}] {fp.root_cause}: {fp.fix_hint}")
+                    if fp.investigate_task:
+                        lines.append(f"     >> agent-xray surface {fp.investigate_task} {log_dir}")
+            _emit("\n".join(lines), args, final=True)
+        return 0
+
+    return _run_command(args, _action)
+
+
 def cmd_grade(args: argparse.Namespace) -> int:
     def _action() -> int:
         tasks = _load_tasks_with_format(
@@ -2598,6 +2679,20 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # triage — the recommended entry point
+    p_triage = _add_subparser(
+        sub,
+        "triage",
+        help_text="START HERE — grade + worst failure + fix plan in one call",
+        example="agent-xray triage logs/structured/ --json",
+    )
+    p_triage.add_argument("log_dir", help="Directory or .jsonl file containing agent traces")
+    p_triage.add_argument("--days", type=int, help="Include only the N most recent days of traces")
+    _add_format_option(p_triage)
+    _add_filter_options(p_triage)
+    p_triage.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_triage.set_defaults(func=cmd_triage)
 
     p_analyze = _add_subparser(
         sub,
