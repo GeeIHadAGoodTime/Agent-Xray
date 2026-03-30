@@ -85,6 +85,7 @@ MCP_TOOLS = [
     "inspect_task",
     "signal_detect",
     "match_task",
+    "golden_capture",
 ]
 
 

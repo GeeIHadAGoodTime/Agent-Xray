@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.16.0 | Audit date: 2026-03-29
+Version: 1.18.0 | Audit date: 2026-03-30
 
 ---
 
@@ -90,7 +90,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 
 ## Complete Tool/Command Registry
 
-### MCP Tools (22 exposed via `mcp_server.py`)
+### MCP Tools (47 exposed via `mcp_server.py`)
 
 | MCP Tool | Maps To | Description |
 |----------|---------|-------------|
@@ -728,8 +728,8 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 ## Dark Abilities (CLI-only, Not in MCP)
 
-> **Status: Nearly all gaps CLOSED as of v1.15.0 (2026-03-29).**
-> 41 MCP tools total. 13 new MCP tools + 3 report types + filtering params added across two audit rounds.
+> **Status: Nearly all gaps CLOSED as of v1.18.0 (2026-03-30).**
+> 47 MCP tools total. 20 new MCP tools + 3 report types + filtering params added across four audit rounds.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 
@@ -758,6 +758,16 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 - `baseline generate` -- MCP tool `baseline_generate` added (naked prompt generation)
 - `task-bank show` -- MCP tool `task_bank_show` added (individual entry lookup)
 - `format detect` -- MCP tool `format_detect` added (auto-detect trace format with confidence)
+
+**Round 3 (v1.17.0):**
+- `triage` -- one-call investigation entry point (grade + worst failure + fix plan)
+- `inspect_task` -- comprehensive single-task report (grade + root cause + surface + reasoning)
+- `gaming_audit` -- run 9 gaming detectors on a diff
+- `pricing_update` -- fetch latest pricing from GitHub
+
+**Round 4 (v1.18.0, challenger audit):**
+- `signal_detect` -- run signal detectors on a single task, filter by detector name
+- `match_task` -- fuzzy-match a task to a task bank entry
 
 ---
 

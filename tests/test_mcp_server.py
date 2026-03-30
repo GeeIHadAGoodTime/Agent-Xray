@@ -59,6 +59,7 @@ MCP_TOOL_NAMES = [
     "inspect_task",
     "signal_detect",
     "match_task",
+    "golden_capture",
 ]
 
 BANNED_DOCSTRING_MARKERS = (

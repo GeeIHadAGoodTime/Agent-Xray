@@ -650,7 +650,7 @@ Supporting pieces:
 
 ## MCP Server Tools
 
-`src/agent_xray/mcp_server.py` exposes 28 tools:
+`src/agent_xray/mcp_server.py` exposes 48 tools:
 
 | MCP tool | What it returns |
 | --- | --- |
@@ -701,6 +701,7 @@ Supporting pieces:
 | `inspect_task` | comprehensive single-task report: grade + root cause + surface + reasoning in one call |
 | `signal_detect` | run signal detectors on a single task, optionally filtering to one detector by name |
 | `match_task` | fuzzy-match a task to the best task bank entry by user text, site, and category |
+| `golden_capture` | capture a golden exemplar task for future comparison and efficiency benchmarking |
 
 Run the MCP server over stdio with:
 
@@ -717,6 +718,26 @@ Additional modules that are part of the public surface:
 - `reports.py`: text, JSON, and Markdown renderers for every report type
 - `watch.py`: live-tail grading helpers and formatted tally output
 - `pricing.py`: pricing cache, alias resolution, and cost formatting
+
+## Pytest Plugin
+
+agent-xray ships a `pytest` plugin (registered via the `pytest11` entry point) that provides an `xray` fixture for grading agent traces inside test suites:
+
+```python
+def test_checkout_agent(xray):
+    steps = [{"step": 1, "tool_name": "navigate", "tool_result": "ok"}, ...]
+    report = xray.analyze(steps)
+    assert report.grade in ("GOLDEN", "GOOD")
+    assert report.error_rate < 0.1
+```
+
+The `XrayReport` returned by `xray.analyze()` includes `grade`, `score`, `reasons`, `root_cause`, `unique_tools`, and `error_rate`.
+
+Pass `--xray-rules <path>` to use custom grading rules:
+
+```bash
+pytest --xray-rules my_rules.json tests/
+```
 
 ## Evaluation Drift Detection
 

@@ -1648,6 +1648,36 @@ def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
 
 
 @server.tool()
+def golden_capture(
+    log_dir: str,
+    task_id: str,
+    output: str | None = None,
+    optimize: str = "balanced",
+    format: str = "auto",
+) -> str:
+    """Capture a golden exemplar task for future comparison and efficiency benchmarking."""
+    try:
+        from pathlib import Path
+        from agent_xray.golden import capture_exemplar
+        from agent_xray.grader import load_rules
+
+        tasks = _load_tasks(log_dir, format)
+        task = _resolve_task(tasks, task_id)
+        rules = load_rules()
+        result = capture_exemplar(task, rules=rules, optimize=optimize)
+        if output:
+            out = Path(output)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+
+            out.write_text(_json.dumps(_serialize(result), indent=2), encoding="utf-8")
+            return _compact_json({"saved_to": str(out), "exemplar": _serialize(result)})
+        return _compact_json({"exemplar": _serialize(result)})
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
 def signal_detect(log_dir: str, task_id: str, detector: str | None = None, format: str = "auto") -> str:
     """Run signal detectors on a single task, optionally filtering to one detector by name."""
     try:
