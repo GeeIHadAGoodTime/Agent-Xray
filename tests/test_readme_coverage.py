@@ -86,6 +86,7 @@ MCP_TOOLS = [
     "signal_detect",
     "match_task",
     "golden_capture",
+    "preflight_diff",
 ]
 
 
@@ -358,6 +359,10 @@ _IMPLICITLY_DOCUMENTED = {
     "format_enforce_json",
     "format_enforce_markdown",
     "generate_report",
+    # Sub-features of enforce preflight-diff (documented via preflight_diff tool)
+    "load_project_rules",
+    "check_against_rules",
+    "format_rules_violations",
 }
 
 

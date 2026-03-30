@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.23.0 | Audit date: 2026-03-30
+Version: 1.25.0 | Audit date: 2026-03-30
 
 ---
 
@@ -142,6 +142,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 | `enforce_challenge` | `enforce.EnforceSession.challenge` | Cross-iteration challenge analysis |
 | `enforce_reset` | `enforce.EnforceSession.reset` | Reset enforce session |
 | `enforce_report` | `enforce_report.generate_report` | Generate enforce session report |
+| `preflight_diff` | `enforce_report.check_against_rules` | Check git diff against project guardrails before enforce |
 
 ### CLI Subcommands (30+)
 
@@ -171,6 +172,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 | `agent-xray enforce challenge` | Yes (`enforce_challenge`) | Cross-iteration challenge |
 | `agent-xray enforce reset` | Yes (`enforce_reset`) | Reset session |
 | `agent-xray enforce report` | Yes (`enforce_report`) | Generate session report |
+| `agent-xray enforce preflight-diff` | Yes (`preflight_diff`) | Check diff against project guardrails |
 | `agent-xray enforce auto` | **NO** | **Autonomous enforce loop** (--agent-cmd) |
 | `agent-xray tui <dir>` | **NO** | Interactive TUI inspector |
 | `agent-xray watch <file>` | **NO** | Live tail JSONL with real-time grading |

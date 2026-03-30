@@ -469,6 +469,42 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
 
 
 @server.tool()
+def preflight_diff(rules_file: str, project_root: str = ".") -> str:
+    """Check the current git diff against project guardrails BEFORE spending an enforce iteration — catches forbidden patterns, banned imports, and custom regex rules."""
+    try:
+        import subprocess
+
+        from agent_xray.enforce_report import (
+            check_against_rules,
+            load_project_rules,
+        )
+
+        rules = load_project_rules(rules_file)
+        if not rules:
+            return _json_response({"error": f"No rules found in {rules_file}"})
+
+        result = subprocess.run(
+            ["git", "diff", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
+        diff = result.stdout
+        if not diff:
+            return _json_response({"violations": [], "status": "clean", "hint": "No staged/unstaged changes to check."})
+
+        violations = check_against_rules(diff, rules)
+        return _compact_json({
+            "violations": violations,
+            "count": len(violations),
+            "status": "FAIL" if violations else "PASS",
+            "hint": "Fix violations before running enforce_check." if violations else "Diff passes all project rules.",
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
 def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None) -> str:
     """Analyze agent traces to get grade distribution, root causes, and a fix plan (filterable by days/site)."""
     try:
@@ -641,12 +677,26 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
         surface = run_surface(task)
 
         if task_bank:
-            from agent_xray.contrib.task_bank import load_task_bank, match_task_to_bank
+            from agent_xray.analyzer import analyze_task
+            from agent_xray.contrib.task_bank import (
+                evaluate_task_criteria,
+                load_task_bank,
+                match_task_to_bank,
+            )
 
             bank = load_task_bank(task_bank)
-            matched = match_task_to_bank(task, bank)
+            analysis = analyze_task(task)
+            matched = match_task_to_bank(task, bank, analysis=analysis)
             if matched:
-                surface["task_bank_entry"] = _serialize(matched)
+                criteria = matched.get("success_criteria", {})
+                criterion_lines = evaluate_task_criteria(task, analysis, criteria)
+                surface["task_bank_match"] = {
+                    "id": matched.get("id", "unknown"),
+                    "category": matched.get("category", ""),
+                    "expected_user_text": matched.get("user_text", ""),
+                    "difficulty": matched.get("difficulty", ""),
+                    "criteria_results": criterion_lines,
+                }
 
         # MCP: strip duplicate prompt fields and quadratic conversation_history
         metadata = surface.get("metadata", {})
@@ -810,6 +860,7 @@ def report(
     day2: str | None = None,
     days: int | None = None,
     site: str | None = None,
+    min_steps: int = 0,
 ) -> str:
     """Generate a focused report (16 types including overhead, prompt-impact, compare); overhead needs baseline_dir, compare needs day1+day2."""
     try:
@@ -901,7 +952,7 @@ def report(
 
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
-            "golden": lambda: report_golden_data(tasks, grades, analyses),
+            "golden": lambda: report_golden_data(tasks, grades, analyses, min_steps=min_steps),
             "broken": lambda: report_broken_data(tasks, grades, analyses),
             "tools": lambda: report_tools_data(tasks, analyses),
             "flows": lambda: report_flows_data(tasks, analyses),

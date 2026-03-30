@@ -1422,10 +1422,11 @@ def cmd_report(args: argparse.Namespace) -> int:
             return 0
 
         bucket_minutes = _parse_bucket_arg(getattr(args, "bucket", "1h"))
+        min_steps = getattr(args, "min_steps", 0)
 
         text_funcs = {
             "health": lambda: report_health(tasks, grades, analyses),
-            "golden": lambda: report_golden(tasks, grades, analyses),
+            "golden": lambda: report_golden(tasks, grades, analyses, min_steps=min_steps),
             "broken": lambda: report_broken(tasks, grades, analyses),
             "tools": lambda: report_tools(tasks, analyses),
             "flows": lambda: report_flows(tasks, analyses),
@@ -1445,7 +1446,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         }
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
-            "golden": lambda: report_golden_data(tasks, grades, analyses),
+            "golden": lambda: report_golden_data(tasks, grades, analyses, min_steps=min_steps),
             "broken": lambda: report_broken_data(tasks, grades, analyses),
             "tools": lambda: report_tools_data(tasks, analyses),
             "flows": lambda: report_flows_data(tasks, analyses),
@@ -1465,7 +1466,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         }
         markdown_funcs: dict[str, Any] = {
             "health": lambda: report_health_markdown(tasks, grades, analyses),
-            "golden": lambda: report_golden_markdown(tasks, grades, analyses),
+            "golden": lambda: report_golden_markdown(tasks, grades, analyses, min_steps=min_steps),
             "broken": lambda: report_broken_markdown(tasks, grades, analyses),
             "tools": lambda: report_tools_markdown(tasks, analyses),
             "flows": lambda: report_flows_markdown(tasks, analyses),
@@ -2471,6 +2472,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 max_files_per_change=getattr(args, "max_files_per_change", 5),
                 max_diff_lines=getattr(args, "max_diff_lines", 200),
                 rules_file=getattr(args, "rules_file", None),
+                scope=getattr(args, "scope", None),
             )
             baseline, sd = enforce_init(config)
             if use_json:
@@ -2639,8 +2641,44 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 _emit("\n".join(lines), args, final=True)
             return 0
 
+        if subcmd == "preflight-diff":
+            from .enforce_report import (
+                check_against_rules,
+                format_rules_violations,
+                load_project_rules,
+            )
+
+            rules_path = getattr(args, "rules_file", None)
+            if not rules_path:
+                _emit("Error: --rules-file is required for preflight-diff", args, final=True)
+                return 1
+            project_root = getattr(args, "project_root", None) or "."
+            rules = load_project_rules(rules_path)
+            if not rules:
+                _emit(f"No rules found in {rules_path}", args, final=True)
+                return 1
+            import subprocess
+
+            result = subprocess.run(
+                ["git", "diff", "HEAD"],
+                capture_output=True,
+                text=True,
+                cwd=project_root,
+            )
+            diff = result.stdout
+            if not diff:
+                _emit("No changes to check.", args, final=True)
+                return 0
+            violations = check_against_rules(diff, rules)
+            ui = _settings(args)
+            if use_json:
+                _dump({"violations": violations, "count": len(violations), "status": "FAIL" if violations else "PASS"})
+            else:
+                _emit(format_rules_violations(violations, color=ui.color), args, final=True)
+            return 1 if violations else 0
+
         _emit(
-            "Usage: agent-xray enforce {init,check,status,challenge,report,reset,auto,plan,guard}",
+            "Usage: agent-xray enforce {init,check,status,challenge,report,reset,auto,plan,guard,preflight-diff}",
             args,
             final=True,
         )
@@ -2966,6 +3004,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_report.add_argument("--json", action="store_true", help="Output results as JSON")
     p_report.add_argument("--markdown", action="store_true", help="Output results as Markdown")
+    p_report.add_argument(
+        "--min-steps",
+        type=int,
+        default=0,
+        help="Minimum step count to include a task in the golden report (default: 0)",
+    )
     p_report.set_defaults(func=cmd_report)
 
     p_completeness = _add_subparser(
@@ -3416,6 +3460,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--stash-first", action="store_true",
         help="Temporarily stash unrelated uncommitted work before capturing the baseline",
     )
+    p_enf_init.add_argument(
+        "--scope", nargs="+", default=None,
+        help="Limit enforcement to specific files (e.g. --scope src/foo.py src/bar.py)",
+    )
     p_enf_init.add_argument("--json", action="store_true", help="Output as JSON")
     p_enf_init.set_defaults(func=cmd_enforce)
 
@@ -3622,6 +3670,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--rules-file",
         help="Path to project-specific guardrails checked on every iteration",
     )
+
+    # Preflight diff against project guardrails
+    p_enf_preflight = enforce_sub.add_parser(
+        "preflight-diff", help="Check current diff against project guardrails before an enforce iteration"
+    )
+    p_enf_preflight.description = (
+        "Run the rules-file linter against git diff HEAD to catch violations early. "
+        "Returns exit code 1 if violations are found."
+    )
+    p_enf_preflight.add_argument(
+        "--rules-file", required=True,
+        help="Path to project-specific guardrails JSON file",
+    )
+    p_enf_preflight.add_argument(
+        "--project-root", default=".",
+        help="Project root for git operations (default: .)",
+    )
+    p_enf_preflight.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_preflight.set_defaults(func=cmd_enforce)
 
     # Default: show help when no sub-subcommand given
     p_enforce.set_defaults(func=cmd_enforce)

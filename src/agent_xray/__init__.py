@@ -106,10 +106,13 @@ from .enforce_audit import (
     quality_distribution,
 )
 from .enforce_report import (
+    check_against_rules,
     format_enforce_json,
     format_enforce_markdown,
     format_enforce_text,
+    format_rules_violations,
     generate_report,
+    load_project_rules,
 )
 try:
     from .mcp_server import main as mcp_main
@@ -272,8 +275,11 @@ __all__ = [
     "format_enforce_json",
     "format_enforce_markdown",
     "generate_report",
+    "load_project_rules",
+    "check_against_rules",
+    "format_rules_violations",
     "mcp_server",
     "mcp_main",
 ]
 
-__version__ = "1.24.0"
+__version__ = "1.25.0"

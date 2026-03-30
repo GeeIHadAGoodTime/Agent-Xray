@@ -379,6 +379,8 @@ def report_golden_data(
     tasks: list[AgentTask],
     grades: list[GradeResult],
     analyses: dict[str, TaskAnalysis],
+    *,
+    min_steps: int = 0,
 ) -> dict[str, Any]:
     """Return structured data for GOLDEN and GOOD runs.
 
@@ -386,11 +388,12 @@ def report_golden_data(
         tasks: Loaded tasks included in the report window.
         grades: Grade results aligned to ``tasks``.
         analyses: Task analyses keyed by task id.
+        min_steps: Minimum step count required to include a task.
 
     Returns:
         A dictionary containing ranked high-quality task entries.
     """
-    items = _golden_items(tasks, grades, analyses)
+    items = _golden_items(tasks, grades, analyses, min_steps=min_steps)
     return {"count": len(items), "tasks": items}
 
 
