@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from .analyzer import analyze_task, resolve_task
 from .schema import AgentStep, AgentTask
 from .signals.commerce import CommerceDetector
+from .text_utils import tool_result_text
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
@@ -92,7 +93,7 @@ def detect_milestone(step: AgentStep) -> str | None:
 
 
 def extract_expected_content(step: AgentStep) -> list[str]:
-    result = (step.tool_result or "").lower()
+    result = tool_result_text(step.tool_result).lower()
     expected: list[str] = []
     for keyword in (
         "card number",

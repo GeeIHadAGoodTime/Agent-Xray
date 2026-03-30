@@ -10,6 +10,7 @@ from .diagnose import build_fix_plan
 from .grader import GradeResult
 from .root_cause import ROOT_CAUSES, ClassificationConfig, classify_failures
 from .schema import AgentTask
+from .text_utils import tool_result_text
 
 GRADE_LABELS = ["GOLDEN", "GOOD", "OK", "WEAK", "BROKEN"]
 
@@ -89,7 +90,7 @@ def _task_has_tool_keyword(task: AgentTask, *keywords: str) -> bool:
 
 def _task_has_result_keyword(task: AgentTask, *keywords: str) -> bool:
     for step in task.sorted_steps:
-        text = f"{step.tool_result or ''} {step.error or ''}".lower()
+        text = f"{tool_result_text(step.tool_result)} {step.error or ''}".lower()
         if any(keyword in text for keyword in keywords):
             return True
     return False
@@ -2509,7 +2510,7 @@ def _detect_spin_sequences(task: AgentTask) -> list[dict[str, Any]]:
                 s = steps[k]
                 if s.browser and s.browser.page_url:
                     page_urls.append(s.browser.page_url)
-                result_text = f"{s.tool_result or ''} {s.error or ''}".lower()
+                result_text = f"{tool_result_text(s.tool_result)} {s.error or ''}".lower()
                 if "not found" in result_text:
                     has_not_found = True
                 if any(marker in result_text for marker in (

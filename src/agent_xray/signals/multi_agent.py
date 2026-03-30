@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..schema import AgentStep, AgentTask
+from ..text_utils import tool_result_text
 
 
 class MultiAgentDetector:
@@ -136,7 +137,7 @@ class MultiAgentDetector:
     ) -> bool:
         step = task.sorted_steps[index]
         target = step_signals[index].get("delegation_target")
-        result = (step.tool_result or "").lower()
+        result = tool_result_text(step.tool_result).lower()
         if step.error:
             return False
         if isinstance(target, str) and target:

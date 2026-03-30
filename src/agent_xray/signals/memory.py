@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..schema import AgentStep, AgentTask
+from ..text_utils import tool_result_text
 
 
 class MemoryDetector:
@@ -141,7 +142,7 @@ class MemoryDetector:
     def _recall_hit(self, step: AgentStep) -> bool:
         if step.error:
             return False
-        result = (step.tool_result or "").strip().lower()
+        result = tool_result_text(step.tool_result).strip().lower()
         if not result:
             return False
         return not any(pattern in result for pattern in self.MISS_PATTERNS)

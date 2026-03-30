@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..schema import AgentStep, AgentTask
+from ..text_utils import tool_result_text
 
 
 class PlanningDetector:
@@ -119,7 +120,7 @@ class PlanningDetector:
             "finished",
         }:
             return True
-        result = (step.tool_result or "").lower()
+        result = tool_result_text(step.tool_result).lower()
         return any(pattern in result for pattern in self.COMPLETION_PATTERNS)
 
     def _iter_step_strings(self, step: AgentStep) -> Iterable[str]:

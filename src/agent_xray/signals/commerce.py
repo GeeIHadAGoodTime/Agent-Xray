@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..schema import AgentStep, AgentTask
+from ..text_utils import tool_result_text
 
 
 class CommerceDetector:
@@ -119,7 +120,7 @@ class CommerceDetector:
 
     def detect_step(self, step: AgentStep) -> dict[str, bool]:
         page_url = self._page_url(step)
-        result_lower = (step.tool_result or "")[:5000].lower()
+        result_lower = tool_result_text(step.tool_result)[:5000].lower()
         tool_input_text = json.dumps(step.tool_input, sort_keys=True).lower()
         combined_text = f"{tool_input_text} {result_lower}"
         combined_fill_text = (
