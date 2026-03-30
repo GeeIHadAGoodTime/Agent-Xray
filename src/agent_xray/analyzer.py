@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from .schema import AgentStep, AgentTask, TaskOutcome
 from .signals import SignalDetector, run_detection
+from .text_utils import tool_result_text
 
 ERROR_PATTERNS = [
     (
@@ -60,6 +61,8 @@ class TaskAnalysis:
         task_completed: Whether the task outcome indicates successful completion.
         error_kinds: Error counts bucketed by classifier label.
         soft_errors: Number of logical failures inferred from ``tool_result``.
+        inline_tool_errors: Number of hidden failures embedded inside
+            ``tool_result`` content while ``error`` stayed empty.
         soft_error_kinds: Soft-error counts bucketed by classifier label.
         total_cost_usd: Sum of per-step costs in US dollars.
         avg_cost_per_step: Average step cost in US dollars.
@@ -87,6 +90,7 @@ class TaskAnalysis:
     avg_cost_per_step: float
     signal_metrics: dict[str, dict[str, Any]]
     soft_errors: int = 0
+    inline_tool_errors: int = 0
     soft_error_kinds: dict[str, int] = field(default_factory=dict)
     # New metrics — defaults preserve backward compat with manual construction
     task_failed: bool = False
@@ -203,6 +207,7 @@ class TaskAnalysis:
             "site_name": self.site_name,
             "final_url": self.final_url,
             "soft_errors": self.soft_errors,
+            "inline_tool_errors": self.inline_tool_errors,
             "soft_error_kinds": dict(self.soft_error_kinds),
             "total_cost_usd": self.total_cost_usd,
             "avg_cost_per_step": self.avg_cost_per_step,
@@ -273,6 +278,7 @@ class TaskAnalysis:
             "task_completed": self.task_completed,
             "error_kinds": dict(self.error_kinds),
             "soft_errors": self.soft_errors,
+            "inline_tool_errors": self.inline_tool_errors,
             "soft_error_kinds": dict(self.soft_error_kinds),
             "total_cost_usd": self.total_cost_usd,
             "avg_cost_per_step": self.avg_cost_per_step,
@@ -371,6 +377,7 @@ class TaskAnalysis:
             task_completed=_bool(payload.get("task_completed")),
             error_kinds=_counts(payload.get("error_kinds")),
             soft_errors=_int(payload.get("soft_errors")),
+            inline_tool_errors=_int(payload.get("inline_tool_errors")),
             soft_error_kinds=_counts(payload.get("soft_error_kinds")),
             total_cost_usd=_float(payload.get("total_cost_usd")),
             avg_cost_per_step=_float(payload.get("avg_cost_per_step")),
@@ -504,19 +511,25 @@ _FINAL_ANSWER_FAILURE_PATTERN = re.compile(
     r"\b(?:" + "|".join(re.escape(kw) for kw in _FINAL_ANSWER_FAILURE_KEYWORDS) + r")\b",
     re.IGNORECASE,
 )
+_INLINE_TOOL_ERROR_PATTERN = re.compile(r"\berror:", re.IGNORECASE)
 
 
-def classify_soft_error(tool_result: str | None) -> str:
+def classify_soft_error(tool_result: Any) -> str:
     """Classify logical failures in tool_result content (no error field set).
 
     Returns a soft-error category or empty string.
     """
-    if not tool_result:
+    normalized_tool_result = tool_result_text(tool_result)
+    if not normalized_tool_result:
         return ""
     for pattern, name in _SOFT_ERROR_PATTERNS:
-        if pattern.search(tool_result):
+        if pattern.search(normalized_tool_result):
             return name
     return ""
+
+
+def has_inline_tool_error(tool_result: Any) -> bool:
+    return bool(_INLINE_TOOL_ERROR_PATTERN.search(tool_result_text(tool_result)))
 
 
 def final_answer_indicates_failure(final_answer: str | None) -> bool:
@@ -540,10 +553,18 @@ def final_answer_failure_keywords(final_answer: str | None) -> list[str]:
 
 
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
-    text = (step.error or step.tool_result or "").replace("\r", " ").replace("\n", " ").strip()
+    text = tool_result_text(step.error or step.tool_result).replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _normalize_step_result_fields(task: AgentTask) -> None:
+    for step in task.steps:
+        if step.tool_result is not None and not isinstance(step.tool_result, str):
+            step.tool_result = tool_result_text(step.tool_result)
+        if step.error is not None and not isinstance(step.error, str):
+            step.error = tool_result_text(step.error)
 
 
 def _unique_urls(task: AgentTask) -> list[str]:
@@ -632,6 +653,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
     errors = 0
     error_kinds: Counter[str] = Counter()
     soft_error_kinds: Counter[str] = Counter()
+    inline_tool_errors = 0
     no_tools_steps = 0
     hallucinated_tools = 0
     total_cost = 0.0
@@ -655,6 +677,8 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
             if error_kind == "unknown_tool":
                 hallucinated_tools += 1
         else:
+            if has_inline_tool_error(step.tool_result):
+                inline_tool_errors += 1
             soft_kind = classify_soft_error(step.tool_result)
             if soft_kind:
                 soft_error_kinds[soft_kind] += 1
@@ -808,6 +832,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         ),
         "error_kinds": dict(error_kinds),
         "soft_errors": sum(soft_error_kinds.values()),
+        "inline_tool_errors": inline_tool_errors,
         "soft_error_kinds": dict(soft_error_kinds),
         "total_cost_usd": float(total_cost),
         "avg_cost_per_step": (float(total_cost) / len(task.steps)) if task.steps else 0.0,
@@ -855,6 +880,7 @@ def analyze_task(
         >>> analysis.metrics()["step_count"]
         4
     """
+    _normalize_step_result_fields(task)
     core = _compute_core_metrics(task, pricing_data)
     signal_metrics = run_detection(task, detectors)
     return TaskAnalysis(task=task, signal_metrics=signal_metrics, **core)

@@ -81,6 +81,13 @@
       "reason": "-1 at least one step had zero tools available"
     },
     {
+      "name": "inline_error_penalty",
+      "metric": "inline_tool_errors",
+      "gte": 1,
+      "points": -2,
+      "reason": "-2 tool returned error inside result data ({actual} inline errors)"
+    },
+    {
       "name": "suspicious_short_penalty",
       "metric": "suspicious_short_flag",
       "equals": true,

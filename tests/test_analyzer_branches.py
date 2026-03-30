@@ -11,8 +11,10 @@ from agent_xray.analyzer import (
     extract_site_from_urlish,
     extract_site_name,
     final_answer_indicates_failure,
+    has_inline_tool_error,
     site_from_host,
 )
+from agent_xray.grader import grade_task, load_rules
 from agent_xray.schema import AgentStep, AgentTask, TaskOutcome
 
 
@@ -254,6 +256,43 @@ def test_soft_errors_not_double_counted() -> None:
     analysis = analyze_task(task)
     assert analysis.soft_errors == 0
     assert analysis.soft_error_kinds == {}
+
+
+def test_has_inline_tool_error_matches_string_and_dict_payloads() -> None:
+    assert has_inline_tool_error("Error: request failed") is True
+    assert has_inline_tool_error({"data": "tool said error: upstream refused"}) is True
+    assert has_inline_tool_error({"data": "all good"}) is False
+
+
+def test_inline_tool_errors_counted_in_metrics_without_error_field() -> None:
+    task = _task(
+        _step(1, "browser_click", tool_result="Error: element no longer attached"),
+        _step(2, "browser_click"),
+        _step(3, "browser_click", tool_result="Error: should not count", error="timeout"),
+    )
+    task.steps[1].tool_result = {"data": "tool output says error: access denied"}
+    analysis = analyze_task(task)
+    assert analysis.inline_tool_errors == 2
+    assert analysis.metrics()["inline_tool_errors"] == 2
+
+
+def test_task_analysis_round_trip_preserves_inline_tool_errors() -> None:
+    task = _task(_step(1, "browser_click", tool_result="Error: hidden failure"))
+    analysis = analyze_task(task)
+    restored = type(analysis).from_dict(analysis.to_dict())
+    assert restored.inline_tool_errors == 1
+
+
+def test_default_rules_apply_inline_error_penalty() -> None:
+    task = _task(_step(1, "browser_click", tool_result="Error: hidden failure"))
+    task.outcome = TaskOutcome(task_id=task.task_id, status="completed", final_answer="Done")
+    result = grade_task(task, load_rules("default"))
+    signal = next((s for s in result.signals if s.name == "inline_error_penalty"), None)
+    assert signal is not None
+    assert signal.passed is True
+    assert signal.points == -2
+    assert signal.actual == 1
+    assert any("inline errors" in reason for reason in result.reasons)
 
 
 def test_final_answer_failure_classifier_matches_explicit_failure_language() -> None:
