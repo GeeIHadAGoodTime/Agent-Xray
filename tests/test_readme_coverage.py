@@ -79,6 +79,7 @@ MCP_TOOLS = [
     "baseline_generate",
     "task_bank_show",
     "format_detect",
+    "triage",
 ]
 
 

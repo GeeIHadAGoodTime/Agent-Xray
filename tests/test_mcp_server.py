@@ -53,6 +53,7 @@ MCP_TOOL_NAMES = [
     "baseline_generate",
     "task_bank_show",
     "format_detect",
+    "triage",
 ]
 
 BANNED_DOCSTRING_MARKERS = (

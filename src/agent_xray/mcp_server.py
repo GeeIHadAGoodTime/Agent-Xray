@@ -207,6 +207,92 @@ def _resolve_task(tasks: list[Any], task_id: str) -> Any:
 
 
 @server.tool()
+def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None) -> str:
+    """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan."""
+    try:
+        from agent_xray.analyzer import analyze_task
+        from agent_xray.diagnose import build_fix_plan
+        from agent_xray.grader import grade_tasks, load_rules
+        from agent_xray.root_cause import classify_failures
+        from agent_xray.surface import surface_for_task
+
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
+        if not tasks:
+            return _json_response({"error": "No tasks found", "hint": "Check log_dir path and days filter"})
+
+        rules = load_rules()
+        grades = grade_tasks(tasks, rules)
+
+        # Grade distribution
+        dist: dict[str, int] = {}
+        for g in grades:
+            dist[g.grade] = dist.get(g.grade, 0) + 1
+
+        # Find the single worst task
+        sorted_grades = sorted(grades, key=lambda g: g.score)
+        worst = sorted_grades[0] if sorted_grades else None
+        task_map = {t.task_id: t for t in tasks}
+
+        # Root causes from failures
+        failure_grades = [g for g in grades if g.grade in ("BROKEN", "WEAK")]
+        rc_results = classify_failures(
+            [task_map[g.task_id] for g in failure_grades if g.task_id in task_map],
+            failure_grades,
+        ) if failure_grades else []
+
+        # Fix plan
+        fix_plan = build_fix_plan(rc_results) if rc_results else []
+
+        # Surface the worst task (compact)
+        worst_surface = None
+        if worst and worst.task_id in task_map:
+            surface = surface_for_task(task_map[worst.task_id])
+            steps = surface.get("steps", [])
+            # Ultra-compact: just tool sequence + errors
+            compact_steps = []
+            for s in steps:
+                entry: dict[str, Any] = {"tool": s.get("tool_name", ""), "step": s.get("step", 0)}
+                if s.get("error"):
+                    entry["error"] = str(s["error"])[:200]
+                result = s.get("tool_result", "")
+                if isinstance(result, str) and len(result) > 100:
+                    entry["result_preview"] = result[:100] + "..."
+                elif result:
+                    entry["result_preview"] = str(result)[:100]
+                compact_steps.append(entry)
+            worst_surface = {
+                "task_id": worst.task_id,
+                "grade": worst.grade,
+                "score": worst.score,
+                "user_text": (task_map[worst.task_id].task_text or "")[:120],
+                "steps": compact_steps,
+            }
+
+        payload: dict[str, Any] = {
+            "summary": {
+                "tasks": len(tasks),
+                "grade_distribution": dist,
+                "broken_count": dist.get("BROKEN", 0),
+                "golden_count": dist.get("GOLDEN", 0),
+            },
+            "worst_task": worst_surface,
+            "fix_plan": [
+                {"root_cause": fp.root_cause, "priority": fp.priority, "targets": fp.targets, "hint": fp.fix_hint, "task_id": fp.investigate_task}
+                for fp in fix_plan[:5]
+            ] if fix_plan else [],
+            "next": {
+                "deep_dive": f"surface_task(log_dir, '{worst.task_id}')" if worst else None,
+                "reasoning": f"reasoning(log_dir, '{worst.task_id}')" if worst else None,
+                "compare_good_vs_bad": "diff_tasks(log_dir, good_task_id, bad_task_id)" if len(tasks) > 1 else None,
+                "after_fix": "re-run triage() to verify improvement",
+            },
+        }
+        return _compact_json(payload)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
 def enforce_init(
     test_command: str,
     project_root: str = ".",

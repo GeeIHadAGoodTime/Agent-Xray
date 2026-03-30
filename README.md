@@ -695,6 +695,7 @@ Supporting pieces:
 | `baseline_generate` | generates a naked prompt (system message only) for baseline comparison |
 | `task_bank_show` | shows a single task bank entry by ID or prefix match |
 | `format_detect` | auto-detects the trace format of a log file with confidence score |
+| `triage` | **START HERE** — one-call investigation: grades, surfaces worst failure, returns fix plan |
 
 Run the MCP server over stdio with:
 
