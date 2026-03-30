@@ -529,3 +529,496 @@ def test_analyze_description_stays_purpose_focused() -> None:
     assert doc is not None
     assert "Analyze agent traces" in doc
     assert "Start here" not in doc
+
+
+def _make_step(
+    task_id: str,
+    step: int,
+    tool_name: str,
+    *,
+    tool_input: dict[str, object] | None = None,
+    tool_result: str | None = None,
+    error: str | None = None,
+    page_url: str | None = None,
+    llm_reasoning: str | None = None,
+    timestamp: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "task_id": task_id,
+        "step": step,
+        "tool_name": tool_name,
+        "tool_input": tool_input or {},
+        "timestamp": timestamp or f"2026-03-30T12:{step:02d}:00Z",
+    }
+    if tool_result is not None:
+        payload["tool_result"] = tool_result
+    if error is not None:
+        payload["error"] = error
+    if page_url is not None:
+        payload["page_url"] = page_url
+    if llm_reasoning is not None:
+        payload["llm_reasoning"] = llm_reasoning
+    return payload
+
+
+def _make_task(
+    task_id: str,
+    task_text: str,
+    steps: list[dict[str, object]],
+    *,
+    task_category: str,
+    status: str,
+    final_answer: str | None,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for index, step in enumerate(steps):
+        payload = dict(step)
+        if index == 0:
+            payload.setdefault("user_text", task_text)
+            payload.setdefault("task_category", task_category)
+        records.append(payload)
+    records.append(
+        {
+            "event": "task_complete",
+            "task_id": task_id,
+            "status": status,
+            "final_answer": final_answer,
+            "total_steps": len(steps),
+            "total_duration_s": round(len(steps) * 0.5, 2),
+            "timestamp": "2026-03-30T12:59:00Z",
+        }
+    )
+    return records
+
+
+def _write_log(log_dir: Path, tasks: list[list[dict[str, object]]]) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "trace_20260330.jsonl"
+    lines = [json.dumps(record, sort_keys=True) for task in tasks for record in task]
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+    return log_path
+
+
+def test_triage_returns_grade_distribution(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    good_steps = [
+        _make_step(
+            "checkout-task",
+            1,
+            "browser_navigate",
+            tool_input={"url": "https://shop.example.test/"},
+            tool_result="Homepage with wireless headset listing.",
+            page_url="https://shop.example.test/",
+            llm_reasoning="Open the storefront.",
+        ),
+        _make_step(
+            "checkout-task",
+            2,
+            "browser_click",
+            tool_input={"ref": "add-to-cart"},
+            tool_result="Added to cart. Your cart subtotal is $129.",
+            page_url="https://shop.example.test/cart",
+            llm_reasoning="Add the item to the cart.",
+        ),
+        _make_step(
+            "checkout-task",
+            3,
+            "browser_fill_ref",
+            tool_input={"ref": "shipping-form", "fields": ["address", "zip"], "text": "123 Main St zip 60601"},
+            tool_result="Shipping form accepted.",
+            page_url="https://shop.example.test/checkout",
+            llm_reasoning="Fill the shipping form.",
+        ),
+        _make_step(
+            "checkout-task",
+            4,
+            "browser_fill_ref",
+            tool_input={
+                "ref": "payment-form",
+                "fields": ["card number", "cvv", "expiration"],
+                "text": "4111 1111 1111 1111 123 12/29",
+            },
+            tool_result="card number cvv expir payment method confirmed",
+            page_url="https://shop.example.test/payment",
+            llm_reasoning="Enter the payment details.",
+        ),
+        _make_step(
+            "checkout-task",
+            5,
+            "browser_click",
+            tool_input={"ref": "place-order"},
+            tool_result="Order confirmation page loaded.",
+            page_url="https://shop.example.test/order/confirmation",
+            llm_reasoning="Submit the order.",
+        ),
+    ]
+    broken_steps = [
+        _make_step(
+            "broken-task",
+            1,
+            "browser_snapshot",
+            tool_result="Checkout spinner still visible.",
+            error="Timed out waiting for checkout.",
+            page_url="https://shop.example.test/checkout",
+            llm_reasoning="Check whether checkout recovered.",
+        ),
+        _make_step(
+            "broken-task",
+            2,
+            "browser_snapshot",
+            tool_result="Checkout spinner still visible.",
+            error="Timed out waiting for checkout.",
+            page_url="https://shop.example.test/checkout",
+            llm_reasoning="Retry the checkout snapshot.",
+        ),
+        _make_step(
+            "broken-task",
+            3,
+            "browser_snapshot",
+            tool_result="Checkout spinner still visible.",
+            error="Timed out waiting for checkout.",
+            page_url="https://shop.example.test/checkout",
+            llm_reasoning="The flow still appears stuck.",
+        ),
+    ]
+    log_dir = tmp_path / "triage-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                good_steps,
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            ),
+            _make_task(
+                "broken-task",
+                "Recover the stuck checkout flow on shop.example.test.",
+                broken_steps,
+                task_category="commerce",
+                status="failed",
+                final_answer=None,
+            ),
+        ],
+    )
+
+    payload = json.loads(mcp_server.triage(str(log_dir)))
+
+    grades = payload.get("grades") or payload.get("summary", {}).get("grade_distribution")
+    worst_failure = payload.get("worst_failure") or payload.get("worst_task")
+    assert isinstance(grades, dict)
+    assert grades
+    assert worst_failure is not None
+    assert worst_failure["task_id"] == "broken-task"
+
+
+def test_inspect_task_returns_comprehensive_report(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "inspect-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "broken-task",
+                "Recover the stuck checkout flow on shop.example.test.",
+                [
+                    _make_step(
+                        "broken-task",
+                        1,
+                        "browser_snapshot",
+                        tool_result="Checkout spinner still visible.",
+                        error="Timed out waiting for checkout.",
+                        page_url="https://shop.example.test/checkout",
+                        llm_reasoning="Inspect the checkout page state.",
+                    ),
+                    _make_step(
+                        "broken-task",
+                        2,
+                        "browser_snapshot",
+                        tool_result="Checkout spinner still visible.",
+                        error="Timed out waiting for checkout.",
+                        page_url="https://shop.example.test/checkout",
+                        llm_reasoning="The task is still blocked at checkout.",
+                    ),
+                ],
+                task_category="commerce",
+                status="failed",
+                final_answer=None,
+            )
+        ],
+    )
+
+    payload = json.loads(mcp_server.inspect_task(str(log_dir), "broken-task"))
+
+    assert isinstance(payload["grade"], str)
+    assert payload["root_cause"] is not None
+    assert isinstance(payload["steps"], list)
+    assert payload["steps"]
+    assert isinstance(payload["reasoning_chain"], list)
+    assert payload["reasoning_chain"]
+
+
+def test_signal_detect_all_detectors(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "signal-all-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_navigate",
+                        tool_input={"url": "https://shop.example.test/"},
+                        tool_result="Homepage with wireless headset listing.",
+                        page_url="https://shop.example.test/",
+                        llm_reasoning="Open the storefront.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        2,
+                        "browser_click",
+                        tool_input={"ref": "add-to-cart"},
+                        tool_result="Added to cart. Your cart subtotal is $129.",
+                        page_url="https://shop.example.test/cart",
+                        llm_reasoning="Add the item to the cart.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        3,
+                        "browser_fill_ref",
+                        tool_input={"ref": "payment-form", "fields": ["card number", "cvv"], "text": "4111 1111 1111 1111 123"},
+                        tool_result="card number cvv payment method confirmed",
+                        page_url="https://shop.example.test/payment",
+                        llm_reasoning="Enter payment details.",
+                    ),
+                ],
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            )
+        ],
+    )
+
+    payload = json.loads(mcp_server.signal_detect(str(log_dir), "checkout-task"))
+
+    assert isinstance(payload["detectors_run"], list)
+    assert payload["detectors_run"]
+    assert "commerce" in payload["detectors_run"]
+    assert set(payload["detectors_run"]) == set(payload["signals"])
+
+
+def test_signal_detect_single_detector(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "signal-one-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_fill_ref",
+                        tool_input={"ref": "payment-form", "fields": ["card number", "cvv"], "text": "4111 1111 1111 1111 123"},
+                        tool_result="card number cvv payment method confirmed",
+                        page_url="https://shop.example.test/payment",
+                        llm_reasoning="Enter payment details.",
+                    )
+                ],
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            )
+        ],
+    )
+
+    payload = json.loads(mcp_server.signal_detect(str(log_dir), "checkout-task", detector="commerce"))
+
+    assert payload["detectors_run"] == ["commerce"]
+    assert list(payload["signals"]) == ["commerce"]
+
+
+def test_signal_detect_unknown_detector(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "signal-error-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_snapshot",
+                        tool_result="Checkout page loaded.",
+                        page_url="https://shop.example.test/checkout",
+                        llm_reasoning="Inspect the checkout page.",
+                    )
+                ],
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            )
+        ],
+    )
+
+    payload = json.loads(mcp_server.signal_detect(str(log_dir), "checkout-task", detector="nonexistent"))
+
+    assert "error" in payload
+    assert "nonexistent" in payload["error"]
+
+
+def test_match_task_no_match(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "match-logs"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "research-task",
+                "Research agent observability best practices and summarize the findings.",
+                [
+                    _make_step(
+                        "research-task",
+                        1,
+                        "read_url",
+                        tool_input={"url": "https://docs.example.test/observability"},
+                        tool_result="Observability guide loaded.",
+                        page_url="https://docs.example.test/observability",
+                        llm_reasoning="Read the documentation first.",
+                    )
+                ],
+                task_category="research",
+                status="success",
+                final_answer="Summary delivered.",
+            )
+        ],
+    )
+    bank_path = tmp_path / "task-bank.json"
+    bank_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "test-1",
+                    "user_text": "buy shoes on amazon",
+                    "site": "amazon.com",
+                    "category": "commerce",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = json.loads(mcp_server.match_task(str(log_dir), "research-task", str(bank_path)))
+
+    assert payload["task_id"] == "research-task"
+    assert payload["match"] is None
+
+
+def test_golden_capture_returns_exemplar(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "golden-logs"
+    output_path = tmp_path / "fixtures" / "checkout-exemplar.json"
+    _write_log(
+        log_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_navigate",
+                        tool_input={"url": "https://shop.example.test/"},
+                        tool_result="Homepage with wireless headset listing.",
+                        page_url="https://shop.example.test/",
+                        llm_reasoning="Open the storefront.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        2,
+                        "browser_click",
+                        tool_input={"ref": "add-to-cart"},
+                        tool_result="Added to cart. Your cart subtotal is $129.",
+                        page_url="https://shop.example.test/cart",
+                        llm_reasoning="Add the item to the cart.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        3,
+                        "browser_fill_ref",
+                        tool_input={"ref": "shipping-form", "fields": ["address", "zip"], "text": "123 Main St zip 60601"},
+                        tool_result="Shipping form accepted.",
+                        page_url="https://shop.example.test/checkout",
+                        llm_reasoning="Fill the shipping form.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        4,
+                        "browser_fill_ref",
+                        tool_input={
+                            "ref": "payment-form",
+                            "fields": ["card number", "cvv", "expiration"],
+                            "text": "4111 1111 1111 1111 123 12/29",
+                        },
+                        tool_result="card number cvv expir payment method confirmed",
+                        page_url="https://shop.example.test/payment",
+                        llm_reasoning="Enter the payment details.",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        5,
+                        "browser_click",
+                        tool_input={"ref": "place-order"},
+                        tool_result="Order confirmation page loaded.",
+                        page_url="https://shop.example.test/order/confirmation",
+                        llm_reasoning="Submit the order.",
+                    ),
+                ],
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            )
+        ],
+    )
+
+    payload = json.loads(
+        mcp_server.golden_capture(str(log_dir), "checkout-task", output=str(output_path))
+    )
+
+    assert payload["saved_to"] == str(output_path)
+    assert "exemplar" in payload
+    assert payload["exemplar"]["task_id"] == "checkout-task"
+    assert payload["exemplar"]["site"]
+    assert payload["exemplar"]["step_sequence"]
+    assert "efficiency_metadata" in payload["exemplar"]
+
+
+def test_triage_empty_dir(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    log_dir = tmp_path / "empty-logs"
+    log_dir.mkdir()
+
+    payload = json.loads(mcp_server.triage(str(log_dir)))
+
+    assert isinstance(payload, dict)
+    assert payload["error"] == "No tasks found"

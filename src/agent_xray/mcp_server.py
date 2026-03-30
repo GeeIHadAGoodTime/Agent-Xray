@@ -1658,21 +1658,23 @@ def golden_capture(
     """Capture a golden exemplar task for future comparison and efficiency benchmarking."""
     try:
         from pathlib import Path
+
+        from agent_xray.analyzer import analyze_task
         from agent_xray.golden import capture_exemplar
         from agent_xray.grader import load_rules
 
         tasks = _load_tasks(log_dir, format)
         task = _resolve_task(tasks, task_id)
         rules = load_rules()
-        result = capture_exemplar(task, rules=rules, optimize=optimize)
+        site = analyze_task(task).site_name or None
+        exemplar_path = capture_exemplar(
+            tasks, rules=rules, site=site, optimize=optimize, output_path=output,
+        )
+        exemplar = json.loads(Path(exemplar_path).read_text(encoding="utf-8"))
+        payload: dict[str, Any] = {"exemplar": exemplar}
         if output:
-            out = Path(output)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            import json as _json
-
-            out.write_text(_json.dumps(_serialize(result), indent=2), encoding="utf-8")
-            return _compact_json({"saved_to": str(out), "exemplar": _serialize(result)})
-        return _compact_json({"exemplar": _serialize(result)})
+            payload["saved_to"] = str(exemplar_path)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
