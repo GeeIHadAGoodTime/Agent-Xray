@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.15.0 | Audit date: 2026-03-29
+Version: 1.16.0 | Audit date: 2026-03-29
 
 ---
 
@@ -799,14 +799,25 @@ Each `TaskBankEntry` can include a `test_command` -- a shell command that indepe
 
 ### Investigation Workflow (Recommended Order)
 
+**START HERE — one call to get the full picture:**
 ```
-1. completeness   -> Check data quality first. If critical gaps exist, fix logging before analyzing.
-2. grade          -> Grade all tasks with appropriate ruleset.
-3. report health  -> Get the big picture: grade distribution, incident rates.
-4. diagnose       -> Build fix plan from root causes.
-5. surface_task   -> Deep dive on the highest-priority task from the fix plan.
-6. reasoning      -> Read the model's reasoning chain for that task.
-7. root_cause     -> Get detailed root cause with evidence and confidence.
+triage(log_dir, days=1)  -> grades + worst failure surfaced + fix plan + next commands
+```
+
+**Then go deeper as needed:**
+```
+1. triage         -> START HERE. Grades all, surfaces worst, returns fix plan.
+2. surface_task   -> Deep dive on a specific task from the fix plan.
+3. reasoning      -> Read the model's reasoning chain for that task.
+4. diff_tasks     -> Compare a GOLDEN vs BROKEN task to spot divergence.
+5. root_cause     -> Get detailed root cause with evidence and confidence.
+6. diagnose       -> Build comprehensive fix plan from all root causes.
+7. compare_runs   -> After fixing, compare day-over-day improvement.
+```
+
+**Legacy flow (still works but triage replaces steps 1-4):**
+```
+completeness -> grade -> report health -> diagnose -> surface_task -> reasoning -> root_cause
 ```
 
 ### Quality Gate Workflow
