@@ -768,23 +768,50 @@ def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto
         right_hash = result.get("right", {}).get("metadata", {}).get("system_prompt_hash")
         same_prompt = left_hash and right_hash and left_hash == right_hash
 
+        # Progressive truncation for diff_tasks (same approach as surface_task)
+        for result_limit in (500, 200, 80, 0):
+            for side in ("left", "right"):
+                side_data = result.get(side, {})
+                metadata = side_data.get("metadata", {})
+                metadata.pop("system_prompt_text", None)
+                metadata.pop("system_context_components", None)
+                if same_prompt:
+                    side_data.pop("prompt_text", None)
+                for step in side_data.get("steps", []):
+                    step.pop("conversation_history", None)
+                    for key in ("tool_result", "result_summary"):
+                        val = step.get(key)
+                        if isinstance(val, str):
+                            if result_limit == 0:
+                                step[key] = f"[{len(val)} chars]"
+                            elif len(val) > result_limit:
+                                step[key] = val[:result_limit] + "..."
+                    if result_limit <= 200:
+                        tool_input = step.get("tool_input", {})
+                        if isinstance(tool_input, dict):
+                            for k, v in list(tool_input.items()):
+                                if isinstance(v, str) and len(v) > 200:
+                                    tool_input[k] = v[:200] + "..."
+
+            if same_prompt:
+                result["prompt_note"] = f"Both tasks share the same prompt (hash: {left_hash}). Prompt text omitted."
+
+            rendered = json.dumps(result, separators=(",", ":"))
+            if len(rendered) <= _MCP_MAX_CHARS:
+                return rendered
+
+        # Final fallback: compact step summaries only
         for side in ("left", "right"):
             side_data = result.get(side, {})
-            metadata = side_data.get("metadata", {})
-            metadata.pop("system_prompt_text", None)
-            metadata.pop("system_context_components", None)
-            if same_prompt:
-                side_data.pop("prompt_text", None)
+            compact = []
             for step in side_data.get("steps", []):
-                step.pop("conversation_history", None)
-                for key in ("tool_result", "result_summary"):
-                    val = step.get(key)
-                    if isinstance(val, str) and len(val) > 500:
-                        step[key] = val[:500] + "..."
-
-        if same_prompt:
-            result["prompt_note"] = f"Both tasks share the same prompt (hash: {left_hash}). Prompt text omitted."
-
+                compact.append({
+                    "tool": step.get("tool_name", "?"),
+                    "error": step.get("error"),
+                    "duration_ms": step.get("duration_ms"),
+                })
+            side_data["steps"] = compact
+        result["truncation"] = "Progressive truncation applied. Use CLI for full diff."
         return _compact_json(result)
     except Exception as e:
         return _json_response({"error": str(e)})
