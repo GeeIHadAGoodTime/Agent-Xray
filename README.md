@@ -956,7 +956,7 @@ JSONL / framework trace files
   -> instrument/          OpenAI, Anthropic, LangChain, and MCP auto-instrumentation
   -> runner.py            TaskRunner protocol plus HTTP runner
   -> protocols.py         ToolRegistry / PromptBuilder / StepAdapter protocols
-  -> mcp_server.py        28 MCP tools for enforce, analysis, and investigation
+  -> mcp_server.py        48 MCP tools for enforce, analysis, and investigation
   -> enforce.py           controlled experiment loop (session, check, auto)
   -> enforce_audit.py     gaming detection and adversarial challenges
   -> enforce_report.py    enforce session reports (text, JSON, markdown)

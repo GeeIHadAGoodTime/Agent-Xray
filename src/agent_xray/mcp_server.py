@@ -188,6 +188,8 @@ def _load_tasks(
         outcome_lower = outcome.lower()
         tasks = [t for t in tasks if t.outcome is not None and outcome_lower in t.outcome.status.lower()]
     if grade_filter:
+        # Pre-filter using default rules. Callers may re-grade with a different
+        # ruleset — that's intentional (different rules can assign different grades).
         from agent_xray.grader import grade_tasks, load_rules
         rules = load_rules("default")
         graded = {g.task_id: g.grade for g in grade_tasks(tasks, rules)}
