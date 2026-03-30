@@ -985,9 +985,16 @@ def _change_reject_reason(
 ) -> str:
     """Return the size-based rejection reason, if any."""
     if len(files_modified) > config.max_files_per_change:
+        hint = "break into smaller iterations"
+        if len(files_modified) > config.max_files_per_change * 4:
+            hint = (
+                "this looks like a stash pop or merge — did something restore "
+                "unrelated changes? Revert them with 'git checkout .' or "
+                "'git stash' before retrying enforce_check"
+            )
         return (
             f"Change too large: {len(files_modified)} files exceeds limit of "
-            f"{config.max_files_per_change} -- break into smaller iterations"
+            f"{config.max_files_per_change} -- {hint}"
         )
     if diff_line_count > config.max_diff_lines:
         return (
@@ -1059,6 +1066,16 @@ def enforce_check(
     config, baseline, session_data = _load_session(project_root)
     iterations = _load_iterations(project_root)
     iteration_num = len(iterations) + 1
+
+    # Stash integrity check: if enforce_init stashed changes, verify they're still stashed
+    if session_data.get("stash_saved"):
+        stash_exit, stash_out = _run_shell("git stash list", project_root)
+        if stash_exit != 0 or not stash_out.strip():
+            raise RuntimeError(
+                "Stash integrity violation: enforce_init stashed uncommitted changes "
+                "but the stash is now empty. Something ran 'git stash pop' during the "
+                "enforce session. Run 'enforce_reset' and re-initialize."
+            )
 
     test_timeout = config.test_timeout
     if _run_tests_fn:

@@ -877,6 +877,12 @@ def analyze_tasks(
     }
 
 
+def _is_mock_task(payload: dict[str, Any]) -> bool:
+    """Detect tasks from unit test mocks (MagicMock model names, synthetic tools)."""
+    model = str(payload.get("model_name", ""))
+    return "MagicMock" in model
+
+
 def _extract_day(path: Path, payload: dict[str, Any]) -> str | None:
     if match := DATE_RE.search(path.stem):
         return match.group(1)
@@ -1076,6 +1082,8 @@ def load_tasks(
                     if payload.get("task_category") and not task.task_category:
                         task.task_category = str(payload["task_category"])
                     task.metadata.update(task.outcome.metadata)
+                    if _is_mock_task(payload):
+                        del tasks[task_id]
                     continue
                 if payload.get("tool_name"):
                     step = AgentStep.from_dict(payload)
