@@ -682,6 +682,15 @@ Supporting pieces:
 | `flywheel` | runs grading + root-cause + baseline comparison in one shot |
 | `capture_task` | captures a task as a sanitized fixture for replay and regression |
 | `pricing_show` | shows per-token pricing for a specific model |
+| `replay` | compares a saved golden fixture against current traces (IMPROVED/REGRESSION/STABLE) |
+| `validate_targets` | checks that fix-plan target file paths actually exist on disk |
+| `rules_list` | lists all available built-in rulesets with names and descriptions |
+| `rules_show` | shows a ruleset's full configuration (signals, thresholds, requirements) |
+| `rules_init` | generates a scaffold for a custom ruleset based on an existing one |
+| `baseline_capture` | captures a golden task's metrics as a baseline for overhead measurement |
+| `baseline_list` | lists all saved baselines in a directory with their metrics |
+| `golden_best` | finds the single best exemplar per site for baseline/fixture capture |
+| `golden_profiles` | shows available optimization profiles with weight distributions |
 
 Run the MCP server over stdio with:
 

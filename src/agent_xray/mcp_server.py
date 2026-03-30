@@ -38,6 +38,9 @@ _REPORT_TYPES = [
     "fixes",
     "timeline",
     "spins",
+    "overhead",
+    "prompt-impact",
+    "compare",
 ]
 
 
@@ -116,16 +119,33 @@ def _extract_site(task: Any) -> str:
     return "unknown"
 
 
-def _load_tasks(log_dir: str, format_name: str) -> list[Any]:
+def _load_tasks(
+    log_dir: str,
+    format_name: str,
+    *,
+    days: int | None = None,
+    site: str | None = None,
+    grade_filter: str | None = None,
+) -> list[Any]:
     from agent_xray.analyzer import load_adapted_tasks, load_tasks
 
     if format_name != "auto":
-        return load_adapted_tasks(log_dir, format=format_name)
+        tasks = load_adapted_tasks(log_dir, format=format_name)
+    else:
+        tasks = load_tasks(log_dir, days=days)
+        if not tasks:
+            tasks = load_adapted_tasks(log_dir, format="auto")
 
-    tasks = load_tasks(log_dir)
-    if tasks:
-        return tasks
-    return load_adapted_tasks(log_dir, format="auto")
+    if site:
+        site_lower = site.lower()
+        tasks = [t for t in tasks if site_lower in _extract_site(t).lower()]
+    if grade_filter:
+        from agent_xray.grader import grade_tasks, load_rules
+        rules = load_rules("default")
+        graded = {g.task_id: g.grade for g in grade_tasks(tasks, rules)}
+        grade_upper = grade_filter.upper()
+        tasks = [t for t in tasks if graded.get(t.task_id, "").upper() == grade_upper]
+    return tasks
 
 
 @server.tool()
@@ -280,13 +300,13 @@ def enforce_report(project_root: str = ".", format: str = "json") -> str:
 
 
 @server.tool()
-def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_bank: str | None = None) -> str:
-    """Analyze agent traces to get grade distribution, root causes, and a fix plan."""
+def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None) -> str:
+    """Analyze agent traces to get grade distribution, root causes, and a fix plan (filterable by days/site)."""
     try:
         from agent_xray.analyzer import analyze_task
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         rule_set = load_rules(rules) if rules else load_rules()
         if task_bank:
             from agent_xray.contrib.task_bank import grade_with_task_bank
@@ -331,12 +351,12 @@ def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_b
 
 
 @server.tool()
-def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
-    """Grade traces against a ruleset and return scored per-task details."""
+def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None) -> str:
+    """Grade traces against a ruleset and return scored per-task details (filterable by days/site)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -376,13 +396,13 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
 
 
 @server.tool()
-def root_cause(log_dir: str, rules: str = "default", format: str = "auto") -> str:
-    """Classify weak or broken tasks into root cause categories with per-task evidence. Use to understand WHY tasks fail before hypothesizing a fix."""
+def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None) -> str:
+    """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         failures = classify_failures(tasks, grades)
@@ -467,10 +487,10 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
 
 
 @server.tool()
-def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
-    """Search tasks by user_text substring to find specific task IDs for further inspection."""
+def search_tasks(log_dir: str, query: str, format: str = "auto", days: int | None = None, site: str | None = None) -> str:
+    """Search tasks by user_text substring to find specific task IDs for further inspection (filterable by days/site)."""
     try:
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         query_lower = query.lower()
         matches: list[dict[str, Any]] = []
         truncated = False
@@ -508,14 +528,14 @@ def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
 
 
 @server.tool()
-def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
-    """Classify failures and build a prioritized fix plan with investigation targets. Use to decide WHAT to fix before starting an enforce cycle."""
+def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None) -> str:
+    """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site)."""
     try:
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -565,8 +585,13 @@ def report(
     rules: str = "default",
     format: str = "auto",
     task_bank: str | None = None,
+    baseline_dir: str | None = None,
+    day1: str | None = None,
+    day2: str | None = None,
+    days: int | None = None,
+    site: str | None = None,
 ) -> str:
-    """Generate a focused report by type: health, golden, broken, tools, flows, outcomes, actions, coding, research, cost, fixes, timeline, or spins."""
+    """Generate a focused report (16 types including overhead, prompt-impact, compare); overhead needs baseline_dir, compare needs day1+day2."""
     try:
         from agent_xray.analyzer import analyze_tasks
         from agent_xray.grader import grade_tasks, load_rules
@@ -574,6 +599,7 @@ def report(
             report_actions_data,
             report_broken_data,
             report_coding_data,
+            report_compare_days_data,
             report_cost_data,
             report_fixes_data,
             report_flows_data,
@@ -589,10 +615,11 @@ def report(
         if report_type not in _REPORT_TYPES:
             return _json_response({"error": f"Unknown report_type: {report_type!r}. Choose from: {', '.join(_REPORT_TYPES)}"})
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         grades: list[Any] = []
         rule_name = rules
-        if report_type in _GRADE_DEPENDENT_REPORT_TYPES:
+        needs_grades = report_type in _GRADE_DEPENDENT_REPORT_TYPES or report_type in ("overhead", "prompt-impact", "compare")
+        if needs_grades:
             rule_set = load_rules(rules)
             rule_name = rule_set.name
             if task_bank:
@@ -602,6 +629,55 @@ def report(
                 grades = grade_tasks(tasks, rule_set)
 
         analyses = analyze_tasks(tasks)
+
+        # Handle overhead report (needs baselines)
+        if report_type == "overhead":
+            from agent_xray.baseline import (
+                group_by_prompt_hash,
+                load_baselines,
+                measure_all_overhead,
+                overhead_report_data,
+            )
+            if not baseline_dir:
+                return _json_response({"error": "overhead report requires baseline_dir parameter"})
+            baselines = load_baselines(baseline_dir)
+            if not baselines:
+                return _json_response({"error": f"No baselines found in {baseline_dir}"})
+            grade_map = {g.task_id: g.grade for g in grades} if grades else {}
+            results = measure_all_overhead(tasks, grade_map, baselines)
+            hash_groups = group_by_prompt_hash(tasks, analyses, grade_map, baselines)
+            return _compact_json({
+                "report_type": "overhead",
+                "tasks": len(tasks),
+                "rules": rule_name,
+                "data": overhead_report_data(results, hash_groups),
+            })
+
+        # Handle prompt-impact report
+        if report_type == "prompt-impact":
+            from agent_xray.baseline import (
+                group_by_prompt_hash,
+                prompt_impact_data,
+            )
+            grade_map = {g.task_id: g.grade for g in grades} if grades else {}
+            hash_groups = group_by_prompt_hash(tasks, analyses, grade_map)
+            return _compact_json({
+                "report_type": "prompt-impact",
+                "tasks": len(tasks),
+                "rules": rule_name,
+                "data": prompt_impact_data(hash_groups),
+            })
+
+        # Handle compare (day-over-day) report
+        if report_type == "compare":
+            if not day1 or not day2:
+                return _json_response({"error": "compare report requires day1 and day2 parameters (YYYYMMDD format)"})
+            return _compact_json({
+                "report_type": "compare",
+                "tasks": len(tasks),
+                "rules": rule_name,
+                "data": report_compare_days_data(tasks, grades, analyses, day1, day2),
+            })
 
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
@@ -692,13 +768,13 @@ def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
 
 
 @server.tool()
-def tree(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
-    """Bird's-eye view: day/site/task hierarchy with pass/fail counts. Use first to see which sites are failing before drilling into specific tasks."""
+def tree(log_dir: str, rules: str | None = None, format: str = "auto", days: int | None = None, site: str | None = None) -> str:
+    """Bird's-eye view: day/site/task hierarchy with pass/fail counts — see which sites are failing before drilling in (filterable by days/site)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.surface import enriched_tree_for_tasks
 
-        tasks = _load_tasks(log_dir, format)
+        tasks = _load_tasks(log_dir, format, days=days, site=site)
         if not tasks:
             return _json_response({"tree": {}, "task_count": 0})
 
@@ -907,7 +983,7 @@ def task_bank_list(path: str) -> str:
 
 @server.tool()
 def flywheel(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
-    """Full quality loop in one call: grade + root cause + baseline comparison."""
+    """Full quality loop in one call: grade + root cause + baseline comparison. Note: flywheel loads all tasks internally; use grade/diagnose with days/site for filtered analysis."""
     try:
         from agent_xray.flywheel import run_flywheel
 
@@ -954,6 +1030,226 @@ def pricing_show(model_name: str) -> str:
         return _json_response({
             "model": model_name,
             "pricing": formatted,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def replay(log_dir: str, fixture_path: str, format: str = "auto") -> str:
+    """Compare a saved golden fixture against current traces. Returns IMPROVED, REGRESSION, STABLE, or UNMATCHED verdict with milestone and step count comparison."""
+    try:
+        from agent_xray.replay import replay_fixture as run_replay
+
+        tasks = _load_tasks(log_dir, format)
+        result = run_replay(fixture_path, tasks)
+        return _compact_json(result)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def validate_targets(log_dir: str, project_root: str, rules: str = "default", format: str = "auto", resolver: str | None = None) -> str:
+    """Check that fix-plan target paths actually exist on disk. Catches stale file references in diagnose output."""
+    try:
+        from agent_xray.diagnose import (
+            build_fix_plan,
+            get_target_resolver,
+            validate_fix_targets,
+        )
+        from agent_xray.grader import grade_tasks, load_rules
+        from agent_xray.root_cause import classify_failures
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules)
+        grades = grade_tasks(tasks, rule_set)
+        failures = classify_failures(tasks, grades)
+        plan = build_fix_plan(failures, log_dir=log_dir)
+        validated = validate_fix_targets(plan, project_root)
+
+        stale = []
+        valid = 0
+        total = 0
+        for entry in validated:
+            for target in entry.targets:
+                total += 1
+                stale_markers = [e for e in entry.evidence if "STALE_TARGET" in e and target in e]
+                if stale_markers:
+                    stale.append({"root_cause": entry.root_cause, "target": target})
+                else:
+                    valid += 1
+
+        return _compact_json({
+            "project_root": project_root,
+            "total_targets": total,
+            "valid": valid,
+            "stale": len(stale),
+            "stale_targets": stale[:20],
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def rules_list() -> str:
+    """List all available built-in rulesets with names and descriptions. Use to discover what rulesets exist before grading."""
+    try:
+        from importlib.resources import files as pkg_files
+        from pathlib import Path
+
+        rules_dir = Path(str(pkg_files("agent_xray.rules")))
+        rulesets: list[dict[str, str]] = []
+        for path in sorted(rules_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                rulesets.append({
+                    "name": data.get("name", path.stem),
+                    "description": data.get("description", ""),
+                    "file": path.name,
+                })
+            except Exception:
+                continue
+
+        return _compact_json({
+            "count": len(rulesets),
+            "rulesets": rulesets,
+            "usage": "Pass the name to any tool's 'rules' parameter, e.g. grade(rules='browser_flow')",
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def rules_show(name: str) -> str:
+    """Show a ruleset's full configuration: signals, grade thresholds, and golden requirements."""
+    try:
+        from agent_xray.grader import load_rules
+
+        rules = load_rules(name)
+        return _compact_json({
+            "name": rules.name,
+            "description": rules.description,
+            "signals": rules.signals,
+            "grade_thresholds": rules.grade_thresholds,
+            "golden_requirements": rules.golden_requirements,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def rules_init(base: str = "default") -> str:
+    """Generate a scaffold for a custom ruleset based on an existing one. Returns JSON you can save and customize."""
+    try:
+        scaffold = {
+            "name": "my_custom_rules",
+            "description": "Custom grading rules. Edit signals, thresholds, and requirements to match your agent.",
+            "extends": base,
+            "signals": [
+                {
+                    "name": "example_custom_signal",
+                    "metric": "unique_tools",
+                    "gte": 5,
+                    "points": 1,
+                    "reason": "+1 used 5+ unique tools (customize this)",
+                }
+            ],
+            "grade_thresholds": {},
+            "golden_requirements": [],
+        }
+        return _compact_json(scaffold)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def baseline_capture(log_dir: str, task_id: str, output: str | None = None, format: str = "auto") -> str:
+    """Capture a task's metrics as a baseline for overhead measurement. Use on golden/exemplar tasks."""
+    try:
+        from pathlib import Path
+
+        from agent_xray.analyzer import analyze_task, resolve_task
+        from agent_xray.baseline import build_baseline, save_baseline
+
+        tasks = _load_tasks(log_dir, format)
+        task = resolve_task(tasks, task_id)
+        analysis = analyze_task(task)
+        baseline = build_baseline(task, analysis)
+        out = Path(output) if output else Path.cwd() / "baselines" / f"{analysis.site_name}.json"
+        path = save_baseline(baseline, out)
+        return _compact_json({
+            "saved_to": str(path),
+            "baseline": baseline.to_dict(),
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def baseline_list(baselines_dir: str) -> str:
+    """List all saved baselines in a directory with their metrics."""
+    try:
+        from agent_xray.baseline import load_baselines
+
+        baselines = load_baselines(baselines_dir)
+        if not baselines:
+            return _json_response({"baselines": [], "note": f"No baselines found in {baselines_dir}"})
+
+        items = [
+            {
+                "site": name,
+                "steps": bl.step_count,
+                "duration_s": round(bl.duration_s, 1),
+                "cost_usd": round(bl.cost_usd, 4),
+                "error_count": bl.error_count,
+                "milestones": bl.milestones,
+                "task_id": bl.task_id,
+            }
+            for name, bl in sorted(baselines.items())
+        ]
+        return _compact_json({
+            "count": len(items),
+            "baselines": items,
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def golden_best(log_dir: str, rules: str | None = None, optimize: str = "balanced", format: str = "auto") -> str:
+    """Find the single best exemplar per site — the most efficient golden run. Use to identify which tasks to capture as baselines or fixtures."""
+    try:
+        from agent_xray.golden import find_exemplars
+        from agent_xray.grader import load_rules
+
+        tasks = _load_tasks(log_dir, format)
+        rule_set = load_rules(rules) if rules else load_rules()
+        exemplars = find_exemplars(tasks, rules=rule_set, optimize=optimize)
+
+        return _compact_json({
+            "summary": {
+                "tasks": len(tasks),
+                "optimize": optimize,
+                "exemplars_found": len(exemplars),
+            },
+            "exemplars": [_serialize(e) for e in exemplars],
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def golden_profiles() -> str:
+    """Show available optimization profiles with their weight distributions for golden ranking."""
+    try:
+        from agent_xray.golden import OPTIMIZATION_PROFILES
+
+        return _compact_json({
+            "profiles": {
+                name: weights
+                for name, weights in sorted(OPTIMIZATION_PROFILES.items())
+            },
+            "usage": "Pass the profile name to golden_rank or golden_best's 'optimize' parameter",
         })
     except Exception as e:
         return _json_response({"error": str(e)})

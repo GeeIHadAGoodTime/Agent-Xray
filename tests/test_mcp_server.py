@@ -40,6 +40,15 @@ MCP_TOOL_NAMES = [
     "flywheel",
     "capture_task",
     "pricing_show",
+    "replay",
+    "validate_targets",
+    "rules_list",
+    "rules_show",
+    "rules_init",
+    "baseline_capture",
+    "baseline_list",
+    "golden_best",
+    "golden_profiles",
 ]
 
 BANNED_DOCSTRING_MARKERS = (
@@ -281,7 +290,7 @@ def test_analyze_tool_uses_task_bank_when_provided(
     )
     calls: dict[str, object] = {}
 
-    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format: tasks)
+    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format, **kw: tasks)
     monkeypatch.setattr(
         "agent_xray.grader.load_rules",
         lambda rules=None: types.SimpleNamespace(name="fake-rules"),
@@ -333,7 +342,7 @@ def test_report_tools_skips_grading(monkeypatch: pytest.MonkeyPatch) -> None:
     tasks = [types.SimpleNamespace(task_id="task-1")]
     analyses = {"task-1": types.SimpleNamespace(site_name="example.com")}
 
-    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format: tasks)
+    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format, **kw: tasks)
     monkeypatch.setattr(
         "agent_xray.analyzer.analyze_tasks",
         lambda tasks_arg: analyses,
@@ -376,7 +385,7 @@ def test_search_tasks_caps_matches_and_uses_last_page_url(
         for index in range(30)
     ]
 
-    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format: tasks)
+    monkeypatch.setattr(mcp_server, "_load_tasks", lambda log_dir, format, **kw: tasks)
 
     payload = json.loads(mcp_server.search_tasks("traces", query="checkout"))
 
@@ -458,7 +467,7 @@ def test_tree_includes_sample_task_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         mcp_server,
         "_load_tasks",
-        lambda log_dir, format: [types.SimpleNamespace(task_id="task-1")],
+        lambda log_dir, format, **kw: [types.SimpleNamespace(task_id="task-1")],
     )
     monkeypatch.setattr(
         "agent_xray.surface.enriched_tree_for_tasks",

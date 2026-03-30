@@ -66,6 +66,15 @@ MCP_TOOLS = [
     "flywheel",
     "capture_task",
     "pricing_show",
+    "replay",
+    "validate_targets",
+    "rules_list",
+    "rules_show",
+    "rules_init",
+    "baseline_capture",
+    "baseline_list",
+    "golden_best",
+    "golden_profiles",
 ]
 
 
