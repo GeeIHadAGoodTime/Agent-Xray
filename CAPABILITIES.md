@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.25.0 | Audit date: 2026-03-30
+Version: 1.25.1 | Audit date: 2026-03-30
 
 ---
 
@@ -757,7 +757,7 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 ## Dark Abilities (CLI-only, Not in MCP)
 
 > **Status: Nearly all gaps CLOSED as of v1.23.0 (2026-03-30).**
-> 48 MCP tools total. 26 new MCP tools added across seven audit rounds. grade_filter uses caller's rules (not hardcoded default). Workflow hints include correct parameter names and task IDs.
+> 49 MCP tools total. 26 new MCP tools added across seven audit rounds. grade_filter uses caller's rules (not hardcoded default). Workflow hints include correct parameter names and task IDs.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 

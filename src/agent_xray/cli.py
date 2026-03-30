@@ -2905,7 +2905,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ruleset name (default, browser_flow, coding_agent, research_agent) or path to JSON",
     )
     p_inspect.add_argument("--days", type=int, help="Include only the N most recent days of traces")
-    _add_task_bank_option(p_inspect)
     _add_format_option(p_inspect)
     _add_pattern_option(p_inspect)
     p_inspect.add_argument("--json", action="store_true", help="Output results as JSON")
