@@ -388,7 +388,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
                 }
                 for r in worst
             ],
-            "note": "Showing 15 worst tasks. Use CLI `agent-xray grade` for full per-task output.",
+            "note": "Showing 15 worst. Next: diagnose() for fix plan, or surface_task(task_id) to replay a specific failure.",
         }
         return _compact_json(payload)
     except Exception as e:
@@ -420,7 +420,9 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
             "tasks": [_serialize(result) for result in shown],
         }
         if len(failures) > 20:
-            payload["note"] = f"Showing 20 worst of {len(failures)} failures. Use CLI `agent-xray root-cause` for full output."
+            payload["note"] = f"Showing 20 worst of {len(failures)}. Next: diagnose() for prioritized fix plan, or surface_task(task_id)/reasoning(task_id) to inspect specific failures."
+        else:
+            payload["next"] = "diagnose() for fix plan, surface_task(task_id) to replay a failure, diff_tasks(id1, id2) to compare good vs bad."
         return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -449,8 +451,8 @@ def completeness(log_dir: str, format: str = "auto") -> str:
 
 
 @server.tool()
-def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: str | None = None) -> str:
-    """Replay a task step-by-step: exact tools available, inputs, results, and model reasoning at each step. Use BEFORE fixing — see exactly what the agent saw when it failed."""
+def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: str | None = None, max_steps: int | None = None) -> str:
+    """Replay a task step-by-step: tools, inputs, results, reasoning — use BEFORE fixing to see what the agent saw (pass max_steps to limit, or use reasoning() for a lighter view)."""
     try:
         from agent_xray.surface import surface_for_task as run_surface
 
@@ -474,13 +476,51 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
         metadata = surface.get("metadata", {})
         metadata.pop("system_prompt_text", None)
         metadata.pop("system_context_components", None)
-        for step in surface.get("steps", []):
-            step.pop("conversation_history", None)
-            for key in ("tool_result", "result_summary"):
-                val = step.get(key)
-                if isinstance(val, str) and len(val) > 500:
-                    step[key] = val[:500] + "..."
 
+        steps = surface.get("steps", [])
+
+        # If max_steps requested, keep only first + last N steps
+        if max_steps and len(steps) > max_steps:
+            kept = steps[:max_steps]
+            surface["steps"] = kept
+            surface["steps_note"] = f"Showing {max_steps} of {len(steps)} steps. Pass higher max_steps or use CLI for full output."
+            steps = kept
+
+        # Progressive truncation: try increasingly aggressive limits until it fits
+        for result_limit in (500, 200, 80, 0):
+            for step in steps:
+                step.pop("conversation_history", None)
+                for key in ("tool_result", "result_summary"):
+                    val = step.get(key)
+                    if isinstance(val, str):
+                        if result_limit == 0:
+                            step[key] = f"[{len(val)} chars — use reasoning() for details]"
+                        elif len(val) > result_limit:
+                            step[key] = val[:result_limit] + "..."
+                # Strip tool_input values >200 chars in aggressive modes
+                if result_limit <= 200:
+                    tool_input = step.get("tool_input", {})
+                    if isinstance(tool_input, dict):
+                        for k, v in list(tool_input.items()):
+                            if isinstance(v, str) and len(v) > 200:
+                                tool_input[k] = v[:200] + "..."
+
+            result = json.dumps(surface, separators=(",", ":"))
+            if len(result) <= _MCP_MAX_CHARS:
+                return result
+
+        # Final fallback: keep only metadata + step summaries (tool_name, error, duration)
+        compact_steps = []
+        for step in surface.get("steps", []):
+            compact_steps.append({
+                "step": step.get("step_number", step.get("step", "?")),
+                "tool": step.get("tool_name", "?"),
+                "error": step.get("error"),
+                "duration_ms": step.get("duration_ms"),
+                "page_url": step.get("page_url", step.get("browser", {}).get("page_url") if isinstance(step.get("browser"), dict) else None),
+            })
+        surface["steps"] = compact_steps
+        surface["truncation"] = "Progressive truncation applied. Use reasoning() for model thinking, or CLI for full surface."
         return _compact_json(surface)
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -556,6 +596,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
                 "fix_plan_entries": len(plan),
             },
             "fix_plan": [_serialize(entry) for entry in plan],
+            "next": "surface_task(task_id) to replay top fix-plan entry, then enforce_init() + enforce_plan() to start disciplined fixing.",
         })
     except Exception as e:
         return _json_response({"error": str(e)})
