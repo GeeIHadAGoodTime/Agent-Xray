@@ -377,7 +377,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
 
 @server.tool()
 def root_cause(log_dir: str, rules: str = "default", format: str = "auto") -> str:
-    """Classify weak or broken tasks into likely root causes and return grouped plus per-task results."""
+    """Classify weak or broken tasks into root cause categories with per-task evidence. Use to understand WHY tasks fail before hypothesizing a fix."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
@@ -430,7 +430,7 @@ def completeness(log_dir: str, format: str = "auto") -> str:
 
 @server.tool()
 def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: str | None = None) -> str:
-    """Inspect the full decision surface for a single task, showing per-step tool choices, reasoning, and context."""
+    """Replay a task step-by-step: exact tools available, inputs, results, and model reasoning at each step. Use BEFORE fixing — see exactly what the agent saw when it failed."""
     try:
         from agent_xray.surface import surface_for_task as run_surface
 
@@ -509,7 +509,7 @@ def search_tasks(log_dir: str, query: str, format: str = "auto") -> str:
 
 @server.tool()
 def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None) -> str:
-    """Classify failures and build a prioritized fix plan with investigation targets and verify commands."""
+    """Classify failures and build a prioritized fix plan with investigation targets. Use to decide WHAT to fix before starting an enforce cycle."""
     try:
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
@@ -631,7 +631,7 @@ def report(
 
 @server.tool()
 def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto") -> str:
-    """Compare two tasks side by side: tool sequences, timing, outcomes."""
+    """Compare two tasks side by side: tool sequences, timing, outcomes. Use to see what a successful task did differently from a failed one."""
     try:
         from agent_xray.surface import diff_tasks as run_diff_tasks
 
@@ -675,7 +675,7 @@ def diff_tasks(log_dir: str, task_id_1: str, task_id_2: str, format: str = "auto
 
 @server.tool()
 def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
-    """Extract the model's reasoning chain for a task, showing how it decided what to do at each step."""
+    """Extract the model's reasoning chain for a task — what it thought, why it chose each tool. Lighter than surface_task; use when you only need reasoning, not full tool I/O."""
     try:
         from agent_xray.surface import reasoning_for_task
 
@@ -693,7 +693,7 @@ def reasoning(log_dir: str, task_id: str, format: str = "auto") -> str:
 
 @server.tool()
 def tree(log_dir: str, rules: str | None = None, format: str = "auto") -> str:
-    """Bird's-eye view of trace organization as a day/site/task hierarchy."""
+    """Bird's-eye view: day/site/task hierarchy with pass/fail counts. Use first to see which sites are failing before drilling into specific tasks."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.surface import enriched_tree_for_tasks
@@ -776,7 +776,7 @@ def golden_compare(
     rules: str | None = None,
     format: str = "auto",
 ) -> str:
-    """Regression detection against golden captures. Compares current runs to fixture baselines."""
+    """Regression detection: compare current runs against golden fixtures. Use to see exactly where a broken run diverged from the known-good path."""
     try:
         from pathlib import Path
 
