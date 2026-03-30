@@ -559,7 +559,7 @@ def _evaluate_no_browser_needed(
     if value and not browser_tools:
         return True, "no browser tools used"
     if value and browser_tools:
-        return True, "browser used (%s) but not a hard failure" % ", ".join(browser_tools)
+        return False, "browser tools used: %s" % ", ".join(sorted(browser_tools))
     return True, "not checked"
 
 
@@ -633,8 +633,8 @@ def evaluate_task_criteria(
         if evaluator is not None:
             passed, explanation = evaluator(cvalue, task, analysis)
         else:
-            passed = True
-            explanation = "unknown criterion '%s' (skipped)" % cname
+            passed = False
+            explanation = "unknown criterion '%s' (not implemented)" % cname
         tag = "[PASS]" if passed else "[FAIL]"
         results.append("%s %s: %s" % (tag, cname, explanation))
     return results

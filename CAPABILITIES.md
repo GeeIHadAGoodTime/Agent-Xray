@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.25.1 | Audit date: 2026-03-30
+Version: 1.25.3 | Audit date: 2026-03-30
 
 ---
 
@@ -535,12 +535,12 @@ Auto-detection uses heuristic scoring (pattern matching) plus load-count verific
 
 | SDK | Instrumentor | What It Patches |
 |-----|-------------|----------------|
-| Anthropic | `AnthropicInstrumentor` | `messages.create` / `messages.stream` |
+| Anthropic | `AnthropicInstrumentor` | `messages.create` (sync + async) |
 | OpenAI | `OpenAIInstrumentor` | `chat.completions.create` |
 | LangChain | `XRayCallbackHandler` | LangChain callback interface |
 | MCP | `XRayMCPProxy` | MCP tool call interception |
 
-`auto_instrument()` detects which SDKs are installed and patches them automatically. `xray_trace` is a context manager for manual instrumentation.
+`auto_instrument()` detects which SDKs are installed and patches them automatically. `xray_trace` is a decorator for manual instrumentation.
 
 `StepRecorder` in `instrument/base.py` provides thread-safe JSONL writing with 50MB file rotation and buffered writes.
 
