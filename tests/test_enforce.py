@@ -13,6 +13,7 @@ from agent_xray.enforce import (
     EnforceConfig,
     EnforceReport,
     TestResult,
+    _git_commit,
     _git_diff_names,
     _git_diff_stat,
     _iteration_count,
@@ -26,6 +27,7 @@ from agent_xray.enforce import (
     enforce_check,
     enforce_diff,
     enforce_init,
+    enforce_quick,
     enforce_reset,
     enforce_status,
 )
@@ -129,6 +131,8 @@ class TestEnforceConfig:
     def test_defaults(self):
         cfg = EnforceConfig(test_command="pytest")
         assert cfg.max_iterations == 50
+        assert cfg.max_duration_seconds == 3600
+        assert cfg.max_total_cost_usd == 0.0
         assert cfg.challenge_every == 5
         assert cfg.require_improvement is True
         assert cfg.allow_test_modification is False
@@ -301,6 +305,89 @@ class TestGitDiffFiltering:
         assert _git_diff_stat() == (
             "src/foo.py | 2 +-\n1 file changed, 1 insertion(+), 1 deletion(-)"
         )
+
+
+class TestGitCommit:
+    def test_commit_returns_new_head(self, monkeypatch: pytest.MonkeyPatch):
+        responses = iter(
+            [
+                (0, ""),                 # git add
+                (0, "abc123\n"),        # head before
+                (0, "[main def456] msg"),  # git commit
+                (0, "def456\n"),        # head after
+            ]
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce._run_shell",
+            lambda command, cwd=None: next(responses),
+        )
+
+        assert _git_commit("msg") == "def456"
+
+    def test_commit_raises_when_head_does_not_change(self, monkeypatch: pytest.MonkeyPatch):
+        responses = iter(
+            [
+                (0, ""),
+                (0, "abc123\n"),
+                (0, "[main abc123] msg"),
+                (0, "abc123\n"),
+            ]
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce._run_shell",
+            lambda command, cwd=None: next(responses),
+        )
+
+        with pytest.raises(RuntimeError, match="HEAD did not change"):
+            _git_commit("msg")
+
+    def test_commit_raises_clear_windows_path_error(self, monkeypatch: pytest.MonkeyPatch):
+        responses = iter(
+            [
+                (0, ""),
+                (0, "abc123\n"),
+                (1, "fatal: cannot stat 'src/very/deep/file.py': Filename too long"),
+            ]
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce._run_shell",
+            lambda command, cwd=None: next(responses),
+        )
+
+        with pytest.raises(RuntimeError, match="Windows path length limits"):
+            _git_commit("msg")
+
+    def test_commit_raises_clear_hook_error(self, monkeypatch: pytest.MonkeyPatch):
+        responses = iter(
+            [
+                (0, ""),
+                (0, "abc123\n"),
+                (1, "pre-commit hook declined"),
+            ]
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce._run_shell",
+            lambda command, cwd=None: next(responses),
+        )
+
+        with pytest.raises(RuntimeError, match="Git hook rejected"):
+            _git_commit("msg")
+
+    def test_commit_raises_clear_encoding_error(self, monkeypatch: pytest.MonkeyPatch):
+        responses = iter(
+            [
+                (0, ""),
+                (0, "abc123\n"),
+                (1, "fatal: failed to encode path as UTF-8"),
+            ]
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce._run_shell",
+            lambda command, cwd=None: next(responses),
+        )
+
+        with pytest.raises(RuntimeError, match="encoding problem"):
+            _git_commit("msg")
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +571,143 @@ class TestEnforceCheck:
     def test_check_no_session(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
             enforce_check(project_root=str(tmp_path))
+
+
+class TestEnforceQuick:
+    def test_quick_calls_init_plan_and_check(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[str] = []
+        baseline = _baseline()
+        record = ChangeRecord(
+            iteration=1,
+            hypothesis="fix parser",
+            before=baseline,
+            after=_improved(),
+            audit_verdict="VALID",
+            decision="RECOMMEND_COMMIT",
+            net_improvement=1,
+        )
+
+        monkeypatch.setattr(
+            "agent_xray.enforce.enforce_init",
+            lambda config, _run_tests_fn=None: (calls.append("init") or (baseline, tmp_path / ".agent-xray-enforce")),
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce.enforce_plan",
+            lambda hypothesis, expected_tests=None, project_root=None: (
+                calls.append("plan")
+                or {
+                    "hypothesis": hypothesis,
+                    "expected_tests": expected_tests or [],
+                    "status": "plan_registered",
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            "agent_xray.enforce.enforce_check",
+            lambda **kwargs: (calls.append("check") or record),
+        )
+
+        payload = enforce_quick(
+            test_command="pytest -q",
+            hypothesis="fix parser",
+            project_root=str(tmp_path),
+        )
+
+        assert calls == ["init", "check"]
+        assert payload["session_initialized"] is True
+        assert payload["hypothesis"] == "fix parser"
+        assert payload["decision"] == "RECOMMEND_COMMIT"
+
+    def test_quick_init_then_check(self, tmp_path: Path):
+        calls = {"count": 0}
+
+        def run_tests(cmd, cwd):
+            calls["count"] += 1
+            return _baseline() if calls["count"] == 1 else _improved()
+
+        payload = enforce_quick(
+            test_command="pytest -q",
+            project_root=str(tmp_path),
+            _run_tests_fn=run_tests,
+            _audit_fn=lambda diff, files_modified, allow_test_modification: (
+                "VALID", ["No gaming detected"], []
+            ),
+            _git_diff_fn=lambda cwd: "1 file changed",
+            _git_names_fn=lambda cwd: ["foo.py"],
+            _git_commit_fn=lambda msg, cwd: "abc123",
+            _git_revert_fn=lambda h, cwd: True,
+            _git_head_fn=lambda cwd: "def456",
+            _git_diff_content_fn=lambda cwd: "+fix",
+        )
+
+        assert payload["session_initialized"] is True
+        assert payload["session_reused"] is False
+        assert payload["decision"] == "RECOMMEND_COMMIT"
+        assert payload["baseline"]["passed"] == 8
+
+    def test_quick_reuses_existing_session(self, tmp_path: Path):
+        cfg = EnforceConfig(
+            test_command="pytest -q",
+            project_root=str(tmp_path),
+            max_files_per_change=3,
+            max_diff_lines=20,
+        )
+        _save_session(cfg, _baseline(), str(tmp_path))
+
+        payload = enforce_quick(
+            test_command="python -m pytest tests/ -q",
+            project_root=str(tmp_path),
+            max_files=10,
+            max_diff_lines=500,
+            _run_tests_fn=lambda cmd, cwd: _improved(),
+            _audit_fn=lambda diff, files_modified, allow_test_modification: (
+                "VALID", ["No gaming detected"], []
+            ),
+            _git_diff_fn=lambda cwd: "1 file changed",
+            _git_names_fn=lambda cwd: ["foo.py"],
+            _git_commit_fn=lambda msg, cwd: "abc123",
+            _git_revert_fn=lambda h, cwd: True,
+            _git_head_fn=lambda cwd: "def456",
+            _git_diff_content_fn=lambda cwd: "+fix",
+        )
+
+        assert payload["session_initialized"] is False
+        assert payload["session_reused"] is True
+        assert payload["test_command"] == "pytest -q"
+        assert any("stored test command" in warning for warning in payload["warnings"])
+        assert any("max_files_per_change=3" in warning for warning in payload["warnings"])
+        assert any("max_diff_lines=20" in warning for warning in payload["warnings"])
+
+    def test_quick_writes_log_snapshot(self, tmp_path: Path):
+        log_dir = tmp_path / "logs"
+        calls = {"count": 0}
+
+        def run_tests(cmd, cwd):
+            calls["count"] += 1
+            return _baseline() if calls["count"] == 1 else _improved()
+
+        payload = enforce_quick(
+            test_command="pytest -q",
+            log_dir=str(log_dir),
+            project_root=str(tmp_path),
+            _run_tests_fn=run_tests,
+            _audit_fn=lambda diff, files_modified, allow_test_modification: (
+                "VALID", ["No gaming detected"], []
+            ),
+            _git_diff_fn=lambda cwd: "1 file changed",
+            _git_names_fn=lambda cwd: ["foo.py"],
+            _git_commit_fn=lambda msg, cwd: "abc123",
+            _git_revert_fn=lambda h, cwd: True,
+            _git_head_fn=lambda cwd: "def456",
+            _git_diff_content_fn=lambda cwd: "+fix",
+        )
+
+        assert payload["log_path"]
+        assert Path(payload["log_path"]).exists()
 
 
 class TestEnforceDiff:
@@ -686,6 +910,7 @@ class TestBuildEnforceReport:
         d = report.to_dict()
         assert "config" in d
         assert "baseline_result" in d
+        assert "stopped_reason" in d
         assert d["total_iterations"] == 0
 
 

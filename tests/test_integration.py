@@ -100,3 +100,33 @@ def test_pipeline_json_roundtrip(tmp_trace_dir: Path) -> None:
         payload = task.to_dict()
         serialized = json.dumps(payload)
         assert json.loads(serialized)["task_id"] == task.task_id
+
+
+def test_load_tasks_dedup_keeps_latest_trace_by_normalized_task_text(
+    write_trace_dir,
+    golden_task: AgentTask,
+    clone_task,
+) -> None:
+    older = clone_task(golden_task, "golden-old")
+    newer = clone_task(golden_task, "golden-new")
+
+    older.task_text = "Buy   the wireless headset and complete checkout on shop.example.test."
+    newer.task_text = "  buy the wireless headset and complete checkout on shop.example.test.  "
+
+    for index, step in enumerate(older.steps, start=1):
+        step.timestamp = f"2026-03-26T10:{index:02d}:00Z"
+    if older.outcome is not None:
+        older.outcome.timestamp = "2026-03-26T10:59:00Z"
+
+    for index, step in enumerate(newer.steps, start=1):
+        step.timestamp = f"2026-03-27T10:{index:02d}:00Z"
+    if newer.outcome is not None:
+        newer.outcome.timestamp = "2026-03-27T10:59:00Z"
+
+    trace_dir = write_trace_dir("load-tasks-dedupe", [older, newer])
+
+    deduped = load_tasks(trace_dir)
+    all_tasks = load_tasks(trace_dir, dedup=False)
+
+    assert [task.task_id for task in deduped] == ["golden-new"]
+    assert {task.task_id for task in all_tasks} == {"golden-old", "golden-new"}

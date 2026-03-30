@@ -87,10 +87,20 @@ ROOT_CAUSES = {
         "description": "Context pressure likely degraded the agent's later reasoning or output quality.",
         "fix_hint": "Trim context earlier, compact more selectively, or decompose the task.",
     },
+    "context_overflow": {
+        "label": "Context Overflow",
+        "description": "Context-window pressure appears to have degraded later reasoning quality.",
+        "fix_hint": "Reduce prompt growth, summarize earlier, or split the task before quality drops.",
+    },
     "reasoning_bug": {
         "label": "Reasoning Bug",
         "description": "The task progressed, but the strategy or next action was still wrong.",
         "fix_hint": "Add a concrete example to the prompt or examples corpus.",
+    },
+    "rate_limit_cascade": {
+        "label": "Rate Limit Cascade",
+        "description": "Repeated rate-limit errors cascaded into task failure.",
+        "fix_hint": "Add rate-limit backoff, retry budgeting, and a fallback path after repeated 429s.",
     },
     "tool_rejection_mismatch": {
         "label": "Tool Rejection Mismatch",
@@ -101,6 +111,11 @@ ROOT_CAUSES = {
         "label": "Prompt Bug",
         "description": "The most likely remaining issue is misleading or incomplete instructions.",
         "fix_hint": "Inspect prompt guidance around the failure step.",
+    },
+    "timeout": {
+        "label": "Timeout",
+        "description": "The task likely hit a time or step limit before it could finish.",
+        "fix_hint": "Raise time budgets, tighten progress checks, or break the task into smaller units.",
     },
     "unclassified": {
         "label": "Unclassified",
@@ -157,6 +172,7 @@ CONTEXT_PRESSURE_RE = re.compile(
     r"too much context)\b",
     re.IGNORECASE,
 )
+RATE_LIMIT_RE = re.compile(r"\b(?:429|rate limit|too many requests)\b", re.IGNORECASE)
 
 PROMPT_BUG_PATTERNS = [
     (
@@ -213,6 +229,26 @@ PROMPT_BUG_PATTERNS = [
         r"page.*changed|unexpected.*layout|different.*from",
         "browser",
         "Page layout mismatch - update selector strategies",
+    ),
+    (
+        r"login|authentication|sign.in.*fail",
+        "auth",
+        "LLM failed to handle auth flow - add login sequence guidance",
+    ),
+    (
+        r"captcha|recaptcha|challenge",
+        "browser",
+        "LLM hit captcha - add captcha detection and fallback instructions",
+    ),
+    (
+        r"popup|modal|overlay.*block",
+        "browser",
+        "LLM blocked by popup/modal - add popup dismissal guidance",
+    ),
+    (
+        r"cookie.*consent|gdpr|accept.*cookies",
+        "browser",
+        "LLM blocked by cookie consent - add cookie consent handling",
     ),
 ]
 
@@ -290,6 +326,7 @@ class RootCauseResult:
     prompt_section: str | None = None
     prompt_fix_hint: str | None = None
     also_matched: list[dict[str, Any]] = field(default_factory=list)
+    candidate_scores: list[dict[str, Any]] = field(default_factory=list)
     classifiers_checked: list[dict[str, Any]] = field(default_factory=list)
     evidence_count: int = 0
 
@@ -425,6 +462,66 @@ def _final_output_is_short(task: AgentTask, *, short_limit: int) -> bool:
     return not previous_lengths or max(previous_lengths) >= len(final_text) * 2
 
 
+def _has_rate_limit_text(step: AgentStep) -> bool:
+    """Return whether a step recorded a rate-limit style failure."""
+
+    return bool(
+        RATE_LIMIT_RE.search(step.error or "")
+        or RATE_LIMIT_RE.search(step.tool_result or "")
+    )
+
+
+def _final_steps_show_no_progress(task: AgentTask, *, window: int = 5) -> bool:
+    """Return whether the final steps appear to stall without new progress."""
+
+    sorted_steps = task.sorted_steps
+    if len(sorted_steps) <= window:
+        return False
+    final_steps = sorted_steps[-window:]
+    final_urls = {step.page_url for step in final_steps if step.page_url}
+    final_tools = {step.tool_name for step in final_steps}
+    return (
+        len(final_urls) <= 1
+        and len(final_tools) <= 2
+    )
+
+
+def _context_overflow_evidence(task: AgentTask, *, pressure_index: int) -> list[str]:
+    """Return evidence that quality degraded after context pressure appeared."""
+
+    evidence: list[str] = ["reasoning explicitly mentions context pressure"]
+    sorted_steps = task.sorted_steps
+    early_steps = sorted_steps[:pressure_index]
+    late_steps = sorted_steps[pressure_index + 1 :]
+
+    early_reasoning = [
+        len((step.llm_reasoning or "").strip())
+        for step in early_steps
+        if (step.llm_reasoning or "").strip()
+    ]
+    late_reasoning = [
+        len((step.llm_reasoning or "").strip())
+        for step in late_steps
+        if (step.llm_reasoning or "").strip()
+    ]
+    if early_reasoning and late_reasoning:
+        early_avg = sum(early_reasoning) / len(early_reasoning)
+        late_avg = sum(late_reasoning) / len(late_reasoning)
+        if late_avg <= early_avg * 0.6:
+            evidence.append(
+                f"later reasoning shortened from {early_avg:.0f} chars avg to {late_avg:.0f}"
+            )
+
+    early_errors = sum(1 for step in early_steps if step.error)
+    late_errors = sum(1 for step in late_steps if step.error)
+    if late_errors > early_errors and late_errors > 0:
+        evidence.append(f"late-stage errors increased from {early_errors} to {late_errors}")
+
+    if len(evidence) == 1:
+        return []
+    return evidence
+
+
 def _memory_quality_drop_evidence(
     task: AgentTask,
     *,
@@ -501,6 +598,8 @@ class ClassificationConfig:
     low_source_diversity_threshold: int = 2
     memory_overload_usage_pct: float = 85.0
     memory_overload_short_output_chars: int = 80
+    rate_limit_error_threshold: int = 3
+    timeout_step_threshold: int = 40
     # Tool names whose rejection is intentional policy, not a mismatch.
     # Rejections of these tools are excluded from tool_rejection_mismatch.
     expected_rejections: frozenset[str] = frozenset()
@@ -669,6 +768,27 @@ def _classify_error_dominance(
     return ("tool_bug", "medium", [f"tool errors dominate: {analysis.error_kinds}"])
 
 
+def _classify_rate_limit_cascade(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify traces dominated by repeated rate-limit failures."""
+
+    del analysis
+    rate_limit_steps = [step for step in task.sorted_steps if _has_rate_limit_text(step)]
+    if len(rate_limit_steps) < config.rate_limit_error_threshold:
+        return None
+    evidence = [
+        f"{len(rate_limit_steps)} step(s) hit rate-limit errors",
+        f"threshold exceeded: {len(rate_limit_steps)} >= {config.rate_limit_error_threshold}",
+    ]
+    sample = _normalize_text(rate_limit_steps[0].error or rate_limit_steps[0].tool_result)
+    if sample:
+        evidence.append(f"sample rate-limit result: {sample[:120]}")
+    return ("rate_limit_cascade", "high", evidence)
+
+
 def _classify_insufficient_sources(
     task: AgentTask,
     analysis: TaskAnalysis,
@@ -819,6 +939,32 @@ def _classify_memory_overload(
     )
 
 
+def _classify_context_overflow(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify traces where context pressure is followed by degraded output quality."""
+
+    del analysis, config
+    pressure_index = next(
+        (
+            index
+            for index, step in enumerate(task.sorted_steps)
+            if CONTEXT_PRESSURE_RE.search(
+                " ".join(filter(None, [step.llm_reasoning, step.error, step.tool_result]))
+            )
+        ),
+        None,
+    )
+    if pressure_index is None:
+        return None
+    evidence = _context_overflow_evidence(task, pressure_index=pressure_index)
+    if not evidence:
+        return None
+    return ("context_overflow", "medium", evidence)
+
+
 def _classify_prompt_confusion(
     task: AgentTask,
     analysis: TaskAnalysis,
@@ -945,6 +1091,30 @@ def _classify_tool_selection_from_low_diversity(
     return None
 
 
+def _classify_timeout(
+    task: AgentTask,
+    analysis: TaskAnalysis,
+    config: ClassificationConfig,
+) -> ClassificationDecision | None:
+    """Classify failed or incomplete tasks that likely exhausted their step budget."""
+
+    status = (task.outcome.status if task.outcome else "").lower()
+    if status not in {"failed", "incomplete"}:
+        return None
+    total_steps = task.outcome.total_steps if task.outcome and task.outcome.total_steps else None
+    step_count = max(analysis.step_count, total_steps or 0)
+    if step_count < config.timeout_step_threshold:
+        return None
+    if not _final_steps_show_no_progress(task):
+        return None
+    evidence = [
+        f"task ended with status={status}",
+        f"step count reached {step_count}, near timeout threshold {config.timeout_step_threshold}",
+        "final steps showed no new progress before stopping",
+    ]
+    return ("timeout", "medium", evidence)
+
+
 def _collect_near_misses(
     task: AgentTask,
     analysis: TaskAnalysis,
@@ -970,14 +1140,30 @@ def _collect_near_misses(
          {"error_rate": round(analysis.errors / max(1, analysis.step_count), 3),
           "errors": analysis.errors, "steps": analysis.step_count,
           "threshold": config.high_error_rate}),
+        ("rate_limit_cascade", "rate_limit_steps >= threshold",
+         {"rate_limit_steps": sum(1 for step in task.sorted_steps if _has_rate_limit_text(step)),
+          "threshold": config.rate_limit_error_threshold}),
         ("memory_overload", "max_context_usage_pct >= threshold",
          {"max_context_usage_pct": analysis.max_context_usage_pct,
           "threshold": config.memory_overload_usage_pct}),
+        ("context_overflow", "context pressure + later degradation",
+         {"context_pressure_mentions": sum(
+             1
+             for step in task.sorted_steps
+             if CONTEXT_PRESSURE_RE.search(
+                 " ".join(filter(None, [step.llm_reasoning, step.error, step.tool_result]))
+             )
+         )}),
         ("stuck_loop", "unique_urls <= 1 and steps >= min_steps",
          {"unique_urls": len(analysis.unique_urls), "step_count": analysis.step_count,
           "min_steps": config.stuck_loop_min_steps}),
         ("early_abort", "step_count <= threshold",
          {"step_count": analysis.step_count, "threshold": config.early_abort_max_steps}),
+        ("timeout", "failed/incomplete + steps >= threshold + final stall",
+         {"status": task.outcome.status if task.outcome else "",
+          "step_count": analysis.step_count,
+          "threshold": config.timeout_step_threshold,
+          "final_steps_stalled": _final_steps_show_no_progress(task)}),
     ]
     for name, condition, metrics in checks:
         near_misses.append({
@@ -1002,7 +1188,15 @@ def classify_task(
         if not (
             task.outcome
             and task.outcome.status
-            in {"spin_terminated", "early_abort", "failed", "timeout", "max_iterations", "llm_error"}
+            in {
+                "spin_terminated",
+                "early_abort",
+                "failed",
+                "incomplete",
+                "timeout",
+                "max_iterations",
+                "llm_error",
+            }
         ):
             return None
     cfg = config or _DEFAULT_CONFIG
@@ -1027,17 +1221,20 @@ def classify_task(
         _classify_test_failure_loop,
         _classify_tool_rejection_mismatch,
         _classify_error_dominance,
+        _classify_rate_limit_cascade,
         _classify_insufficient_sources,
         _classify_valid_alternative_path,
         _classify_consultative_success,
         _classify_tool_selection_from_search_bias,
         _classify_memory_overload,
+        _classify_context_overflow,
         _classify_prompt_confusion,
         _classify_model_limit,
         _classify_stuck_loop,
         _classify_early_abort,
         _classify_reasoning_bug,
         _classify_tool_selection_from_low_diversity,
+        _classify_timeout,
     )
     all_matches: list[ClassificationDecision] = []
     for classifier in classifiers:
@@ -1046,6 +1243,14 @@ def classify_task(
             all_matches.append(decision)
 
     if all_matches:
+        for cause_name, cause_confidence, cause_evidence in all_matches:
+            score = _score_confidence(cause_confidence, cause_evidence)
+            result.candidate_scores.append({
+                "root_cause": cause_name,
+                "confidence": _confidence_label_from_score(score),
+                "confidence_score": score,
+                "evidence_count": len(cause_evidence),
+            })
         # Primary = first match (highest priority in classifier ordering)
         primary_cause, primary_confidence, primary_evidence = all_matches[0]
         _apply_classification(

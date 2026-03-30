@@ -347,7 +347,8 @@ class TestValidateTargetsCommand:
             code = cmd_validate_targets(args)
             assert code == 1
             captured = capsys.readouterr()
-            assert "project-root" in captured.out.lower() or "project_root" in captured.out.lower()
+            output = (captured.out + captured.err).lower()
+            assert "project-root" in output or "project_root" in output
         finally:
             if env_backup is not None:
                 os.environ["AGENT_XRAY_PROJECT_ROOT"] = env_backup

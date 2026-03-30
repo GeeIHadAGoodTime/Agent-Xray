@@ -271,7 +271,7 @@ class TestTierAssignment:
     def test_single_run_is_exemplar(self) -> None:
         rank = GoldenRank(
             task_id="only-1", grade="GOLDEN", score=10, efficiency=0.9,
-            tier="BASELINE", site_name="shop", step_count=8, duration_s=40.0,
+            tier="BASELINE", site_name="shop", complexity_weight=1.0, step_count=8, duration_s=40.0,
             cost_usd=0.08, error_count=0, unique_tools=4,
             milestones=["CART"], flow_summary="cart", optimization_notes=[],
         )
@@ -282,7 +282,7 @@ class TestTierAssignment:
         ranks = [
             GoldenRank(
                 task_id=f"t-{i}", grade="GOLDEN", score=10, efficiency=1.0 - i * 0.3,
-                tier="BASELINE", site_name="shop", step_count=8, duration_s=40.0,
+                tier="BASELINE", site_name="shop", complexity_weight=1.0, step_count=8, duration_s=40.0,
                 cost_usd=0.08, error_count=0, unique_tools=4,
                 milestones=[], flow_summary="", optimization_notes=[],
             )
@@ -300,7 +300,7 @@ class TestTierAssignment:
         ranks = [
             GoldenRank(
                 task_id=f"t-{i}", grade="GOLDEN", score=10, efficiency=1.0 - i * 0.08,
-                tier="BASELINE", site_name="shop", step_count=8, duration_s=40.0,
+                tier="BASELINE", site_name="shop", complexity_weight=1.0, step_count=8, duration_s=40.0,
                 cost_usd=0.08, error_count=0, unique_tools=4,
                 milestones=[], flow_summary="", optimization_notes=[],
             )
@@ -337,6 +337,19 @@ class TestRankingOrder:
             if len(ranks) > 1:
                 for i in range(len(ranks) - 1):
                     assert ranks[i].efficiency >= ranks[i + 1].efficiency
+
+    def test_cross_site_ranking_uses_complexity_weight_when_not_grouped(self) -> None:
+        tasks = [
+            _make_commerce_task("commerce-short", step_count=5, cost_per_step=0.005),
+            _make_commerce_task("commerce-long", step_count=9, cost_per_step=0.01),
+        ]
+        rules = load_rules("simple")
+
+        rankings = rank_golden_runs(tasks, rules=rules, per_site=False)
+
+        assert set(rankings) == {"all-sites"}
+        by_id = {rank.task_id: rank for rank in rankings["all-sites"]}
+        assert by_id["commerce-long"].complexity_weight >= by_id["commerce-short"].complexity_weight
 
 
 # ---------------------------------------------------------------------------
@@ -577,13 +590,14 @@ class TestGoldenRankSerialization:
     def test_to_dict_roundtrip(self) -> None:
         rank = GoldenRank(
             task_id="test-1", grade="GOLDEN", score=10, efficiency=0.85,
-            tier="EXEMPLAR", site_name="shop", step_count=8, duration_s=40.0,
+            tier="EXEMPLAR", site_name="shop", complexity_weight=1.0, step_count=8, duration_s=40.0,
             cost_usd=0.08, error_count=0, unique_tools=4,
             milestones=["CART", "PAYMENT"], flow_summary="cart->payment",
             optimization_notes=["fewest steps"],
         )
         d = rank.to_dict()
         assert d["task_id"] == "test-1"
+        assert d["complexity_weight"] == 1.0
         assert d["efficiency"] == 0.85
         assert d["milestones"] == ["CART", "PAYMENT"]
         # Should be JSON-serializable

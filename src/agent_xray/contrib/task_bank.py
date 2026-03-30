@@ -347,8 +347,8 @@ def _evaluate_must_answer_contains(
         return False, "no final answer or outcome recorded"
     missing = [n for n in value if str(n).lower() not in combined]
     if not missing:
-        return True, "answer contained: %s" % ", ".join(str(x) for x in value)
-    return False, "missing answer keywords: %s" % ", ".join(str(x) for x in missing)
+        return True, "answer contained: {}".format(", ".join(str(x) for x in value))
+    return False, "missing answer keywords: {}".format(", ".join(str(x) for x in missing))
 
 
 def _evaluate_answer_type(
@@ -365,12 +365,12 @@ def _evaluate_answer_type(
 
     if expected == "factual":
         if final_answer:
-            return True, "factual answer present (%d chars)" % len(final_answer)
+            return True, f"factual answer present ({len(final_answer)} chars)"
         return False, "no factual answer recorded"
 
     if expected == "action":
         if outcome_status in {"success", "payment_gate", "cancelled", "completed"}:
-            return True, "action outcome=%s" % outcome_status
+            return True, f"action outcome={outcome_status}"
         if final_answer:
             markers = (
                 "sent", "scheduled", "added", "created", "playing",
@@ -382,12 +382,12 @@ def _evaluate_answer_type(
 
     if expected == "consultative":
         if len(final_answer) >= 50:
-            return True, "consultative answer present (%d chars)" % len(final_answer)
+            return True, f"consultative answer present ({len(final_answer)} chars)"
         if final_answer:
-            return False, "answer too short for consultative (%d chars)" % len(final_answer)
+            return False, f"answer too short for consultative ({len(final_answer)} chars)"
         return False, "no consultative answer recorded"
 
-    return True, "unknown answer_type '%s' (skipped)" % value
+    return True, f"unknown answer_type '{value}' (skipped)"
 
 
 def _evaluate_must_reach_url(
@@ -402,8 +402,8 @@ def _evaluate_must_reach_url(
         if parsed.query:
             full += "?" + parsed.query
         if re.search(pattern, full, re.IGNORECASE):
-            return True, "URL matched: %s" % url
-    return False, "no URL matched pattern /%s/" % pattern
+            return True, f"URL matched: {url}"
+    return False, f"no URL matched pattern /{pattern}/"
 
 
 def _evaluate_must_fill_fields(
@@ -422,8 +422,8 @@ def _evaluate_must_fill_fields(
                 filled.add(field_pat)
     missing = set(value) - filled
     if not missing:
-        return True, "all fields filled: %s" % ", ".join(value)
-    return False, "missing fills: %s" % ", ".join(missing)
+        return True, "all fields filled: {}".format(", ".join(value))
+    return False, "missing fills: {}".format(", ".join(missing))
 
 
 def _evaluate_min_urls(
@@ -433,8 +433,8 @@ def _evaluate_min_urls(
 ) -> tuple[bool, str]:
     actual = len(analysis.unique_url_paths)
     if actual >= value:
-        return True, "%d unique URLs (need %d)" % (actual, value)
-    return False, "only %d unique URLs (need %d)" % (actual, value)
+        return True, f"{actual} unique URLs (need {value})"
+    return False, f"only {actual} unique URLs (need {value})"
 
 
 def _evaluate_max_steps(
@@ -444,8 +444,8 @@ def _evaluate_max_steps(
 ) -> tuple[bool, str]:
     actual = len(task.steps)
     if actual <= value:
-        return True, "%d steps (limit %d)" % (actual, value)
-    return False, "%d steps exceeded limit of %d" % (actual, value)
+        return True, f"{actual} steps (limit {value})"
+    return False, f"{actual} steps exceeded limit of {value}"
 
 
 def _evaluate_payment_fields_visible(
@@ -488,9 +488,9 @@ def _evaluate_must_not_fill_payment(
             )
         )
         if has_card_number or has_expiry or has_cvv or has_payment_key:
-            evidence.append("step %d %s" % (idx, step.tool_name))
+            evidence.append(f"step {idx} {step.tool_name}")
     if evidence:
-        return False, "payment details filled: %s" % ", ".join(evidence[:5])
+        return False, "payment details filled: {}".format(", ".join(evidence[:5]))
     outcome_status = (task.outcome.status or "") if task.outcome else ""
     final_answer = (task.outcome.final_answer or "") if task.outcome else ""
     if outcome_status == "payment_gate" or "payment_gate" in final_answer.lower():
@@ -540,8 +540,8 @@ def _evaluate_must_use_tools(
         else:
             missing.append(tool_pat)
     if not missing:
-        return True, "all required tools used: %s" % ", ".join(value)
-    return False, "missing tools: %s (used: %s)" % (
+        return True, "all required tools used: {}".format(", ".join(value))
+    return False, "missing tools: {} (used: {})".format(
         ", ".join(missing),
         ", ".join(sorted(used)),
     )
@@ -559,7 +559,7 @@ def _evaluate_no_browser_needed(
     if value and not browser_tools:
         return True, "no browser tools used"
     if value and browser_tools:
-        return False, "browser tools used: %s" % ", ".join(sorted(browser_tools))
+        return False, "browser tools used: {}".format(", ".join(sorted(browser_tools)))
     return True, "not checked"
 
 
@@ -574,9 +574,9 @@ def _evaluate_must_have_answer(
         final_answer = task.outcome.final_answer or ""
         outcome_status = task.outcome.status or ""
     if value and final_answer:
-        return True, "answer present (%d chars)" % len(final_answer)
+        return True, f"answer present ({len(final_answer)} chars)"
     if value and outcome_status in {"success", "completed"}:
-        return True, "outcome=%s (answer may be in TTS)" % outcome_status
+        return True, f"outcome={outcome_status} (answer may be in TTS)"
     if value:
         return False, "no final answer recorded"
     return True, "not required"
@@ -589,8 +589,8 @@ def _evaluate_min_tool_count(
 ) -> tuple[bool, str]:
     actual = len(task.steps)
     if actual >= value:
-        return True, "%d tool calls (need %d)" % (actual, value)
-    return False, "only %d tool calls (need %d)" % (actual, value)
+        return True, f"{actual} tool calls (need {value})"
+    return False, f"only {actual} tool calls (need {value})"
 
 
 _CRITERION_DISPATCH: dict[str, Any] = {
@@ -634,9 +634,9 @@ def evaluate_task_criteria(
             passed, explanation = evaluator(cvalue, task, analysis)
         else:
             passed = False
-            explanation = "unknown criterion '%s' (not implemented)" % cname
+            explanation = f"unknown criterion '{cname}' (not implemented)"
         tag = "[PASS]" if passed else "[FAIL]"
-        results.append("%s %s: %s" % (tag, cname, explanation))
+        results.append(f"{tag} {cname}: {explanation}")
     return results
 
 
@@ -699,12 +699,12 @@ def grade_with_task_bank(
                     passed=True,
                     points=0,
                     actual=bank_id,
-                    reason="matched bank entry %s" % bank_id,
+                    reason=f"matched bank entry {bank_id}",
                 )
             )
             # Count bank-criteria pass/fail
-            n_pass = sum(1 for l in criterion_lines if l.startswith("[PASS]"))
-            n_fail = sum(1 for l in criterion_lines if l.startswith("[FAIL]"))
+            n_pass = sum(1 for line in criterion_lines if line.startswith("[PASS]"))
+            n_fail = sum(1 for line in criterion_lines if line.startswith("[FAIL]"))
             n_total = n_pass + n_fail
             result.signals.append(
                 SignalResult(
@@ -712,7 +712,7 @@ def grade_with_task_bank(
                     passed=n_fail == 0,
                     points=0,
                     actual={"passed": n_pass, "failed": n_fail, "total": n_total},
-                    reason="%d/%d bank criteria passed" % (n_pass, n_total),
+                    reason=f"{n_pass}/{n_total} bank criteria passed",
                 )
             )
             # Downgrade GOLDEN -> GOOD when critical bank criteria fail
@@ -730,8 +730,7 @@ def grade_with_task_bank(
                     failed_critical = failed_names & critical_criteria
                     result.grade = "GOOD"
                     result.reasons.append(
-                        "[DOWNGRADE] GOLDEN → GOOD: %s failed"
-                        % ", ".join(sorted(failed_critical))
+                        "[DOWNGRADE] GOLDEN → GOOD: {} failed".format(", ".join(sorted(failed_critical)))
                     )
         results.append(result)
     return results

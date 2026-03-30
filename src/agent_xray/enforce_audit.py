@@ -50,19 +50,33 @@ def _is_test_file(path: str) -> bool:
     return any(p.search(path) for p in _TEST_PATH_PATTERNS)
 
 
+def _matches_allowlist(text: str, patterns: list[str] | tuple[str, ...] | None) -> bool:
+    """Return True when any case-insensitive allowlist pattern appears in text."""
+    if not text or not patterns:
+        return False
+    lowered = text.casefold()
+    return any(pattern.casefold() in lowered for pattern in patterns if pattern)
+
+
 def detect_test_file_modification(
     files_modified: list[str],
     allow_test_modification: bool = False,
+    project_allowlist: list[str] | None = None,
 ) -> GamingSignal | None:
     """Detect modifications to test files."""
     if allow_test_modification:
         return None
-    test_files = [f for f in files_modified if _is_test_file(f)]
+    allowlist = tuple(item.lower() for item in (project_allowlist or []))
+    test_files = [
+        f for f in files_modified
+        if _is_test_file(f)
+        and not any(entry in f.lower() for entry in allowlist)
+    ]
     if not test_files:
         return None
     return GamingSignal(
         name="test_file_modification",
-        confidence=0.7,
+        confidence=0.3,
         description=f"Test files modified: {', '.join(test_files[:3])}",
         line_evidence=", ".join(test_files),
     )
@@ -73,15 +87,29 @@ _HARDCODED_RETURN_RE = re.compile(
     r"^\+\s*return\s+(?:\d+|['\"].*?['\"]|True|False|None|\[.*?\]|\{.*?\})\s*$",
     re.MULTILINE,
 )
+_HARDCODED_RETURN_ALLOWLIST = (
+    "no visible effect",
+    "not found",
+    "error",
+    "success",
+)
 
 
-def detect_hardcoded_values(diff: str) -> GamingSignal | None:
+def detect_hardcoded_values(
+    diff: str,
+    allowlist: list[str] | None = None,
+) -> GamingSignal | None:
     """Detect insertion of hardcoded return values."""
     matches = _HARDCODED_RETURN_RE.findall(diff)
     if not matches:
         return None
+    combined_allowlist = [*_HARDCODED_RETURN_ALLOWLIST, *(allowlist or [])]
     # Only flag if the return is suspiciously simple
-    suspicious = [m for m in matches if len(m.strip()) < 40]
+    suspicious = [
+        m
+        for m in matches
+        if len(m.strip()) < 40 and not _matches_allowlist(m, combined_allowlist)
+    ]
     if not suspicious:
         return None
     return GamingSignal(
@@ -126,7 +154,7 @@ def detect_mock_insertion(diff: str) -> GamingSignal | None:
         return None
     return GamingSignal(
         name="mock_stub_insertion",
-        confidence=0.4,
+        confidence=0.2,
         description=f"Mock/stub added ({len(matches)} occurrence(s))",
         line_evidence=matches[0].strip() if matches else "",
     )
@@ -149,8 +177,9 @@ _ASSERTION_WEAKEN_PATTERNS = [
 def detect_assertion_weakening(diff: str) -> GamingSignal | None:
     """Detect weakening of test assertions."""
     lines = diff.splitlines()
-    removals = [l for l in lines if l.startswith("-") and "assert" in l.lower()]
-    additions = [l for l in lines if l.startswith("+") and ("assert" in l.lower() or l.strip().startswith("+pass") or l.strip().startswith("+#"))]
+    removals = [
+        line for line in lines if line.startswith("-") and "assert" in line.lower()
+    ]
 
     if not removals:
         return None
@@ -168,8 +197,14 @@ def detect_assertion_weakening(diff: str) -> GamingSignal | None:
             )
 
     # Check for assert removal without replacement
-    assert_removed = [l for l in lines if l.startswith("-") and re.search(r"\bassert\b", l)]
-    assert_added = [l for l in lines if l.startswith("+") and re.search(r"\bassert\b", l)]
+    assert_removed = [
+        line for line in lines
+        if line.startswith("-") and re.search(r"\bassert\b", line)
+    ]
+    assert_added = [
+        line for line in lines
+        if line.startswith("+") and re.search(r"\bassert\b", line)
+    ]
     if len(assert_removed) > len(assert_added):
         return GamingSignal(
             name="assertion_weakening",
@@ -279,6 +314,7 @@ def audit_change(
     diff: str,
     files_modified: list[str] | None = None,
     allow_test_modification: bool = False,
+    project_allowlist: list[str] | None = None,
 ) -> tuple[str, list[str], list[str]]:
     """Audit a change for gaming signals.
 
@@ -287,17 +323,28 @@ def audit_change(
         verdict is one of: "VALID", "SUSPICIOUS", "GAMING"
     """
     signals: list[GamingSignal] = []
+    allowlist = project_allowlist or []
 
     # Test file modification check
     if files_modified:
-        sig = detect_test_file_modification(files_modified, allow_test_modification)
+        sig = detect_test_file_modification(
+            files_modified,
+            allow_test_modification,
+            project_allowlist=project_allowlist,
+        )
         if sig:
             signals.append(sig)
 
     # Run all diff-based detectors
     for detector in ALL_DETECTORS:
-        sig = detector(diff)
-        if sig:
+        if detector is detect_hardcoded_values:
+            sig = detector(diff, allowlist)
+        else:
+            sig = detector(diff)
+        if sig and not _matches_allowlist(
+            f"{sig.line_evidence}\n{sig.description}",
+            allowlist,
+        ):
             signals.append(sig)
 
     if not signals:
@@ -578,8 +625,12 @@ def classify_diff_quality(diff: str, files: list[str], test_delta: int) -> str:
         return "neutral"
 
     lines = diff.splitlines()
-    added = [l for l in lines if l.startswith("+") and not l.startswith("+++")]
-    removed = [l for l in lines if l.startswith("-") and not l.startswith("---")]
+    added = [
+        line for line in lines if line.startswith("+") and not line.startswith("+++")
+    ]
+    removed = [
+        line for line in lines if line.startswith("-") and not line.startswith("---")
+    ]
 
     # Check for test files
     test_files = [f for f in files if any(p in f.lower() for p in ("test_", "_test.", "tests/", "spec/", "conftest"))]
@@ -593,7 +644,9 @@ def classify_diff_quality(diff: str, files: list[str], test_delta: int) -> str:
         r"(?:threshold|timeout|limit|max_|min_|rate|delay|interval|config|setting)",
         re.IGNORECASE,
     )
-    config_changes = sum(1 for l in added + removed if config_patterns.search(l))
+    config_changes = sum(
+        1 for line in added + removed if config_patterns.search(line)
+    )
     if config_changes > 0 and len(added) + len(removed) <= config_changes * 3:
         return "behavioral_improvement"
 
@@ -604,11 +657,7 @@ def classify_diff_quality(diff: str, files: list[str], test_delta: int) -> str:
         re.compile(r"(?:>=?\s*0|<=?\s*len|boundary|bounds|off.by.one)", re.IGNORECASE),
         re.compile(r"(?:\.get\(|getattr\(|hasattr\()", re.IGNORECASE),
     ]
-    bugfix_evidence = sum(
-        1 for l in added
-        for pat in bugfix_patterns
-        if pat.search(l)
-    )
+    bugfix_evidence = sum(1 for line in added for pat in bugfix_patterns if pat.search(line))
     if bugfix_evidence >= 1 and test_delta >= 0:
         return "bug_fix"
 
@@ -618,7 +667,7 @@ def classify_diff_quality(diff: str, files: list[str], test_delta: int) -> str:
 
     # Behavioral improvement if prompt/text changes
     prompt_patterns = re.compile(r"(?:prompt|instruction|message|template|text)", re.IGNORECASE)
-    if any(prompt_patterns.search(l) for l in added):
+    if any(prompt_patterns.search(line) for line in added):
         return "behavioral_improvement"
 
     return "neutral"

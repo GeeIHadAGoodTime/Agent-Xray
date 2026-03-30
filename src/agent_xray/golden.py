@@ -10,7 +10,7 @@ from typing import Any
 
 from .analyzer import TaskAnalysis, analyze_task
 from .capture import build_fixture, detect_milestone
-from .grader import GradeResult, RuleSet, grade_task, grade_tasks, load_rules
+from .grader import RuleSet, grade_tasks, load_rules
 from .schema import AgentTask
 
 # Built-in optimization profiles: weights for (steps, duration, cost, errors)
@@ -20,6 +20,15 @@ OPTIMIZATION_PROFILES: dict[str, dict[str, float]] = {
     "speed": {"steps": 0.1, "duration": 0.7, "cost": 0.1, "errors": 0.1},
     "steps": {"steps": 0.7, "duration": 0.1, "cost": 0.1, "errors": 0.1},
 }
+STRUCTURAL_EXEMPLAR_WARNING = (
+    "This fixture is a structural exemplar. Output correctness has NOT been "
+    "verified. Use task_bank_validate with must_answer_contains for correctness "
+    "checking."
+)
+STRUCTURAL_RANKING_NOTE = (
+    "Rankings are by execution efficiency (steps, duration, cost, errors), not "
+    "output correctness."
+)
 
 
 @dataclass(slots=True)
@@ -32,6 +41,7 @@ class GoldenRank:
     efficiency: float  # 0.0 - 1.0, higher is better
     tier: str  # "EXEMPLAR", "EFFICIENT", "BASELINE"
     site_name: str
+    complexity_weight: float
     step_count: int
     duration_s: float
     cost_usd: float
@@ -49,6 +59,7 @@ class GoldenRank:
             "efficiency": round(self.efficiency, 4),
             "tier": self.tier,
             "site_name": self.site_name,
+            "complexity_weight": round(self.complexity_weight, 3),
             "step_count": self.step_count,
             "duration_s": self.duration_s,
             "cost_usd": self.cost_usd,
@@ -84,6 +95,69 @@ class _SiteStats:
     max_cost: float
     min_errors: int
     max_errors: int
+    min_complexity_steps: float | None = None
+    max_complexity_steps: float | None = None
+    min_complexity_duration: float | None = None
+    max_complexity_duration: float | None = None
+    min_complexity_cost: float | None = None
+    max_complexity_cost: float | None = None
+    min_complexity_errors: float | None = None
+    max_complexity_errors: float | None = None
+
+
+_SIMPLE_SITE_PATTERNS = (
+    "weather",
+    "news",
+    "wiki",
+    "docs",
+    "search",
+    "status",
+)
+_COMPLEX_SITE_PATTERNS = (
+    "shop",
+    "checkout",
+    "cart",
+    "payment",
+    "amazon",
+    "booking",
+    "travel",
+)
+
+
+def _estimate_complexity_weight(analysis: TaskAnalysis) -> float:
+    """Estimate expected task complexity from step count and site/task hints."""
+    weight = 1.0
+    step_count = analysis.step_count
+    site_name = analysis.site_name.lower()
+    task_category = (analysis.task.task_category or "").lower()
+
+    if step_count <= 3:
+        weight *= 0.7
+    elif step_count <= 6:
+        weight *= 0.85
+    elif step_count <= 12:
+        weight *= 1.0
+    elif step_count <= 20:
+        weight *= 1.15
+    else:
+        weight *= 1.3
+
+    if any(pattern in site_name for pattern in _SIMPLE_SITE_PATTERNS):
+        weight *= 0.9
+    if any(pattern in site_name for pattern in _COMPLEX_SITE_PATTERNS):
+        weight *= 1.1
+
+    if task_category == "commerce":
+        weight *= 1.1
+    elif task_category == "research":
+        weight *= 0.95
+
+    return max(0.6, min(1.75, weight))
+
+
+def _complexity_adjusted(value: float, complexity_weight: float) -> float:
+    """Normalize a metric by expected task complexity."""
+    return value / max(complexity_weight, 0.1)
 
 
 def _compute_site_stats(
@@ -94,6 +168,22 @@ def _compute_site_stats(
     durations = [a.total_duration_ms / 1000.0 for a in analyses]
     costs = [a.total_cost_usd for a in analyses]
     errors = [a.errors for a in analyses]
+    adjusted_steps = [
+        _complexity_adjusted(a.step_count, _estimate_complexity_weight(a))
+        for a in analyses
+    ]
+    adjusted_durations = [
+        _complexity_adjusted(a.total_duration_ms / 1000.0, _estimate_complexity_weight(a))
+        for a in analyses
+    ]
+    adjusted_costs = [
+        _complexity_adjusted(a.total_cost_usd, _estimate_complexity_weight(a))
+        for a in analyses
+    ]
+    adjusted_errors = [
+        _complexity_adjusted(a.errors, _estimate_complexity_weight(a))
+        for a in analyses
+    ]
     return _SiteStats(
         min_steps=min(steps),
         max_steps=max(steps),
@@ -103,6 +193,14 @@ def _compute_site_stats(
         max_cost=max(costs),
         min_errors=min(errors),
         max_errors=max(errors),
+        min_complexity_steps=min(adjusted_steps),
+        max_complexity_steps=max(adjusted_steps),
+        min_complexity_duration=min(adjusted_durations),
+        max_complexity_duration=max(adjusted_durations),
+        min_complexity_cost=min(adjusted_costs),
+        max_complexity_cost=max(adjusted_costs),
+        min_complexity_errors=min(adjusted_errors),
+        max_complexity_errors=max(adjusted_errors),
     )
 
 
@@ -132,11 +230,40 @@ def compute_efficiency(
     Returns:
         Efficiency score in ``[0.0, 1.0]``.  Higher is better.
     """
-    step_score = _normalize(analysis.step_count, site_stats.min_steps, site_stats.max_steps)
     duration_s = analysis.total_duration_ms / 1000.0
-    duration_score = _normalize(duration_s, site_stats.min_duration, site_stats.max_duration)
-    cost_score = _normalize(analysis.total_cost_usd, site_stats.min_cost, site_stats.max_cost)
-    error_score = _normalize(analysis.errors, site_stats.min_errors, site_stats.max_errors)
+    complexity_weight = _estimate_complexity_weight(analysis)
+
+    if site_stats.min_complexity_steps is None or site_stats.max_complexity_steps is None:
+        steps_value = analysis.step_count
+        steps_low = site_stats.min_steps
+        steps_high = site_stats.max_steps
+        duration_value = duration_s
+        duration_low = site_stats.min_duration
+        duration_high = site_stats.max_duration
+        cost_value = analysis.total_cost_usd
+        cost_low = site_stats.min_cost
+        cost_high = site_stats.max_cost
+        error_value = analysis.errors
+        error_low = site_stats.min_errors
+        error_high = site_stats.max_errors
+    else:
+        steps_value = _complexity_adjusted(analysis.step_count, complexity_weight)
+        steps_low = site_stats.min_complexity_steps
+        steps_high = site_stats.max_complexity_steps
+        duration_value = _complexity_adjusted(duration_s, complexity_weight)
+        duration_low = site_stats.min_complexity_duration or site_stats.min_duration
+        duration_high = site_stats.max_complexity_duration or site_stats.max_duration
+        cost_value = _complexity_adjusted(analysis.total_cost_usd, complexity_weight)
+        cost_low = site_stats.min_complexity_cost or site_stats.min_cost
+        cost_high = site_stats.max_complexity_cost or site_stats.max_cost
+        error_value = _complexity_adjusted(analysis.errors, complexity_weight)
+        error_low = site_stats.min_complexity_errors or float(site_stats.min_errors)
+        error_high = site_stats.max_complexity_errors or float(site_stats.max_errors)
+
+    step_score = _normalize(steps_value, steps_low, steps_high)
+    duration_score = _normalize(duration_value, duration_low, duration_high)
+    cost_score = _normalize(cost_value, cost_low, cost_high)
+    error_score = _normalize(error_value, error_low, error_high)
 
     weighted = (
         profile.get("steps", 0.25) * step_score
@@ -212,6 +339,7 @@ def rank_golden_runs(
     tasks: list[AgentTask],
     rules: RuleSet | None = None,
     optimize: str | dict[str, float] = "balanced",
+    per_site: bool = True,
 ) -> dict[str, list[GoldenRank]]:
     """Grade all tasks, filter to GOLDEN/GOOD, group by site, rank by efficiency.
 
@@ -219,6 +347,8 @@ def rank_golden_runs(
         tasks: All tasks to evaluate.
         rules: Ruleset for grading.  Defaults to the built-in default.
         optimize: Profile name or custom weight dict.
+        per_site: When ``True``, rank within each site group. When ``False``,
+            compare all golden/good runs together using complexity-adjusted metrics.
 
     Returns:
         Dict keyed by ``site_name``, each value a list of :class:`GoldenRank`
@@ -230,16 +360,17 @@ def rank_golden_runs(
     grades = grade_tasks(tasks, rules)
     grade_by_id = {g.task_id: g for g in grades}
     analyses = {t.task_id: analyze_task(t) for t in tasks}
+    task_by_id = {t.task_id: t for t in tasks}
 
     # Filter to GOLDEN and GOOD only
     golden_ids = {g.task_id for g in grades if g.grade in ("GOLDEN", "GOOD")}
     if not golden_ids:
         return {}
 
-    # Group by site
+    # Group by site unless explicitly comparing across sites.
     site_groups: dict[str, list[str]] = {}
     for task_id in golden_ids:
-        site = analyses[task_id].site_name
+        site = analyses[task_id].site_name if per_site else "all-sites"
         site_groups.setdefault(site, []).append(task_id)
 
     result: dict[str, list[GoldenRank]] = {}
@@ -251,7 +382,7 @@ def rank_golden_runs(
         for tid in task_ids:
             a = analyses[tid]
             g = grade_by_id[tid]
-            task = next(t for t in tasks if t.task_id == tid)
+            task = task_by_id[tid]
             milestones = _milestones_for_task(task)
             eff = compute_efficiency(a, profile, stats)
             notes = _efficiency_notes(a, stats)
@@ -262,7 +393,8 @@ def rank_golden_runs(
                     score=g.score,
                     efficiency=eff,
                     tier="BASELINE",  # assigned below
-                    site_name=site,
+                    site_name=a.site_name,
+                    complexity_weight=_estimate_complexity_weight(a),
                     step_count=a.step_count,
                     duration_s=round(a.total_duration_ms / 1000.0, 2),
                     cost_usd=round(a.total_cost_usd, 4),
@@ -401,7 +533,7 @@ def explain_efficiency_gap(
         )
     elif len(ot_milestones) > len(ex_milestones):
         explanations.append(
-            f"other run reached more milestones but was less efficient overall"
+            "other run reached more milestones but was less efficient overall"
         )
 
     if not explanations:
@@ -425,7 +557,7 @@ def format_golden_ranking(
     """
     profile_name = optimize if isinstance(optimize, str) else "custom"
     lines: list[str] = [
-        f"GOLDEN RANKING ({profile_name})",
+        f"GOLDEN RANKING (structural, {profile_name})",
         "=" * 60,
     ]
 
@@ -461,6 +593,9 @@ def format_golden_ranking(
         lines.append("")
         lines.append("EXEMPLAR INSIGHTS:")
         lines.extend(exemplar_notes)
+
+    lines.append("")
+    lines.append(f"Note: {STRUCTURAL_RANKING_NOTE}")
 
     return "\n".join(lines)
 

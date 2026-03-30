@@ -1,50 +1,6 @@
 from __future__ import annotations
 
 from .analyzer import TaskAnalysis, analyze_task, analyze_tasks, load_tasks
-from .completeness import CompletenessReport, CompletenessWarning, check_completeness
-from .comparison import ModelComparisonResult, compare_model_runs, format_model_comparison
-from .diagnose import (
-    DefaultTargetResolver,
-    FIX_TARGETS,
-    FixPlanEntry,
-    INVESTIGATION_HINTS,
-    TargetResolver,
-    build_fix_plan,
-    format_fix_plan_text,
-    get_target_resolver,
-    list_all_targets,
-    register_target_resolver,
-    validate_fix_targets,
-)
-from .grader import (
-    GradeResult,
-    RuleSet,
-    SignalResult,
-    grade_task,
-    grade_tasks,
-    load_rules,
-    normalize_score,
-    validate_rules,
-)
-from .protocols import PromptBuilder, StaticPromptBuilder, StaticToolRegistry, ToolRegistry
-from .replay import format_replay_text, replay_fixture
-from .root_cause import (
-    ROOT_CAUSES,
-    ClassificationConfig,
-    RootCauseResult,
-    classify_failures,
-    classify_task,
-    summarize_root_causes,
-)
-from .schema import (
-    AgentStep,
-    AgentTask,
-    BrowserContext,
-    ModelContext,
-    ReasoningContext,
-    TaskOutcome,
-    ToolContext,
-)
 from .baseline import (
     Baseline,
     OverheadResult,
@@ -55,20 +11,26 @@ from .baseline import (
     generate_naked_prompt,
     group_by_prompt_hash,
     measure_overhead,
+    suggest_baseline_capture,
 )
-from .golden import (
-    OPTIMIZATION_PROFILES,
-    GoldenRank,
-    capture_exemplar,
-    explain_efficiency_gap,
-    find_exemplars,
-    format_golden_ranking,
-    rank_golden_runs,
+from .comparison import ModelComparisonResult, compare_model_runs, format_model_comparison
+from .completeness import CompletenessReport, CompletenessWarning, check_completeness
+from .diagnose import (
+    FIX_TARGETS,
+    INVESTIGATION_HINTS,
+    DefaultTargetResolver,
+    FixPlanEntry,
+    TargetResolver,
+    build_fix_plan,
+    format_fix_plan_text,
+    get_target_resolver,
+    list_all_targets,
+    register_target_resolver,
+    validate_fix_targets,
 )
-from .signals import SignalDetector, discover_detectors, run_detection
 from .enforce import (
-    ChangeRecord,
     ChallengeResult,
+    ChangeRecord,
     DiffHunk,
     EnforceConfig,
     EnforceReport,
@@ -82,6 +44,7 @@ from .enforce import (
     enforce_guard,
     enforce_init,
     enforce_plan,
+    enforce_quick,
     enforce_reset,
     enforce_status,
     parse_test_output,
@@ -114,6 +77,46 @@ from .enforce_report import (
     generate_report,
     load_project_rules,
 )
+from .golden import (
+    OPTIMIZATION_PROFILES,
+    GoldenRank,
+    capture_exemplar,
+    explain_efficiency_gap,
+    find_exemplars,
+    format_golden_ranking,
+    rank_golden_runs,
+)
+from .grader import (
+    GradeResult,
+    RuleSet,
+    SignalResult,
+    grade_task,
+    grade_tasks,
+    load_rules,
+    normalize_score,
+    validate_rules,
+)
+from .protocols import PromptBuilder, StaticPromptBuilder, StaticToolRegistry, ToolRegistry
+from .replay import format_replay_text, replay_fixture
+from .root_cause import (
+    ROOT_CAUSES,
+    ClassificationConfig,
+    RootCauseResult,
+    classify_failures,
+    classify_task,
+    summarize_root_causes,
+)
+from .schema import (
+    AgentStep,
+    AgentTask,
+    BrowserContext,
+    ModelContext,
+    ReasoningContext,
+    TaskOutcome,
+    ToolContext,
+)
+from .signals import SignalDetector, discover_detectors, run_detection
+
 try:
     from .mcp_server import main as mcp_main
     from .mcp_server import server as mcp_server
@@ -227,6 +230,7 @@ __all__ = [
     "build_baseline",
     "measure_overhead",
     "group_by_prompt_hash",
+    "suggest_baseline_capture",
     "format_overhead_report",
     "format_prompt_impact_report",
     # Signals
@@ -242,6 +246,7 @@ __all__ = [
     "EnforceReport",
     "enforce_init",
     "enforce_check",
+    "enforce_quick",
     "enforce_diff",
     "enforce_status",
     "enforce_challenge",

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from agent_xray.grader import GradeResult, grade_task, load_rules
 from agent_xray.root_cause import (
     ClassificationConfig,
+    PROMPT_BUG_PATTERNS,
     RootCauseResult,
     classify_failures,
     classify_task,
 )
-from agent_xray.schema import AgentStep, AgentTask, ToolContext
+from agent_xray.schema import AgentStep, AgentTask, TaskOutcome, ToolContext
 
 RULES_PATH = Path(__file__).resolve().parents[1] / "src" / "agent_xray" / "rules" / "default.json"
 
@@ -60,6 +62,22 @@ def _task(steps: list[AgentStep], *, task_category: str | None = None) -> AgentT
         task_text="investigate failure",
         task_category=task_category,
         steps=steps,
+    )
+
+
+def _outcome(
+    status: str,
+    *,
+    total_steps: int | None = None,
+    final_answer: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> TaskOutcome:
+    return TaskOutcome(
+        task_id="task-1",
+        status=status,
+        total_steps=total_steps,
+        final_answer=final_answer,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -270,6 +288,43 @@ def test_classify_memory_overload() -> None:
     assert cause.confidence_score == 0.7
 
 
+def test_classify_context_overflow() -> None:
+    task = _task(
+        [
+            _step(
+                1,
+                "shell",
+                llm_reasoning=(
+                    "I have a clear plan with enough detail to trace the issue step by step before "
+                    "changing anything."
+                ),
+            ),
+            _step(
+                2,
+                "shell",
+                llm_reasoning="The context window is full and I am losing track of earlier failures.",
+            ),
+            _step(
+                3,
+                "shell",
+                error="validation error: malformed payload",
+                llm_reasoning="Unsure.",
+            ),
+            _step(
+                4,
+                "respond",
+                tool_result="Need retry.",
+                llm_reasoning="Not sure.",
+            ),
+        ]
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "context_overflow"
+    assert cause.confidence == "medium"
+    assert any("context pressure" in evidence for evidence in cause.evidence)
+
+
 def test_classify_reasoning_bug() -> None:
     task = _task(
         [
@@ -325,6 +380,22 @@ def test_classify_tool_bug() -> None:
     assert cause.root_cause == "tool_bug"
 
 
+def test_classify_rate_limit_cascade() -> None:
+    task = _task(
+        [
+            _step(1, "web_search", tool_result="429 Too Many Requests from upstream"),
+            _step(2, "web_search", tool_result="rate limit exceeded by provider"),
+            _step(3, "web_search", tool_result="too many requests, retry later"),
+            _step(4, "respond", tool_result="Retrying failed."),
+        ]
+    )
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "rate_limit_cascade"
+    assert cause.confidence == "high"
+    assert any("rate-limit" in evidence for evidence in cause.evidence)
+
+
 def test_classify_environment_drift() -> None:
     task = _task(
         [
@@ -349,6 +420,50 @@ def test_classify_model_limit() -> None:
     cause = classify_task(task, _failing_grade(task))
     assert cause is not None
     assert cause.root_cause == "model_limit"
+
+
+def test_classify_timeout() -> None:
+    tools = ["browser_navigate", "browser_click", "browser_snapshot"]
+    steps = [
+        _step(
+            index,
+            tools[(index - 1) % len(tools)],
+            page_url=f"https://shop.example.test/step-{index}",
+            tool_result="progress",
+        )
+        for index in range(1, 41)
+    ]
+    steps.extend(
+        [
+            _step(41, "browser_snapshot", page_url="https://shop.example.test/checkout"),
+            _step(
+                42,
+                "browser_click",
+                page_url="https://shop.example.test/checkout",
+                tool_result="still blocked",
+            ),
+            _step(43, "browser_snapshot", page_url="https://shop.example.test/checkout"),
+            _step(
+                44,
+                "browser_click",
+                page_url="https://shop.example.test/checkout",
+                tool_result="same modal remains",
+            ),
+            _step(
+                45,
+                "browser_click",
+                page_url="https://shop.example.test/checkout",
+                error="could not finish before stop condition",
+            ),
+        ]
+    )
+    task = _task(steps)
+    task.outcome = _outcome("failed", total_steps=45)
+    cause = classify_task(task, _failing_grade(task))
+    assert cause is not None
+    assert cause.root_cause == "timeout"
+    assert cause.confidence == "medium"
+    assert any("no new progress" in evidence for evidence in cause.evidence)
 
 
 def test_numeric_confidence_compatibility() -> None:
@@ -486,6 +601,43 @@ def test_classify_failures_passes_expected_rejections_config() -> None:
     )
     assert len(failures) == 1
     assert failures[0].root_cause != "tool_rejection_mismatch"
+
+
+def test_new_prompt_bug_patterns_match_expected_strings() -> None:
+    cases = [
+        (
+            "login flow hit an authentication sign in fail on the account page",
+            "auth",
+            "login sequence guidance",
+        ),
+        (
+            "captcha challenge blocked the browser from continuing",
+            "browser",
+            "captcha detection and fallback instructions",
+        ),
+        (
+            "checkout popup modal overlay blocked the next click",
+            "browser",
+            "popup dismissal guidance",
+        ),
+        (
+            "cookie consent banner required us to accept cookies before checkout",
+            "browser",
+            "cookie consent handling",
+        ),
+    ]
+
+    for sample, expected_section, expected_hint in cases:
+        matches = [
+            (section, fix_hint)
+            for pattern, section, fix_hint in PROMPT_BUG_PATTERNS
+            if re.search(pattern, sample, re.IGNORECASE)
+        ]
+        assert matches
+        assert any(
+            section == expected_section and expected_hint in fix_hint
+            for section, fix_hint in matches
+        )
 
 
 def test_classify_healthy_task_returns_none(golden_task: AgentTask) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -10,14 +11,32 @@ def _normalize_task_text(task: Any) -> str:
     return normalized or str(getattr(task, "task_id", ""))
 
 
-def _task_recency_key(task: Any) -> tuple[str, int, str]:
-    latest_timestamp = ""
+def _timestamp_sort_key(value: Any) -> tuple[int, str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return (0, "")
+    try:
+        return (1, str(float(raw)))
+    except (TypeError, ValueError):
+        pass
+    try:
+        normalized = raw.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return (2, parsed.astimezone(timezone.utc).isoformat())
+    except ValueError:
+        return (1, raw)
+
+
+def _task_recency_key(task: Any) -> tuple[tuple[int, str], int, str]:
+    latest_timestamp = (0, "")
     for step in getattr(task, "steps", []) or []:
-        timestamp = str(getattr(step, "timestamp", "") or "")
+        timestamp = _timestamp_sort_key(getattr(step, "timestamp", ""))
         if timestamp > latest_timestamp:
             latest_timestamp = timestamp
     outcome = getattr(task, "outcome", None)
-    outcome_timestamp = str(getattr(outcome, "timestamp", "") or "")
+    outcome_timestamp = _timestamp_sort_key(getattr(outcome, "timestamp", ""))
     if outcome_timestamp > latest_timestamp:
         latest_timestamp = outcome_timestamp
     return (

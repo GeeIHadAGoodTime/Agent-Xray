@@ -14,3 +14,4 @@ coverage.json
 .codex_prompts/
 *.whl
 *.tar.gz
+.agent-xray-enforce/

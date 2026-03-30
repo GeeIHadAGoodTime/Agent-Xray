@@ -13,7 +13,19 @@ from typing import Any
 from .analyzer import TaskAnalysis, analyze_task
 from .schema import AgentTask
 
-SUPPORTED_OPERATORS = ("gte", "gt", "lte", "lt", "equals", "in", "contains_any", "ne", "not_in")
+SUPPORTED_OPERATORS = (
+    "gte",
+    "gt",
+    "lte",
+    "lt",
+    "equals",
+    "eq",
+    "in",
+    "contains_any",
+    "ne",
+    "not_in",
+    "between",
+)
 REQUIRED_GRADE_THRESHOLDS = ("GOLDEN", "GOOD", "OK", "WEAK")
 
 
@@ -57,6 +69,7 @@ class GradeResult:
         metrics: Flattened metrics map used during grading.
         signals: Per-rule pass/fail results.
         normalized_score: Score normalized to the ``0.0`` to ``1.0`` range.
+        grade_type: What the grade measures. Defaults to ``"structural"``.
     """
 
     task_id: str
@@ -66,6 +79,15 @@ class GradeResult:
     metrics: dict[str, Any]
     signals: list[SignalResult]
     normalized_score: float = 0.0
+    grade_type: str = "structural"
+
+    def display_grade(self) -> str:
+        if not self.grade_type:
+            return self.grade
+        return f"{self.grade} ({self.grade_type})"
+
+    def __str__(self) -> str:
+        return f"{self.task_id}: {self.display_grade()} score={self.score}"
 
 
 def _default_rules_path() -> Path:
@@ -180,11 +202,13 @@ def _normalize_rule(rule: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(rule)
     if "op" in normalized:
         normalized["op"] = str(normalized["op"])
+        if normalized["op"] == "eq":
+            normalized["op"] = "equals"
         normalized["value"] = normalized.get("value")
         return normalized
     for operator in SUPPORTED_OPERATORS:
         if operator in normalized:
-            normalized["op"] = operator
+            normalized["op"] = "equals" if operator == "eq" else operator
             normalized["value"] = normalized[operator]
             return normalized
     raise ValueError(f"rule '{_rule_name(rule)}' is missing a comparator")
@@ -211,6 +235,16 @@ def _compare(actual: Any, rule: dict[str, Any]) -> bool:
             return bool(actual < expected)
         if op == "equals":
             return bool(actual == expected)
+        if op == "between":
+            if (
+                not isinstance(expected, (list, tuple))
+                or len(expected) != 2
+                or not all(_is_numeric(item) for item in expected)
+                or not _is_numeric(actual)
+            ):
+                return False
+            lower, upper = expected
+            return bool(float(lower) <= float(actual) <= float(upper))
         if op == "in":
             if not isinstance(expected, (list, tuple, set)):
                 return False
@@ -236,11 +270,17 @@ def _compare(actual: Any, rule: dict[str, Any]) -> bool:
 
 
 def _rule_field(rule: dict[str, Any]) -> str:
-    return str(rule.get("field") or rule.get("metric") or "")
+    return str(rule.get("field") or rule.get("metric") or rule.get("signal") or "")
 
 
 def _rule_name(rule: dict[str, Any]) -> str:
-    return str(rule.get("name") or rule.get("label") or _rule_field(rule) or "<unknown>")
+    return str(
+        rule.get("name")
+        or rule.get("label")
+        or rule.get("signal")
+        or _rule_field(rule)
+        or "<unknown>"
+    )
 
 
 def _expected_value(rule: dict[str, Any]) -> Any:
@@ -307,7 +347,12 @@ def _available_metric_paths() -> frozenset[str]:
 def _rule_has_comparison_value(rule: dict[str, Any], normalized: dict[str, Any]) -> bool:
     if "value" in rule:
         return True
-    return str(normalized["op"]) in rule
+    op = str(normalized["op"])
+    return op in rule or (op == "equals" and "eq" in rule)
+
+
+def _rule_has_signal_reference(rule: dict[str, Any]) -> bool:
+    return bool(_rule_field(rule).strip())
 
 
 def _points_polarity(rule: dict[str, Any]) -> set[int]:
@@ -328,6 +373,18 @@ def _is_numeric(value: Any) -> bool:
 def _range_bounds(rule: dict[str, Any]) -> tuple[float | None, bool, float | None, bool] | None:
     op = str(rule.get("op"))
     expected = rule.get("value")
+    if op == "between":
+        if (
+            not isinstance(expected, (list, tuple))
+            or len(expected) != 2
+            or not all(_is_numeric(item) for item in expected)
+        ):
+            return None
+        lower = float(expected[0])
+        upper = float(expected[1])
+        if lower > upper:
+            lower, upper = upper, lower
+        return (lower, True, upper, True)
     if not _is_numeric(expected):
         return None
     val = float(expected)  # type: ignore[arg-type]  # guarded by _is_numeric
@@ -414,6 +471,7 @@ def validate_rules(rules: RuleSet) -> list[str]:
     warnings_list: list[str] = []
     available_fields = _available_metric_paths()
     normalized_rules: list[dict[str, Any]] = []
+    seen_rule_names: dict[str, int] = {}
 
     for threshold in REQUIRED_GRADE_THRESHOLDS:
         if threshold not in rules.grade_thresholds:
@@ -422,6 +480,19 @@ def validate_rules(rules: RuleSet) -> list[str]:
     for index, raw_rule in enumerate(rules.signals, start=1):
         field_name = _rule_field(raw_rule)
         rule_name = _rule_name(raw_rule)
+        if not _rule_has_signal_reference(raw_rule):
+            warnings_list.append(
+                f"rule {index} '{rule_name}' is missing a signal/metric/field reference"
+            )
+        if "points" not in raw_rule:
+            warnings_list.append(f"rule {index} '{rule_name}' is missing required field 'points'")
+        previous_index = seen_rule_names.get(rule_name)
+        if previous_index is not None:
+            warnings_list.append(
+                f"rules {previous_index} and {index} share duplicate signal name '{rule_name}'"
+            )
+        else:
+            seen_rule_names[rule_name] = index
         normalized: dict[str, Any] | None
         try:
             normalized = _normalize_rule(raw_rule)

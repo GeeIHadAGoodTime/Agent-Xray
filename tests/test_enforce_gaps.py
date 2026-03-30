@@ -210,6 +210,47 @@ class TestEnforceAuto:
             _run_shell_fn=lambda cmd, cwd: (0, "ok"),
         )
         assert report.total_iterations <= 3
+        assert report.stopped_reason == "max_iterations"
+
+    def test_auto_stops_on_max_duration(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        ticks = iter([0.0, 5.0])
+        monkeypatch.setattr("agent_xray.enforce.perf_counter", lambda: next(ticks))
+
+        config = EnforceConfig(
+            test_command="test",
+            project_root=str(tmp_path),
+            max_iterations=5,
+            max_duration_seconds=1,
+            challenge_every=0,
+        )
+        report = enforce_auto(
+            config,
+            "agent-cmd",
+            _run_tests_fn=lambda cmd, cwd: _baseline(),
+            _run_shell_fn=lambda cmd, cwd: (0, "ok"),
+        )
+        assert report.total_iterations == 0
+        assert report.stopped_reason == "max_duration"
+
+    def test_auto_stops_on_max_cost(self, tmp_path: Path):
+        baseline = _baseline()
+        baseline.cost_usd = 0.75  # type: ignore[attr-defined]
+
+        config = EnforceConfig(
+            test_command="test",
+            project_root=str(tmp_path),
+            max_iterations=5,
+            max_total_cost_usd=0.5,
+            challenge_every=0,
+        )
+        report = enforce_auto(
+            config,
+            "agent-cmd",
+            _run_tests_fn=lambda cmd, cwd: baseline,
+            _run_shell_fn=lambda cmd, cwd: (0, "ok"),
+        )
+        assert report.total_iterations == 0
+        assert report.stopped_reason == "max_cost"
 
     def test_auto_uses_configured_test_timeout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         timeouts: list[int] = []

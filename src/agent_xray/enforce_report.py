@@ -12,13 +12,10 @@ from typing import Any
 
 from .enforce import (
     ChangeRecord,
-    ChallengeResult,
-    DiffHunk,
     EnforceReport,
     TestResult,
     build_enforce_report,
 )
-
 
 # ---------------------------------------------------------------------------
 # ANSI color helpers (terminal only)
@@ -68,7 +65,7 @@ def load_project_rules(rules_path: str) -> dict[str, Any]:
     malformed.  Never raises.
     """
     try:
-        with open(rules_path, "r", encoding="utf-8") as fh:
+        with open(rules_path, encoding="utf-8") as fh:
             data = json.load(fh)
         if not isinstance(data, dict):
             return {}
@@ -465,6 +462,8 @@ def format_enforce_text(report: EnforceReport, *, color: bool = True) -> str:
     lines.append(f"  Net improvement: {report.net_improvement:+d} tests")
     if report.duration_seconds > 0:
         lines.append(f"  Duration: {report.duration_seconds:.0f}s")
+    if report.stopped_reason:
+        lines.append(f"  Stopped: {report.stopped_reason}")
     # GAP 13: Efficiency
     if report.total_iterations > 0:
         lines.append(f"  Efficiency: {report.efficiency_ratio:.1%} (committed/total)")
@@ -611,6 +610,8 @@ def format_enforce_markdown(report: EnforceReport) -> str:
     lines.append(f"| Net improvement | {report.net_improvement:+d} tests |")
     if report.duration_seconds > 0:
         lines.append(f"| Duration | {report.duration_seconds:.0f}s |")
+    if report.stopped_reason:
+        lines.append(f"| Stopped reason | {report.stopped_reason} |")
     if report.total_iterations > 0:
         lines.append(f"| Efficiency | {report.efficiency_ratio:.1%} |")
     ipi = _improvements_per_iteration(report)

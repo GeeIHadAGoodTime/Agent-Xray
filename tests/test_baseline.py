@@ -24,6 +24,7 @@ from agent_xray.baseline import (
     overhead_report_data,
     prompt_impact_data,
     save_baseline,
+    suggest_baseline_capture,
 )
 from agent_xray.grader import grade_tasks, load_rules
 from agent_xray.schema import AgentStep, AgentTask, TaskOutcome, ToolContext
@@ -257,6 +258,24 @@ class TestBuildBaseline:
         analysis = analyze_task(task)
         baseline = build_baseline(task, analysis)
         assert baseline.user_text == task.task_text
+
+
+class TestSuggestBaselineCapture:
+    def test_returns_only_significant_improvements(self) -> None:
+        before = {
+            "task-broken": "BROKEN",
+            "task-weak": "WEAK",
+            "task-ok": "OK",
+            "task-good": "GOOD",
+        }
+        after = {
+            "task-broken": "GOOD",
+            "task-weak": "GOLDEN",
+            "task-ok": "GOOD",
+            "task-good": "GOLDEN",
+        }
+
+        assert suggest_baseline_capture(before, after) == ["task-broken", "task-weak"]
 
 
 # ---------------------------------------------------------------------------

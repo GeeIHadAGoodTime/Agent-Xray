@@ -319,6 +319,60 @@ def test_analyze_task_records_final_answer_failure_signal() -> None:
     assert "error" in analysis.final_answer_failure_keywords_matched
 
 
+def test_analyze_task_flags_ungrounded_answer_when_final_answer_introduces_new_number() -> None:
+    task = _task(
+        _step(1, "web_search", tool_result="Order confirmation number 12345 was captured.")
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="completed",
+        final_answer="Order placed successfully. Confirmation #67890.",
+    )
+
+    analysis = analyze_task(task)
+
+    assert analysis.ungrounded_answer is True
+    assert analysis.metrics()["ungrounded_answer"] is True
+
+
+def test_analyze_task_keeps_grounded_answer_when_specific_tokens_match_tool_results() -> None:
+    task = _task(
+        _step(
+            1,
+            "read_url",
+            tool_result="Customer: Alice. Confirmation #12345. Receipt: https://shop.example.test/r/12345",
+        )
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="completed",
+        final_answer="Alice order confirmed with #12345. Receipt: https://shop.example.test/r/12345",
+    )
+
+    analysis = analyze_task(task)
+
+    assert analysis.ungrounded_answer is False
+
+
+def test_default_rules_apply_ungrounded_answer_penalty() -> None:
+    task = _task(
+        _step(1, "respond", tool_result="The only grounded data here is confirmation #12345.")
+    )
+    task.outcome = TaskOutcome(
+        task_id=task.task_id,
+        status="completed",
+        final_answer="Done. Confirmation #67890.",
+    )
+
+    result = grade_task(task, load_rules("default"))
+
+    signal = next((s for s in result.signals if s.name == "ungrounded_answer_penalty"), None)
+    assert signal is not None
+    assert signal.passed is True
+    assert signal.points == -1
+    assert signal.actual is True
+
+
 def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
     task = _task(_step(1, "browser_fill_ref", tool_result="Element not found"))
     analysis = analyze_task(task)
@@ -327,6 +381,7 @@ def test_task_analysis_round_trip_preserves_soft_error_fields() -> None:
     assert restored.soft_error_kinds == {"soft_element_missing": 1}
     assert restored.final_answer_contains_failure_keywords is False
     assert restored.task.task_id == analysis.task.task_id
+    assert restored.ungrounded_answer is False
 
 
 def test_consultative_response_detected_for_short_think_only_task() -> None:

@@ -22,7 +22,11 @@ from .capture import capture_task
 from .comparison import compare_model_runs, format_model_comparison
 from .contrib.task_bank import (
     grade_with_task_bank,
+)
+from .contrib.task_bank import (
     load_task_bank as load_task_bank_entries,
+)
+from .contrib.task_bank import (
     validate_task_bank as validate_task_bank_file,
 )
 from .dedup import _dedupe_tasks
@@ -73,8 +77,13 @@ from .reports import (
     report_tools_data,
     report_tools_markdown,
 )
-from .root_cause import ClassificationConfig, classify_failures, classify_task as classify_rc
-from .root_cause import format_root_causes_text, summarize_root_causes
+from .root_cause import (
+    ClassificationConfig,
+    classify_failures,
+    format_root_causes_text,
+    summarize_root_causes,
+)
+from .root_cause import classify_task as classify_rc
 from .schema import AgentTask
 from .surface import (
     diff_tasks,
@@ -84,10 +93,8 @@ from .surface import (
     format_prompt_diff,
     format_reasoning_text,
     format_surface_text,
-    format_tree_text,
     reasoning_for_task,
     surface_for_task,
-    tree_for_tasks,
 )
 
 DEFAULT_LOG_DIR = os.environ.get("AGENT_XRAY_LOG_DIR", ".")
@@ -103,6 +110,9 @@ FORMAT_CHOICES = [
     "otel",
 ]
 GRADE_LABELS = ["GOLDEN", "GOOD", "OK", "WEAK", "BROKEN"]
+STRUCTURAL_GRADE_SUMMARY_NOTE = (
+    "Note: Grades measure execution structure, not output correctness."
+)
 SUPPORTED_FORMATS_TEXT = (
     "generic JSONL step logs, OpenAI SDK JSONL, LangChain JSONL, "
     "Anthropic JSONL, CrewAI JSONL, OpenTelemetry JSONL"
@@ -152,6 +162,18 @@ def _safe_print(text: str) -> None:
         print(text.encode(enc, errors="replace").decode(enc, errors="replace"))
 
 
+def _safe_print_stderr(text: str) -> None:
+    """Print to stderr with graceful encoding fallback."""
+    try:
+        print(text, file=sys.stderr)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stderr, "encoding", None) or "utf-8"
+        print(
+            text.encode(enc, errors="replace").decode(enc, errors="replace"),
+            file=sys.stderr,
+        )
+
+
 def _dump(data: object) -> None:
     _safe_print(json.dumps(data, indent=2))
 
@@ -169,6 +191,62 @@ def _emit_verbose(message: str, args: argparse.Namespace | CliSettings | None) -
     ui = _settings(args)
     if ui.verbose and not ui.quiet:
         _safe_print(message)
+
+
+def _format_cli_error(message: str) -> str:
+    text = str(message).strip()
+    if text.startswith("Error:"):
+        return text
+    return f"Error: {text}"
+
+
+def _emit_error(
+    message: str,
+    args: argparse.Namespace | CliSettings | None = None,
+    *,
+    final: bool = True,
+) -> None:
+    del args, final
+    _safe_print_stderr(_format_cli_error(message))
+
+
+def _extract_missing_path(exc: FileNotFoundError) -> str:
+    if exc.filename:
+        return str(exc.filename)
+    message = str(exc).strip()
+    for prefix in (
+        "log path does not exist: ",
+        "Path not found: ",
+        "No such file or directory: ",
+    ):
+        if message.startswith(prefix):
+            return message[len(prefix):].strip()
+    return message
+
+
+def _format_missing_trace_error(exc: FileNotFoundError) -> str:
+    return f"No traces found at {_extract_missing_path(exc)}"
+
+
+def _format_malformed_trace_error(exc: json.JSONDecodeError) -> str:
+    detail = exc.msg.strip()
+    if detail.endswith(".json") or detail.endswith(".jsonl") or "\\" in detail or "/" in detail:
+        return f"Malformed trace file: {detail}"
+    return "Malformed trace file"
+
+
+def _raise_if_malformed_trace_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    with path.open(encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise json.JSONDecodeError(str(path), line, exc.pos) from exc
 
 
 def _paint(text: str, color_key: str, args: argparse.Namespace | CliSettings | None) -> str:
@@ -258,6 +336,7 @@ def _format_grade_summary(
     ]
     for label in GRADE_LABELS:
         lines.append(f"  {_paint(label, label, args)}: {distribution[label]}")
+    lines.extend(["", STRUCTURAL_GRADE_SUMMARY_NOTE])
     return "\n".join(lines)
 
 
@@ -375,11 +454,17 @@ def _run_command(args: argparse.Namespace, action: Callable[[], int]) -> int:
         _emit(str(exc), args, final=True)
         return 1
     except FileNotFoundError as exc:
-        _emit(str(exc), args, final=True)
+        _emit(_format_missing_trace_error(exc), args, final=True)
+        return 1
+    except json.JSONDecodeError as exc:
+        _emit(_format_malformed_trace_error(exc), args, final=True)
         return 1
     except KeyError as exc:
         message = str(exc.args[0]) if exc.args else str(exc)
         _emit(message, args, final=True)
+        return 1
+    except ValueError as exc:
+        _emit(str(exc), args, final=True)
         return 1
 
 
@@ -648,8 +733,9 @@ def _load_tasks_with_format(
             _emit_verbose("Native trace loader found no tasks; trying adapters.", ui)
             tasks = load_adapted_tasks(path, format="auto", days=days)
     if not tasks:
+        _raise_if_malformed_trace_file(path)
         raise CliError(
-            f"No agent traces found in {path}. Supported formats: {SUPPORTED_FORMATS_TEXT}"
+            f"No agent traces found in {path}. Expected JSONL files with agent step data."
         )
     total_steps = sum(len(task.steps) for task in tasks)
     _emit_verbose(
@@ -770,18 +856,18 @@ def cmd_surface(args: argparse.Namespace) -> int:
             if bank_match:
                 lines = [
                     "\n" + "=" * 72,
-                    "TASK BANK EXPECTATIONS (matched: %s)" % bank_match["id"],
+                    "TASK BANK EXPECTATIONS (matched: {})".format(bank_match["id"]),
                     "=" * 72,
-                    "Expected: %s" % bank_match["expected_user_text"],
-                    "Category: %s  Difficulty: %s" % (bank_match["category"], bank_match["difficulty"]),
+                    "Expected: {}".format(bank_match["expected_user_text"]),
+                    "Category: {}  Difficulty: {}".format(bank_match["category"], bank_match["difficulty"]),
                     "",
                 ]
                 for line in bank_match["criteria_results"]:
-                    lines.append("  %s" % line)
+                    lines.append(f"  {line}")
                 text += "\n".join(lines)
             log_dir = _resolve_log_dir(args)
-            text += "\n\nTip: use 'agent-xray reasoning {tid} {log}' for focused reasoning view.".format(tid=args.task_id, log=log_dir)
-            text += "\nNext: agent-xray diff <other_task_id> {tid} {log}  # compare with a similar task".format(tid=args.task_id, log=log_dir)
+            text += f"\n\nTip: use 'agent-xray reasoning {args.task_id} {log_dir}' for focused reasoning view."
+            text += f"\nNext: agent-xray diff <other_task_id> {args.task_id} {log_dir}  # compare with a similar task"
             _emit(text, args, final=True)
         return 0
 
@@ -911,6 +997,7 @@ def cmd_triage(args: argparse.Namespace) -> int:
                     lines.append(f"  {i}. [{fp.priority}] {fp.root_cause}: {fp.fix_hint}")
                     if fp.investigate_task:
                         lines.append(f"     >> agent-xray surface {fp.investigate_task} {log_dir}")
+            lines.extend(["", STRUCTURAL_GRADE_SUMMARY_NOTE])
             _emit("\n".join(lines), args, final=True)
         return 0
 
@@ -978,45 +1065,43 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             _dump(payload)
         else:
             lines: list[str] = []
-            lines.append("=== INSPECT: %s ===" % task.task_id)
-            lines.append("Task: %s" % (task.task_text or "")[:120])
-            lines.append("Site: %s" % analysis.site_name)
-            lines.append("Grade: %s (score=%s)" % (grade.grade, grade.score))
+            lines.append(f"=== INSPECT: {task.task_id} ===")
+            lines.append("Task: {}".format((task.task_text or "")[:120]))
+            lines.append(f"Site: {analysis.site_name}")
+            lines.append(f"Grade: {grade.display_grade()} (score={grade.score})")
             if rc:
-                lines.append("Root cause: %s (confidence=%s)" % (rc.root_cause, rc.confidence))
+                lines.append(f"Root cause: {rc.root_cause} (confidence={rc.confidence})")
                 for ev in (rc.evidence or [])[:3]:
-                    lines.append("  - %s" % ev)
+                    lines.append(f"  - {ev}")
             lines.append("")
-            lines.append("Metrics: %d steps, %d errors, $%.4f, %dms" % (
-                len(task.steps),
-                analysis.errors,
-                analysis.total_cost_usd or 0,
-                analysis.total_duration_ms or 0,
-            ))
+            lines.append(
+                f"Metrics: {len(task.steps)} steps, {analysis.errors} errors, "
+                f"${(analysis.total_cost_usd or 0):.4f}, {analysis.total_duration_ms or 0}ms"
+            )
             lines.append("")
             lines.append("Steps:")
             for s in compact_steps[:15]:
-                err_part = " ERROR: %s" % str(s.get("error", ""))[:80] if s.get("error") else ""
-                lines.append("  %d. %s%s" % (s["step"], s["tool"], err_part))
+                err_part = " ERROR: {}".format(str(s.get("error", ""))[:80]) if s.get("error") else ""
+                lines.append(f"  {s['step']}. {s['tool']}{err_part}")
             if len(compact_steps) > 15:
-                lines.append("  ... (%d more steps)" % (len(compact_steps) - 15))
+                lines.append(f"  ... ({len(compact_steps) - 15} more steps)")
             if chain:
                 lines.append("")
                 lines.append("Reasoning chain:")
                 for r in chain[:10]:
-                    tool_part = " -> %s" % r["tool"] if r.get("tool") else ""
-                    lines.append("  step %s: %s%s" % (
+                    tool_part = " -> {}".format(r["tool"]) if r.get("tool") else ""
+                    lines.append("  step {}: {}{}".format(
                         r.get("step", "?"),
                         (r.get("reasoning") or "")[:120],
                         tool_part,
                     ))
                 if len(chain) > 10:
-                    lines.append("  ... (%d more)" % (len(chain) - 10))
+                    lines.append(f"  ... ({len(chain) - 10} more)")
             lines.append("")
             lines.append("Next:")
-            lines.append("  >> agent-xray surface %s %s" % (task.task_id, log_dir))
-            lines.append("  >> agent-xray reasoning %s %s" % (task.task_id, log_dir))
-            lines.append("  >> agent-xray diff <other_task_id> %s %s" % (task.task_id, log_dir))
+            lines.append(f"  >> agent-xray surface {task.task_id} {log_dir}")
+            lines.append(f"  >> agent-xray reasoning {task.task_id} {log_dir}")
+            lines.append(f"  >> agent-xray diff <other_task_id> {task.task_id} {log_dir}")
             _emit("\n".join(lines), args, final=True)
         return 0
 
@@ -1179,7 +1264,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
                     "\nTip: provide a task bank with --task-bank for expectation-aware grading"
                     " (checks must_reach_url, must_answer_contains, payment_fields_visible, etc.)."
                 )
-            sections.append("Tip: use 'agent-xray golden rank' to see best performers, 'agent-xray report {log} broken' for worst.".format(log=short_path))
+            sections.append(f"Tip: use 'agent-xray golden rank' to see best performers, 'agent-xray report {short_path} broken' for worst.")
             _emit("\n".join(sections), args, final=True)
         return 0
 
@@ -1303,7 +1388,7 @@ def cmd_flywheel(args: argparse.Namespace) -> int:
             _dump(result.to_dict())
         else:
             text = json.dumps(result.to_dict(), indent=2)
-            text += "\n\nNext: agent-xray golden rank {log}  # see best-performing runs".format(log=args.log_dir)
+            text += f"\n\nNext: agent-xray golden rank {args.log_dir}  # see best-performing runs"
             _emit(text, args, final=True)
         return 0
 
@@ -1609,9 +1694,9 @@ def cmd_report(args: argparse.Namespace) -> int:
             if not task_bank_path:
                 hints.append("Tip: add --task-bank for expectation-aware grading.")
             if report_type == "spins":
-                hints.append("Next: agent-xray surface <task_id> {log}  # investigate worst spin".format(log=args.log_dir))
+                hints.append(f"Next: agent-xray surface <task_id> {args.log_dir}  # investigate worst spin")
             elif report_type == "broken":
-                hints.append("Next: agent-xray root-cause {log}  # classify failure types".format(log=args.log_dir))
+                hints.append(f"Next: agent-xray root-cause {args.log_dir}  # classify failure types")
             if hints:
                 text += "\n\n" + "\n".join(hints)
             _emit(text, args, final=True)
@@ -1744,7 +1829,7 @@ def cmd_completeness(args: argparse.Namespace) -> int:
                 hints.append("Fix first: {dims} (critical).".format(dims=", ".join(w.dimension for w in critical)))
             elif high:
                 hints.append("Fix first: {dims} (high severity).".format(dims=", ".join(w.dimension for w in high)))
-            hints.append("Next: agent-xray grade {log}  # grade tasks with current data".format(log=args.log_dir))
+            hints.append(f"Next: agent-xray grade {args.log_dir}  # grade tasks with current data")
             text += "\n\n" + "\n".join(hints)
             _emit(text, args, final=True)
         return 0
@@ -1794,9 +1879,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             if not task_bank_path:
                 text += "\n\nTip: add --task-bank for expectation-aware failure classification."
             if not project_root:
-                text += "\n\nNext: agent-xray diagnose {log} --project-root /path/to/project  # verify fix paths exist".format(log=args.log_dir)
+                text += f"\n\nNext: agent-xray diagnose {args.log_dir} --project-root /path/to/project  # verify fix paths exist"
             else:
-                text += "\n\nNext: agent-xray validate-targets --project-root {root}  # check all fix paths are current".format(root=project_root)
+                text += f"\n\nNext: agent-xray validate-targets --project-root {project_root}  # check all fix paths are current"
+            text += f"\n\n{STRUCTURAL_GRADE_SUMMARY_NOTE}"
             _emit(text, args, final=True)
         return 0
     return _run_command(args, _action)
@@ -1968,12 +2054,14 @@ def cmd_validate_targets(args: argparse.Namespace) -> int:
         "AGENT_XRAY_PROJECT_ROOT"
     )
     if not project_root:
-        print("Error: --project-root is required (or set AGENT_XRAY_PROJECT_ROOT).")
+        message = _format_cli_error("--project-root is required (or set AGENT_XRAY_PROJECT_ROOT).")
+        _safe_print(message)
         return 1
 
     root = Path(project_root)
     if not root.is_dir():
-        print(f"Error: project root not found: {project_root}")
+        message = _format_cli_error(f"project root not found: {project_root}")
+        _safe_print(message)
         return 1
 
     resolver_name = getattr(args, "resolver", None)
@@ -2527,14 +2615,8 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     def _action() -> int:
         from .baseline import (
             build_baseline,
-            format_overhead_report,
-            format_prompt_impact_report,
             generate_naked_prompt,
-            group_by_prompt_hash,
             load_baselines,
-            measure_all_overhead,
-            overhead_report_data,
-            prompt_impact_data,
             save_baseline,
         )
 
@@ -2592,6 +2674,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
     """Manage enforcement sessions."""
     def _action() -> int:
         from .enforce import (
+            ChangeRecord,
             EnforceConfig,
             build_enforce_report,
             enforce_auto,
@@ -2601,6 +2684,7 @@ def cmd_enforce(args: argparse.Namespace) -> int:
             enforce_guard,
             enforce_init,
             enforce_plan,
+            enforce_quick,
             enforce_reset,
             enforce_status,
         )
@@ -2616,11 +2700,13 @@ def cmd_enforce(args: argparse.Namespace) -> int:
         if subcmd == "init":
             test_cmd = getattr(args, "test", None)
             if not test_cmd:
-                _emit("Error: --test is required for enforce init", args, final=True)
+                _emit_error("--test is required for enforce init", args, final=True)
                 return 1
             config = EnforceConfig(
                 test_command=test_cmd,
                 max_iterations=getattr(args, "max_iterations", 50),
+                max_duration_seconds=getattr(args, "max_duration_seconds", 3600),
+                max_total_cost_usd=getattr(args, "max_total_cost_usd", 0.0),
                 challenge_every=getattr(args, "challenge_every", 5),
                 require_improvement=not getattr(args, "no_require_improvement", False),
                 allow_test_modification=getattr(args, "allow_test_modification", False),
@@ -2741,14 +2827,16 @@ def cmd_enforce(args: argparse.Namespace) -> int:
             test_cmd = getattr(args, "test", None)
             agent_cmd = getattr(args, "agent_cmd", None)
             if not test_cmd:
-                _emit("Error: --test is required for enforce auto", args, final=True)
+                _emit_error("--test is required for enforce auto", args, final=True)
                 return 1
             if not agent_cmd:
-                _emit("Error: --agent-cmd is required for enforce auto", args, final=True)
+                _emit_error("--agent-cmd is required for enforce auto", args, final=True)
                 return 1
             config = EnforceConfig(
                 test_command=test_cmd,
                 max_iterations=getattr(args, "max_iterations", 50),
+                max_duration_seconds=getattr(args, "max_duration_seconds", 3600),
+                max_total_cost_usd=getattr(args, "max_total_cost_usd", 0.0),
                 challenge_every=getattr(args, "challenge_every", 5),
                 require_improvement=not getattr(args, "no_require_improvement", False),
                 allow_test_modification=getattr(args, "allow_test_modification", False),
@@ -2766,6 +2854,35 @@ def cmd_enforce(args: argparse.Namespace) -> int:
                 _emit(format_enforce_markdown(report), args, final=True)
             else:
                 _emit(format_enforce_text(report, color=ui.color), args, final=True)
+            return 0
+
+        if subcmd == "quick":
+            test_cmd = getattr(args, "test_command", None)
+            hypothesis = getattr(args, "hypothesis", "") or ""
+            if not test_cmd:
+                _emit_error("--test-command is required for enforce quick", args, final=True)
+                return 1
+            payload = enforce_quick(
+                hypothesis=hypothesis,
+                test_command=test_cmd,
+                project_root=getattr(args, "project_root", None) or ".",
+                log_dir=getattr(args, "log_dir", None),
+                max_files=getattr(args, "max_files", 10),
+                max_diff_lines=getattr(args, "max_diff_lines", 500),
+            )
+            if use_json:
+                _dump(payload)
+                return 0
+            record = ChangeRecord.from_dict(payload)
+            state = "initialized" if payload.get("session_initialized") else "reused"
+            lines = [f"Session: {state} ({payload['session_dir']})"]
+            if payload.get("log_path"):
+                lines.append(f"Log: {payload['log_path']}")
+            for warning in payload.get("warnings", []):
+                lines.append(f"Warning: {warning}")
+            lines.append("")
+            lines.append(_format_enforce_check_summary(record))
+            _emit("\n".join(lines), args, final=True)
             return 0
 
         if subcmd == "plan":
@@ -2807,12 +2924,12 @@ def cmd_enforce(args: argparse.Namespace) -> int:
 
             rules_path = getattr(args, "rules_file", None)
             if not rules_path:
-                _emit("Error: --rules-file is required for preflight-diff", args, final=True)
+                _emit_error("--rules-file is required for preflight-diff", args, final=True)
                 return 1
             project_root = getattr(args, "project_root", None) or "."
             rules = load_project_rules(rules_path)
             if not rules:
-                _emit(f"No rules found in {rules_path}", args, final=True)
+                _emit_error(f"No rules found in {rules_path}", args, final=True)
                 return 1
             import subprocess
 
@@ -2835,11 +2952,44 @@ def cmd_enforce(args: argparse.Namespace) -> int:
             return 1 if violations else 0
 
         _emit(
-            "Usage: agent-xray enforce {init,check,status,challenge,report,reset,auto,plan,guard,preflight-diff}",
+            "Usage: agent-xray enforce {init,check,status,challenge,report,reset,auto,quick,plan,guard,preflight-diff}",
             args,
             final=True,
         )
         return 1
+
+    return _run_command(args, _action)
+
+
+def cmd_enforce_quick(args: argparse.Namespace) -> int:
+    """Initialize or reuse an enforce session, then immediately run a check."""
+    def _action() -> int:
+        from .enforce import ChangeRecord, enforce_quick
+
+        payload = enforce_quick(
+            hypothesis=getattr(args, "hypothesis", "") or "",
+            test_command=args.test_command,
+            project_root=getattr(args, "project_root", None) or ".",
+            log_dir=getattr(args, "log_dir", None),
+            max_files=getattr(args, "max_files", 10),
+            max_diff_lines=getattr(args, "max_diff_lines", 500),
+        )
+
+        if getattr(args, "json", False):
+            _dump(payload)
+            return 0
+
+        record = ChangeRecord.from_dict(payload)
+        state = "initialized" if payload.get("session_initialized") else "reused"
+        lines = [f"Session: {state} ({payload['session_dir']})"]
+        if payload.get("log_path"):
+            lines.append(f"Log: {payload['log_path']}")
+        for warning in payload.get("warnings", []):
+            lines.append(f"Warning: {warning}")
+        lines.append("")
+        lines.append(_format_enforce_check_summary(record))
+        _emit("\n".join(lines), args, final=True)
+        return 0
 
     return _run_command(args, _action)
 
@@ -2859,10 +3009,27 @@ def _add_subparser(
     )
 
 
+def _set_example(parser: argparse.ArgumentParser, example: str) -> None:
+    parser.epilog = f"Example: {example}"
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-xray",
         description="Analyze and replay agent step logs.",
+        epilog=(
+            "Getting Started\n"
+            "  Core workflow (MCP/CLI naming): triage -> surface_task/surface -> grade -> "
+            "root_cause/root-cause -> inspect_task/inspect\n"
+            "  Example:\n"
+            "    agent-xray triage ./traces\n"
+            "    agent-xray surface task-123 ./traces\n"
+            "    agent-xray grade ./traces --rules browser_flow\n"
+            "    agent-xray root-cause ./traces --rules browser_flow\n"
+            "    agent-xray inspect task-123 ./traces\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show progress and timing")
@@ -3340,11 +3507,13 @@ def build_parser() -> argparse.ArgumentParser:
     task_bank_sub = p_task_bank.add_subparsers(dest="task_bank_command")
 
     p_task_bank_list = task_bank_sub.add_parser("list", help="List all task entries in a bank")
+    _set_example(p_task_bank_list, "agent-xray task-bank list ./task_bank.json")
     p_task_bank_list.add_argument("path", help="Path to task_bank.json")
     p_task_bank_list.add_argument("--json", action="store_true", help="Output as JSON")
     p_task_bank_list.set_defaults(func=cmd_task_bank)
 
     p_task_bank_show = task_bank_sub.add_parser("show", help="Show one task entry from a bank")
+    _set_example(p_task_bank_show, "agent-xray task-bank show ./task_bank.json checkout-flow")
     p_task_bank_show.add_argument("path", help="Path to task_bank.json")
     p_task_bank_show.add_argument("task_id", help="Task-bank entry id")
     p_task_bank_show.add_argument("--json", action="store_true", help="Output as JSON")
@@ -3353,6 +3522,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_task_bank_validate = task_bank_sub.add_parser(
         "validate", help="Validate task bank schema and criterion names"
     )
+    _set_example(p_task_bank_validate, "agent-xray task-bank validate ./task_bank.json")
     p_task_bank_validate.add_argument("path", help="Path to task_bank.json")
     p_task_bank_validate.add_argument("--json", action="store_true", help="Output as JSON")
     p_task_bank_validate.set_defaults(func=cmd_task_bank)
@@ -3369,6 +3539,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline_sub = p_baseline.add_subparsers(dest="baseline_command")
 
     p_bl_capture = baseline_sub.add_parser("capture", help="Capture a task as a baseline")
+    _set_example(p_bl_capture, "agent-xray baseline capture task-123 ./traces -o baselines/site.json")
     p_bl_capture.add_argument("task_id", help="Task id to capture")
     p_bl_capture.add_argument(
         "log_dir_pos", nargs="?", default=None,
@@ -3386,6 +3557,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bl_capture.set_defaults(func=cmd_baseline)
 
     p_bl_generate = baseline_sub.add_parser("generate", help="Print the naked prompt for a task")
+    _set_example(p_bl_generate, "agent-xray baseline generate task-123 ./traces")
     p_bl_generate.add_argument("task_id", help="Task id to generate prompt for")
     p_bl_generate.add_argument(
         "log_dir_pos", nargs="?", default=None,
@@ -3402,6 +3574,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bl_generate.set_defaults(func=cmd_baseline)
 
     p_bl_list = baseline_sub.add_parser("list", help="List all baselines in a directory")
+    _set_example(p_bl_list, "agent-xray baseline list ./baselines")
     p_bl_list.add_argument("baselines_dir", help="Directory containing baseline JSON files")
     p_bl_list.add_argument("--json", action="store_true", help="Output results as JSON")
     p_bl_list.set_defaults(func=cmd_baseline)
@@ -3449,13 +3622,16 @@ def build_parser() -> argparse.ArgumentParser:
     rules_sub = p_rules.add_subparsers(dest="rules_command")
 
     p_rules_list = rules_sub.add_parser("list", help="List available built-in rulesets")
+    _set_example(p_rules_list, "agent-xray rules list")
     p_rules_list.set_defaults(func=cmd_rules_list)
 
     p_rules_show = rules_sub.add_parser("show", help="Show a ruleset's full JSON")
+    _set_example(p_rules_show, "agent-xray rules show browser_flow")
     p_rules_show.add_argument("name", help="Ruleset name (e.g. default, browser_flow)")
     p_rules_show.set_defaults(func=cmd_rules_show)
 
     p_rules_init = rules_sub.add_parser("init", help="Scaffold a custom ruleset to stdout")
+    _set_example(p_rules_init, "agent-xray rules init --base browser_flow")
     p_rules_init.add_argument("--base", default="default", help="Base ruleset to extend (default: default)")
     p_rules_init.set_defaults(func=cmd_rules_init)
 
@@ -3472,12 +3648,14 @@ def build_parser() -> argparse.ArgumentParser:
     pricing_sub = p_pricing.add_subparsers(dest="pricing_command")
 
     p_pricing_list = pricing_sub.add_parser("list", help="Show all known models and prices")
+    _set_example(p_pricing_list, "agent-xray pricing list")
     p_pricing_list.add_argument(
         "--pricing", help="Path to custom pricing JSON file",
     )
     p_pricing_list.set_defaults(func=cmd_pricing)
 
     p_pricing_show = pricing_sub.add_parser("show", help="Show pricing for a specific model")
+    _set_example(p_pricing_show, "agent-xray pricing show gpt-4.1-nano")
     p_pricing_show.add_argument("model_name", help="Model name (e.g. gpt-4.1-nano)")
     p_pricing_show.add_argument(
         "--pricing", help="Path to custom pricing JSON file",
@@ -3485,9 +3663,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_pricing_show.set_defaults(func=cmd_pricing)
 
     p_pricing_update = pricing_sub.add_parser("update", help="Fetch latest pricing from GitHub")
+    _set_example(p_pricing_update, "agent-xray pricing update")
     p_pricing_update.set_defaults(func=cmd_pricing)
 
     p_pricing_path = pricing_sub.add_parser("path", help="Show where pricing data is loaded from")
+    _set_example(p_pricing_path, "agent-xray pricing path")
     p_pricing_path.add_argument(
         "--pricing", help="Path to custom pricing JSON file",
     )
@@ -3508,6 +3688,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_golden_rank = golden_sub.add_parser(
         "rank", help="Rank golden/good runs by efficiency within each site"
     )
+    _set_example(p_golden_rank, "agent-xray golden rank ./traces --optimize balanced")
     p_golden_rank.add_argument(
         "log_dir_pos", nargs="?", default=None,
         help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
@@ -3534,6 +3715,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_golden_best = golden_sub.add_parser(
         "best", help="Show the top exemplar for each site"
     )
+    _set_example(p_golden_best, "agent-xray golden best ./traces")
     p_golden_best.add_argument(
         "log_dir_pos", nargs="?", default=None,
         help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
@@ -3556,6 +3738,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_golden_capture = golden_sub.add_parser(
         "capture", help="Capture the exemplar for a site as a fixture"
     )
+    _set_example(p_golden_capture, "agent-xray golden capture ./traces --site shop.example -o fixtures/shop.json")
     p_golden_capture.add_argument(
         "log_dir_pos", nargs="?", default=None,
         help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
@@ -3582,6 +3765,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_golden_compare = golden_sub.add_parser(
         "compare", help="Compare current golden runs against captured fixtures"
     )
+    _set_example(p_golden_compare, "agent-xray golden compare ./traces --fixtures ./fixtures")
     p_golden_compare.add_argument(
         "log_dir_pos", nargs="?", default=None,
         help="Directory or .jsonl file. Defaults to AGENT_XRAY_LOG_DIR env var if set.",
@@ -3608,6 +3792,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_golden_profiles = golden_sub.add_parser(
         "profiles", help="List available optimization profiles"
     )
+    _set_example(p_golden_profiles, "agent-xray golden profiles")
     p_golden_profiles.set_defaults(func=cmd_golden)
 
     # Default: show help when no sub-subcommand given
@@ -3639,6 +3824,10 @@ def build_parser() -> argparse.ArgumentParser:
         "init",
         help="Initialize an enforcement session (captures the deterministic baseline)",
     )
+    _set_example(
+        p_enf_init,
+        'agent-xray enforce init --test "python -m pytest tests/ -x -q --tb=short"',
+    )
     p_enf_init.description = (
         "Capture the baseline before any code changes. Use the same deterministic test command "
         "for the entire session so every later check is comparable."
@@ -3657,6 +3846,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_init.add_argument(
         "--max-iterations", type=int, default=50,
         help="Stop after N iterations (default: 50)",
+    )
+    p_enf_init.add_argument(
+        "--max-duration-seconds", type=int, default=3600,
+        help="Stop the auto loop after N seconds of elapsed wall time (default: 3600)",
+    )
+    p_enf_init.add_argument(
+        "--max-total-cost-usd", type=float, default=0.0,
+        help="Stop the auto loop when accumulated test-result cost reaches this USD cap (0 = unlimited)",
     )
     p_enf_init.add_argument(
         "--challenge-every", type=int, default=5,
@@ -3684,6 +3881,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_check = enforce_sub.add_parser(
         "check", help="Check one proposed change against the active baseline"
     )
+    _set_example(p_enf_check, 'agent-xray enforce check --hypothesis "parser fix is now wired"')
     p_enf_check.description = (
         "Run the same test command against the current working tree after one focused change. "
         "Use this after plan -> change, not after a batch of unrelated edits."
@@ -3702,6 +3900,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_diff = enforce_sub.add_parser(
         "diff", help="Preview whether the current diff still fits one-change-at-a-time limits"
     )
+    _set_example(p_enf_diff, "agent-xray enforce diff --project-root .")
     p_enf_diff.description = (
         "Use this before running check when you want to confirm the current working tree is still "
         "small enough to be a clean experiment."
@@ -3717,6 +3916,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_status = enforce_sub.add_parser(
         "status", help="Show current session status and baseline context"
     )
+    _set_example(p_enf_status, "agent-xray enforce status --project-root .")
     p_enf_status.description = (
         "Inspect the active enforce session before resuming work or choosing the next iteration."
     )
@@ -3730,6 +3930,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_challenge = enforce_sub.add_parser(
         "challenge", help="Run adversarial cross-iteration review on changes so far"
     )
+    _set_example(p_enf_challenge, "agent-xray enforce challenge --project-root .")
     p_enf_challenge.description = (
         "Audit the whole session for cumulative gaming, repeated churn, scope creep, and other "
         "patterns that per-iteration checks can miss."
@@ -3744,6 +3945,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_report = enforce_sub.add_parser(
         "report", help="Generate the full enforcement report for the session"
     )
+    _set_example(p_enf_report, "agent-xray enforce report --format markdown")
     p_enf_report.description = (
         "Render the current session as text, JSON, or Markdown after you have meaningful enforce "
         "history to summarize."
@@ -3765,6 +3967,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_reset = enforce_sub.add_parser(
         "reset", help="Reset or abandon the current enforcement session"
     )
+    _set_example(p_enf_reset, "agent-xray enforce reset --project-root .")
     p_enf_reset.description = (
         "Discard the active enforce session only when you intentionally want a fresh baseline."
     )
@@ -3777,6 +3980,10 @@ def build_parser() -> argparse.ArgumentParser:
     # GAP 1: Autonomous loop
     p_enf_auto = enforce_sub.add_parser(
         "auto", help="Run the full autonomous enforce loop around one deterministic test command"
+    )
+    _set_example(
+        p_enf_auto,
+        'agent-xray enforce auto --test "python -m pytest tests/ -x -q" --agent-cmd "python agent.py"',
     )
     p_enf_auto.description = (
         "Let an agent iterate inside the enforce loop. This still assumes one hypothesis and one "
@@ -3801,6 +4008,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_auto.add_argument(
         "--max-iterations", type=int, default=50,
         help="Stop after N iterations (default: 50)",
+    )
+    p_enf_auto.add_argument(
+        "--max-duration-seconds", type=int, default=3600,
+        help="Stop after N seconds of elapsed wall time (default: 3600)",
+    )
+    p_enf_auto.add_argument(
+        "--max-total-cost-usd", type=float, default=0.0,
+        help="Stop when accumulated test-result cost reaches this USD cap (0 = unlimited)",
     )
     p_enf_auto.add_argument(
         "--challenge-every", type=int, default=5,
@@ -3833,6 +4048,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_plan = enforce_sub.add_parser(
         "plan", help="Register the next hypothesis and expected test movement before editing"
     )
+    _set_example(
+        p_enf_plan,
+        'agent-xray enforce plan --hypothesis "fix parser branch" --expected-tests tests/test_cli.py::test_parser',
+    )
     p_enf_plan.description = (
         "Plan the next single-change experiment before touching code. A good plan predicts what "
         "should improve and narrows the scope of the edit."
@@ -3860,6 +4079,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_guard = enforce_sub.add_parser(
         "guard", help="Check for unreviewed working-tree changes outside the enforce pipeline"
     )
+    _set_example(p_enf_guard, "agent-xray enforce guard --project-root .")
     p_enf_guard.description = (
         "Use this before the next iteration if you need to confirm the current tree only contains "
         "changes that belong to the tracked hypothesis."
@@ -3889,6 +4109,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_enf_preflight = enforce_sub.add_parser(
         "preflight-diff", help="Check current diff against project guardrails before an enforce iteration"
     )
+    _set_example(
+        p_enf_preflight,
+        "agent-xray enforce preflight-diff --rules-file ./rules/project.json",
+    )
     p_enf_preflight.description = (
         "Run the rules-file linter against git diff HEAD to catch violations early. "
         "Returns exit code 1 if violations are found."
@@ -3907,16 +4131,108 @@ def build_parser() -> argparse.ArgumentParser:
     # Default: show help when no sub-subcommand given
     p_enforce.set_defaults(func=cmd_enforce)
 
+    p_enf_quick = enforce_sub.add_parser(
+        "quick",
+        help="Run a complete enforce cycle (init+plan+check) in one call. Use for quick, single-iteration experiments.",
+    )
+    _set_example(
+        p_enf_quick,
+        'agent-xray enforce quick --hypothesis "fix CLI parser branch" --test-command "python -m pytest tests/ -x -q"',
+    )
+    p_enf_quick.description = (
+        "Use this for a quick single-iteration experiment when you want baseline capture, plan registration, "
+        "and enforce_check evidence in one command."
+    )
+    p_enf_quick.add_argument(
+        "--hypothesis",
+        required=True,
+        help="One-line hypothesis for the focused experiment you are running",
+    )
+    p_enf_quick.add_argument(
+        "--test-command",
+        required=True,
+        help="Deterministic test command used to initialize the session when none exists",
+    )
+    p_enf_quick.add_argument(
+        "--project-root", default=".",
+        help="Project root for git operations (default: .)",
+    )
+    p_enf_quick.add_argument(
+        "--log-dir",
+        help="Optional directory to write a JSON snapshot of the quick result",
+    )
+    p_enf_quick.add_argument(
+        "--max-files", type=int, default=10,
+        help="Maximum files per change when initializing a new session (default: 10)",
+    )
+    p_enf_quick.add_argument(
+        "--max-diff-lines", type=int, default=500,
+        help="Maximum diff lines when initializing a new session (default: 500)",
+    )
+    p_enf_quick.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enf_quick.set_defaults(func=cmd_enforce)
+
+    alias_subcommands = sub
+    p_enforce_quick = _add_subparser(
+        alias_subcommands,
+        "enforce-quick",
+        help_text="Run enforce init + check in one command for a small focused fix",
+        example='agent-xray enforce-quick "python -m pytest tests/ -x -q" --log-dir logs/',
+    )
+    p_enforce_quick.description = (
+        "Use this when you want the enforce baseline and immediate review in one step. "
+        "If an enforce session already exists, it is reused."
+    )
+    p_enforce_quick.add_argument(
+        "test_command",
+        help="Deterministic test command used to initialize the session when none exists",
+    )
+    p_enforce_quick.add_argument(
+        "--project-root", default=".",
+        help="Project root for git operations (default: .)",
+    )
+    p_enforce_quick.add_argument(
+        "--log-dir",
+        help="Optional directory to write a JSON snapshot of the quick result",
+    )
+    p_enforce_quick.add_argument(
+        "--max-files", type=int, default=10,
+        help="Maximum files per change when initializing a new session (default: 10)",
+    )
+    p_enforce_quick.add_argument(
+        "--max-diff-lines", type=int, default=500,
+        help="Maximum diff lines when initializing a new session (default: 500)",
+    )
+    p_enforce_quick.add_argument(
+        "--hypothesis",
+        help="Optional one-line summary for the current change",
+    )
+    p_enforce_quick.add_argument("--json", action="store_true", help="Output as JSON")
+    p_enforce_quick.set_defaults(func=cmd_enforce_quick)
+
     return parser
 
 
 def main() -> int:
-    args = build_parser().parse_args()
-    handler = getattr(args, "func", None)
-    if not callable(handler):
-        raise ValueError("parser did not assign a command handler")
-    command_handler = cast(Callable[[argparse.Namespace], int], handler)
-    return command_handler(args)
+    try:
+        args = build_parser().parse_args()
+        handler = getattr(args, "func", None)
+        if not callable(handler):
+            raise ValueError("parser did not assign a command handler")
+        command_handler = cast(Callable[[argparse.Namespace], int], handler)
+        return command_handler(args)
+    except CliError as exc:
+        _safe_print_stderr(_format_cli_error(str(exc)))
+        return 1
+    except FileNotFoundError as exc:
+        _safe_print_stderr(_format_missing_trace_error(exc))
+        return 1
+    except json.JSONDecodeError as exc:
+        _safe_print_stderr(_format_malformed_trace_error(exc))
+        return 1
+    except ValueError as exc:
+        _safe_print_stderr(_format_cli_error(str(exc)))
+        return 1
 
 
 if __name__ == "__main__":

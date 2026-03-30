@@ -14,12 +14,14 @@ from agent_xray.cli import (
     cmd_analyze,
     cmd_compare,
     cmd_enforce,
+    cmd_enforce_quick,
     cmd_diff,
     cmd_flywheel,
     cmd_grade,
     cmd_quickstart,
     cmd_surface,
     cmd_tree,
+    main,
 )
 from agent_xray.schema import AgentTask
 
@@ -95,6 +97,32 @@ def test_cmd_grade_default_rules(tmp_trace_dir, capsys: pytest.CaptureFixture[st
     assert payload["summary"]["rules"] == "default"
     assert grades["broken-task"] == "BROKEN"
     assert grades["golden-task"] == "GOLDEN"
+
+
+def test_cmd_grade_text_includes_structural_note(
+    tmp_trace_dir, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = cmd_grade(
+        Namespace(
+            log_dir=tmp_trace_dir,
+            days=None,
+            rules=None,
+            format="auto",
+            json=False,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+            pattern=None,
+            grade_filter=None,
+            site_filter=None,
+            outcome_filter=None,
+            since_filter=None,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Note: Grades measure execution structure, not output correctness." in captured.out
 
 
 def test_cmd_grade_browser_flow_rules(
@@ -362,9 +390,99 @@ def test_cmd_analyze_missing_dir_shows_quickstart_hint(
         )
     )
     captured = capsys.readouterr()
+    output = captured.out + captured.err
     assert result == 1
-    assert "Path not found:" in captured.out
-    assert "AGENT_XRAY_LOG_DIR" in captured.out
+    assert "Path not found:" in output
+    assert "AGENT_XRAY_LOG_DIR" in output
+
+
+def test_cmd_analyze_empty_dir_reports_no_traces_found(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = cmd_analyze(
+        Namespace(
+            log_dir=tmp_path,
+            days=None,
+            rules=None,
+            format="auto",
+            json=False,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+            pattern=None,
+        )
+    )
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert result == 1
+    assert (
+        output.strip()
+        == f"No agent traces found in {tmp_path}. Expected JSONL files with agent step data."
+    )
+
+
+def test_cmd_analyze_malformed_trace_file_reports_friendly_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    trace_path = tmp_path / "broken.jsonl"
+    trace_path.write_text("{not json}\n", encoding="utf-8")
+    result = cmd_analyze(
+        Namespace(
+            log_dir=trace_path,
+            days=None,
+            rules=None,
+            format="auto",
+            json=False,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+            pattern=None,
+        )
+    )
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert result == 1
+    assert output.strip() == f"Malformed trace file: {trace_path}"
+
+
+def test_main_catches_file_not_found_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = Path("C:/tmp/missing-traces")
+
+    class _Parser:
+        def parse_args(self) -> Namespace:
+            def _handler(_: Namespace) -> int:
+                raise FileNotFoundError(f"log path does not exist: {missing}")
+
+            return Namespace(func=_handler)
+
+    monkeypatch.setattr("agent_xray.cli.build_parser", lambda: _Parser())
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).strip() == f"No traces found at {missing}"
+
+
+def test_main_catches_malformed_trace_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    trace_path = Path("C:/tmp/bad-trace.jsonl")
+
+    class _Parser:
+        def parse_args(self) -> Namespace:
+            def _handler(_: Namespace) -> int:
+                raise json.JSONDecodeError(str(trace_path), "{bad json}", 1)
+
+            return Namespace(func=_handler)
+
+    monkeypatch.setattr("agent_xray.cli.build_parser", lambda: _Parser())
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).strip() == f"Malformed trace file: {trace_path}"
 
 
 def test_cmd_quickstart_runs_and_creates_demo(
@@ -538,6 +656,82 @@ def test_cmd_enforce_check_shows_committed_summary(
     captured = capsys.readouterr()
     assert result == 0
     assert "Iteration 1: COMMITTED - VALID (+3 tests)" in captured.out
+
+
+def test_cmd_enforce_quick_shows_session_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_quick",
+        lambda **kwargs: {
+            **_enforce_result(
+                decision="RECOMMEND_COMMIT",
+                audit_verdict="VALID",
+                audit_reasons=["No gaming signals detected"],
+                net_improvement=2,
+            ).to_dict(),
+            "session_initialized": True,
+            "session_reused": False,
+            "session_dir": ".agent-xray-enforce",
+            "baseline": _enforce_result(decision="COMMITTED").before.to_dict(),
+        },
+    )
+    result = cmd_enforce_quick(
+        Namespace(
+            test_command="pytest tests/",
+            log_dir="logs",
+            project_root=".",
+            hypothesis="",
+            max_files=10,
+            max_diff_lines=500,
+            json=False,
+            verbose=False,
+            quiet=False,
+            no_color=True,
+        )
+    )
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Session: initialized (.agent-xray-enforce)" in captured.out
+    assert "Iteration 1: RECOMMEND_COMMIT - VALID (+2 tests)" in captured.out
+
+
+def test_parser_accepts_enforce_quick_top_level_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["enforce-quick", "pytest tests/", "--log-dir", "logs/"])
+    assert args.test_command == "pytest tests/"
+    assert args.log_dir == "logs/"
+    assert args.func == cmd_enforce_quick
+
+
+def test_parser_accepts_enforce_nested_quick_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "enforce",
+            "quick",
+            "--hypothesis",
+            "fix parser",
+            "--test-command",
+            "pytest tests/",
+        ]
+    )
+    assert args.enforce_command == "quick"
+    assert args.hypothesis == "fix parser"
+    assert args.test_command == "pytest tests/"
+    assert args.func == cmd_enforce
+
+
+def test_top_level_help_has_getting_started(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--help"])
+    help_text = capsys.readouterr().out
+    assert "Getting Started" in help_text
+    assert "triage -> surface_task/surface -> grade -> root_cause/root-cause -> inspect_task/inspect" in help_text
 
 
 def test_enforce_auto_help_mentions_template_variables(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_xray.schema import AGENT_STEP_JSON_SCHEMA, AgentStep, AgentTask
+from agent_xray.schema import AGENT_STEP_JSON_SCHEMA, AgentStep, AgentTask, TaskOutcome
 
 
 def test_agent_step_round_trip() -> None:
@@ -144,6 +144,23 @@ def test_tools_available_names_property(sample_step: AgentStep) -> None:
 
 def test_cost_usd_property(sample_step: AgentStep) -> None:
     assert sample_step.cost_usd == 0.014
+
+
+def test_task_outcome_from_dict_merges_nested_metadata_without_double_nesting() -> None:
+    outcome = TaskOutcome.from_dict(
+        {
+            "task_id": "task-1",
+            "status": "success",
+            "metadata": {"timed_out": True, "source": "nested"},
+            "final_context_usage_pct": 92.0,
+        }
+    )
+    assert outcome.metadata == {
+        "timed_out": True,
+        "source": "nested",
+        "final_context_usage_pct": 92.0,
+    }
+    assert outcome.to_dict()["metadata"]["source"] == "nested"
 
 
 # ── New context fields (decision surface expansion) ──────────────────

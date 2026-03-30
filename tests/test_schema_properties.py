@@ -189,18 +189,29 @@ def test_coerce_optional_bool_matches_contract(value: Any) -> None:
     if isinstance(value, bool):
         assert coerced is value
         return
-    if isinstance(value, (int, float)):
-        assert coerced is bool(value)
+    if isinstance(value, int):
+        if value in {0, 1}:
+            assert coerced is bool(value)
+        else:
+            assert coerced is None
+        return
+    if isinstance(value, float):
+        if value in {0.0, 1.0}:
+            assert coerced is bool(int(value))
+        else:
+            assert coerced is None
         return
     if isinstance(value, str):
         lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "y"}:
+        if lowered in {"true", "1"}:
             assert coerced is True
             return
-        if lowered in {"false", "0", "no", "n"}:
+        if lowered in {"false", "0"}:
             assert coerced is False
             return
-    assert coerced is bool(value)
+        assert coerced is None
+        return
+    assert coerced is None
 
 
 @settings(deadline=None, max_examples=150)

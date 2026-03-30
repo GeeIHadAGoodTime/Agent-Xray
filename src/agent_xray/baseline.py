@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -380,6 +380,19 @@ def load_baselines(directory: str | Path) -> dict[str, Baseline]:
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
     return baselines
+
+
+def suggest_baseline_capture(
+    before_grades: dict[str, str], after_grades: dict[str, str]
+) -> list[str]:
+    """Return task IDs that improved enough to justify a baseline refresh."""
+    candidates: list[str] = []
+    for task_id in sorted(set(before_grades) & set(after_grades)):
+        before = before_grades[task_id]
+        after = after_grades[task_id]
+        if before in {"BROKEN", "WEAK"} and after in {"GOOD", "GOLDEN"}:
+            candidates.append(task_id)
+    return candidates
 
 
 # ---------------------------------------------------------------------------

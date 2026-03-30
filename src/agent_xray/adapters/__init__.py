@@ -26,6 +26,13 @@ FORMATS = {
     "otel": "agent_xray.adapters.otel",
     "auto": None,
 }
+_EXPERIMENTAL_FORMAT_WARNINGS = {
+    "crewai": (
+        "CrewAI adapter is experimental; validated against fixture traces only, "
+        "not live CrewAI webhook output. See V1_ROADMAP.md for planned improvements."
+    ),
+}
+_WARNED_EXPERIMENTAL_FORMATS: set[str] = set()
 
 
 def _warn(path: Path, message: str, *, line_number: int | None = None) -> None:
@@ -303,6 +310,14 @@ def autodetect(path: str | Path) -> str:
     return format_info(path)[0]
 
 
+def _warn_experimental_format(format_name: str) -> None:
+    message = _EXPERIMENTAL_FORMAT_WARNINGS.get(format_name)
+    if message is None or format_name in _WARNED_EXPERIMENTAL_FORMATS:
+        return
+    warnings.warn(message, stacklevel=2)
+    _WARNED_EXPERIMENTAL_FORMATS.add(format_name)
+
+
 def adapt(path: str | Path, format: str = "auto") -> list[AgentStep]:
     """Load a trace file and convert all entries to ``AgentStep`` records.
 
@@ -319,6 +334,7 @@ def adapt(path: str | Path, format: str = "auto") -> list[AgentStep]:
         raise ValueError(f"unsupported trace format: {format}")
     if format == "auto":
         format = autodetect(path)
+    _warn_experimental_format(format)
     module_name = FORMATS.get(format)
     if module_name is None:
         raise ValueError("auto format must be resolved before adapter import")

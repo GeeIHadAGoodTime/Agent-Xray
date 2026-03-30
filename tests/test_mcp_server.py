@@ -12,6 +12,8 @@ import pytest
 
 MCP_TOOL_NAMES = [
     "enforce",
+    "enforce_quick",
+    "preflight_diff",
     "analyze",
     "grade",
     "root_cause",
@@ -256,12 +258,43 @@ def test_enforce_tool_dispatches_verbs(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_enforce_quick_tool_returns_combined_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        "agent_xray.enforce.enforce_quick",
+        lambda **kwargs: {
+            "decision": "RECOMMEND_COMMIT",
+            "before": {"passed": 1, "failed": 1, "errors": 0, "total": 2, "output": "x" * 800},
+            "after": {"passed": 2, "failed": 0, "errors": 0, "total": 2, "output": "y" * 800},
+            "recommended_action": "commit",
+            "session_initialized": True,
+        },
+    )
+
+    payload = json.loads(
+        mcp_server.enforce_quick(
+            test_command="pytest tests/",
+            log_dir="logs",
+            max_files=10,
+            max_diff_lines=500,
+        )
+    )
+
+    assert payload["decision"] == "RECOMMEND_COMMIT"
+    assert payload["recommended_action"] == "commit"
+    assert payload["session_initialized"] is True
+    assert len(payload["before"]["output"]) == 500
+    assert len(payload["after"]["output"]) == 500
+
+
 def test_analyze_tool(tmp_trace_dir: Path) -> None:
     mcp_server = _load_mcp_server_module()
 
     payload = json.loads(mcp_server.analyze(str(tmp_trace_dir)))
 
     assert payload["summary"]["tasks"] == 4
+    assert "execution structure" in payload["grade_note"]
     assert payload["summary"]["grade_distribution"]["BROKEN"] >= 1
     assert "worst_tasks" in payload
     assert len(payload["worst_tasks"]) <= 10
@@ -324,6 +357,7 @@ def test_grade_tool(tmp_trace_dir: Path) -> None:
     payload = json.loads(mcp_server.grade(str(tmp_trace_dir)))
 
     assert payload["summary"]["tasks"] == 4
+    assert "execution structure" in payload["grade_note"]
     assert payload["summary"]["distribution"]["GOLDEN"] >= 1
     assert any(task["grade"] == "BROKEN" for task in payload["worst_tasks"])
 
@@ -532,8 +566,8 @@ def test_mcp_tool_descriptions_are_trimmed_for_schema_efficiency() -> None:
         assert doc is not None, f"{name} has no docstring"
         stripped = doc.strip()
         if name == "enforce":
-            assert "Run the enforce discipline workflow." in stripped
-            assert "Most users should just call enforce()" in stripped
+            assert "Run the enforce" in stripped
+            assert "workflow" in stripped
             continue
         assert "\n" not in stripped, f"{name} docstring should be a single compact line"
         for marker in BANNED_DOCSTRING_MARKERS:
@@ -802,9 +836,9 @@ def test_triage_suggested_next_tools_use_real_param_names(monkeypatch: pytest.Mo
     assert "next" not in payload
 
 
-def test_mcp_registered_tool_count_is_36() -> None:
+def test_mcp_registered_tool_count_matches_expected_list() -> None:
     source = (Path(__file__).resolve().parent.parent / "src" / "agent_xray" / "mcp_server.py").read_text(encoding="utf-8")
-    assert len(re.findall(r"@server\.tool\(\)\s+def\s+(\w+)\(", source)) == 36
+    assert len(re.findall(r"@server\.tool\(\)\s+def\s+(\w+)\(", source)) == len(MCP_TOOL_NAMES)
 
 
 def test_dedupe_tasks_keeps_latest_trace_for_normalized_task_text() -> None:
@@ -980,6 +1014,7 @@ def test_inspect_task_returns_comprehensive_report(tmp_path: Path) -> None:
     payload = json.loads(mcp_server.inspect_task(str(log_dir), "broken-task"))
 
     assert isinstance(payload["grade"], str)
+    assert "execution structure" in payload["grade_note"]
     assert payload["root_cause"] is not None
     assert isinstance(payload["steps"], list)
     assert payload["steps"]
@@ -1231,10 +1266,136 @@ def test_golden_capture_returns_exemplar(tmp_path: Path) -> None:
 
     assert payload["saved_to"] == str(output_path)
     assert "exemplar" in payload
+    assert "execution structure" in payload["grade_note"]
+    assert "structural exemplar" in payload["correctness_warning"]
     assert payload["exemplar"]["task_id"] == "checkout-task"
     assert payload["exemplar"]["site"]
     assert payload["exemplar"]["step_sequence"]
     assert "efficiency_metadata" in payload["exemplar"]
+
+
+def test_golden_rank_and_best_include_structural_notes(tmp_trace_dir: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    rank_payload = json.loads(mcp_server.golden_rank(str(tmp_trace_dir)))
+    best_payload = json.loads(mcp_server.golden_best(str(tmp_trace_dir)))
+
+    assert "execution structure" in rank_payload["grade_note"]
+    assert "execution efficiency" in rank_payload["note"]
+    assert "execution structure" in best_payload["grade_note"]
+    assert "execution efficiency" in best_payload["note"]
+
+
+def test_compare_runs_includes_structural_grade_note(tmp_trace_dir: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.compare_runs(str(tmp_trace_dir), str(tmp_trace_dir)))
+
+    assert "execution structure" in payload["grade_note"]
+
+
+def test_compare_runs_suggests_baseline_capture_for_major_improvements(tmp_path: Path) -> None:
+    mcp_server = _load_mcp_server_module()
+
+    before_dir = tmp_path / "before"
+    after_dir = tmp_path / "after"
+
+    _write_log(
+        before_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_snapshot",
+                        tool_result="Checkout spinner still visible.",
+                        error="Timed out waiting for checkout.",
+                        page_url="https://shop.example.test/checkout",
+                    ),
+                ],
+                task_category="commerce",
+                status="failed",
+                final_answer=None,
+            )
+        ],
+    )
+    _write_log(
+        after_dir,
+        [
+            _make_task(
+                "checkout-task",
+                "Buy the wireless headset and complete checkout on shop.example.test.",
+                [
+                    _make_step(
+                        "checkout-task",
+                        1,
+                        "browser_navigate",
+                        tool_input={"url": "https://shop.example.test/"},
+                        tool_result="Homepage with wireless headset listing.",
+                        page_url="https://shop.example.test/",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        2,
+                        "browser_click",
+                        tool_input={"ref": "add-to-cart"},
+                        tool_result="Added to cart.",
+                        page_url="https://shop.example.test/cart",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        3,
+                        "browser_fill_ref",
+                        tool_input={
+                            "ref": "shipping-form",
+                            "fields": ["address"],
+                            "text": "123 Main St",
+                        },
+                        tool_result="Shipping form accepted.",
+                        page_url="https://shop.example.test/checkout",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        4,
+                        "browser_fill_ref",
+                        tool_input={
+                            "ref": "payment-form",
+                            "fields": ["card number", "cvv"],
+                            "text": "4111 1111 1111 1111 123",
+                        },
+                        tool_result="card number cvv payment method confirmed",
+                        page_url="https://shop.example.test/payment",
+                    ),
+                    _make_step(
+                        "checkout-task",
+                        5,
+                        "browser_click",
+                        tool_input={"ref": "place-order"},
+                        tool_result="Order confirmation page loaded.",
+                        page_url="https://shop.example.test/order/confirmation",
+                    ),
+                ],
+                task_category="commerce",
+                status="success",
+                final_answer="Order placed.",
+            )
+        ],
+    )
+
+    payload = json.loads(mcp_server.compare_runs(str(before_dir), str(after_dir)))
+
+    assert payload["baseline_suggestions"] == ["checkout-task"]
+
+
+def test_golden_profiles_include_structural_note() -> None:
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.golden_profiles())
+
+    assert "execution efficiency" in payload["note"]
 
 
 def test_triage_empty_dir(tmp_path: Path) -> None:

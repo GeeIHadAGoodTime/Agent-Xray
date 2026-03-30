@@ -39,6 +39,7 @@ def readme_text() -> str:
 
 MCP_TOOLS = [
     "enforce",
+    "enforce_quick",
     "analyze",
     "grade",
     "root_cause",

@@ -27,7 +27,6 @@ Or import the resolver directly:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 
 from agent_xray.diagnose import register_target_resolver
 
@@ -54,10 +53,18 @@ NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
     "environment_drift": [
         "mcp_servers/browser/server.py",
     ],
+    "timeout": [
+        "intent/agent_executor.py",
+        "services/llm/prompts/builder.py",
+    ],
     "tool_bug": [
         "mcp_servers/browser/server.py",
         "mcp_servers/core_tools/server.py",
         "intent/tools/",
+    ],
+    "rate_limit_cascade": [
+        "mcp_servers/core_tools/server.py",
+        "intent/agent_executor.py",
     ],
     "tool_selection_bug": [
         "services/llm/prompts/builder.py",
@@ -85,6 +92,10 @@ NOVVIOLA_FIX_TARGETS: dict[str, list[str]] = {
         # No direct code fix -- task decomposition or model upgrade
     ],
     "memory_overload": [
+        "intent/agent_executor.py",
+        "services/llm/prompts/builder.py",
+    ],
+    "context_overflow": [
         "intent/agent_executor.py",
         "services/llm/prompts/builder.py",
     ],
@@ -182,6 +193,26 @@ PROMPT_BUG_PATTERNS: list[tuple[str, str, str]] = [
         "Update selector strategies for layout mismatches.",
     ),
     (
+        r"login|authentication|sign.in.*fail",
+        "services/llm/prompts/sections/minimal_core.py",
+        "Add explicit login sequencing and auth fallback guidance.",
+    ),
+    (
+        r"captcha|recaptcha|challenge",
+        "mcp_servers/browser/server.py",
+        "Detect captcha challenges and hand off to a safe fallback path.",
+    ),
+    (
+        r"popup|modal|overlay.*block",
+        "mcp_servers/browser/server.py",
+        "Add popup and modal dismissal handling before the next interaction.",
+    ),
+    (
+        r"cookie.*consent|gdpr|accept.*cookies",
+        "mcp_servers/browser/server.py",
+        "Handle cookie consent banners before continuing the main flow.",
+    ),
+    (
         r"frustration context injected",
         "services/llm/prompts/builder.py",
         "Review frustration context injection path -- may alter model behavior.",
@@ -202,6 +233,7 @@ PROMPT_SECTION_FILE_MAP: dict[str, str] = {
     "browser": "mcp_servers/browser/server.py",
     "payment": "services/llm/prompts/sections/minimal_core.py",
     "planning": "services/llm/prompts/sections/minimal_core.py",
+    "auth": "services/llm/prompts/sections/minimal_core.py",
     "delegation": "services/llm/prompts/sections/minimal_core.py",
     "response_format": "services/llm/prompts/sections/response_format.py",
     "proactive": "services/llm/prompts/sections/minimal_core.py",
@@ -311,9 +343,17 @@ NOVVIOLA_VERIFY_COMMANDS: dict[str, str] = {
         "grep -E '\"error\".*timeout|click_fail|not_found' "
         "logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl | tail -20"
     ),
+    "timeout": (
+        "grep -E '\"status\".*(failed|incomplete)|max_iterations|timed_out' "
+        "logs/structured/task-outcomes-*.jsonl | tail -20"
+    ),
     "tool_bug": (
         'grep "\"error\"" logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl '
         "| python -m json.tool | grep -E 'tool_name|error'"
+    ),
+    "rate_limit_cascade": (
+        "grep -Ei '429|rate limit|too many requests' "
+        "logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl | tail -20"
     ),
     "tool_selection_bug": (
         'grep "tool_name" logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl '
@@ -340,6 +380,10 @@ NOVVIOLA_VERIFY_COMMANDS: dict[str, str] = {
     "memory_overload": (
         'grep "context_usage_pct" logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl '
         "| python -m json.tool | grep context_usage_pct | sort -t: -k2 -rn | head -10"
+    ),
+    "context_overflow": (
+        'grep -Ei "context|truncated|lost track" logs/structured/agent-steps-$(date -u +%Y%m%d).jsonl '
+        "| tail -20"
     ),
     "delegation_failure": (
         "grep -E 'spawn_subtask|delegate' "

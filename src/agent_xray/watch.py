@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .analyzer import analyze_task
 from .grader import GradeResult, grade_task, load_rules
 from .schema import AgentStep, AgentTask, TaskOutcome
 
@@ -149,7 +148,7 @@ def watch_file(
 
     if not json_output:
         print(f"Watching {file_path} (rules: {rules.name}, poll: {poll_interval}s)")
-        print(f"Press Ctrl+C to stop.\n")
+        print("Press Ctrl+C to stop.\n")
 
     try:
         while True:
@@ -232,5 +231,5 @@ def watch_file(
 
     except KeyboardInterrupt:
         if not json_output:
-            print(f"\n\nFinal tally:")
+            print("\n\nFinal tally:")
             print(_format_tally(grade_counts, color=color))

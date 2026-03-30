@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import agent_xray.adapters.anthropic as anthropic_adapter
+import agent_xray.adapters.crewai as crewai_adapter
+import agent_xray.adapters.generic as generic_adapter
+import agent_xray.adapters.langchain as langchain_adapter
 import agent_xray.adapters.otel as otel_adapter
+import agent_xray.adapters.openai_chat as openai_chat_adapter
+import agent_xray.adapters.openai_sdk as openai_sdk_adapter
+import pytest
 from agent_xray.adapters import adapt, autodetect, format_info
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -68,6 +76,33 @@ def test_adapt_crewai_extracts_agent_role() -> None:
     assert steps[2].tool_input["value"] == "table.market"
 
 
+def test_crewai_adapter_loads_valid_fixture() -> None:
+    steps = crewai_adapter.load(FIXTURES / "crewai_trace.jsonl")
+    assert len(steps) == 8
+    assert steps[0].task_id == "Find market data"
+    assert steps[0].tool_name == "web_search"
+
+
+def test_crewai_adapter_handles_missing_fields_gracefully(tmp_path: Path) -> None:
+    path = tmp_path / "crewai_missing.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"tool": "browser_open"}),
+                json.dumps({"tool_name": "respond", "agent_role": "Planner"}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    steps = crewai_adapter.load(path)
+
+    assert len(steps) == 2
+    assert steps[0].task_id == "crewai_missing"
+    assert steps[0].tool_input["value"] is None
+    assert steps[1].tool_input["agent_role"] == "Planner"
+
+
 def test_adapt_generic_round_trips() -> None:
     steps = adapt(FIXTURES / "generic_trace.jsonl", format="generic")
     assert len(steps) == 8
@@ -122,3 +157,33 @@ def test_adapt_otel_handles_missing_attributes(monkeypatch) -> None:
     assert steps[1].model is None
     assert steps[1].tool_input == {}
     assert steps[1].tool_result == "Final answer with no extra metadata."
+
+
+@pytest.mark.parametrize(
+    ("loader", "filename", "contents"),
+    [
+        pytest.param(anthropic_adapter.load, "anthropic_empty.jsonl", "\n", id="anthropic"),
+        pytest.param(crewai_adapter.load, "crewai_empty.jsonl", "\n", id="crewai"),
+        pytest.param(generic_adapter.load, "generic_empty.jsonl", "\n", id="generic"),
+        pytest.param(langchain_adapter.load, "langchain_empty.jsonl", "\n", id="langchain"),
+        pytest.param(openai_chat_adapter.load, "openai_chat_empty.jsonl", "\n", id="openai_chat"),
+        pytest.param(openai_sdk_adapter.load, "openai_sdk_empty.jsonl", "\n", id="openai_sdk"),
+        pytest.param(
+            otel_adapter.load,
+            "otel_empty.json",
+            json.dumps({"resourceSpans": []}),
+            id="otel",
+        ),
+    ],
+)
+def test_adapter_smoke_loads_minimal_trace(
+    tmp_path: Path, monkeypatch, loader, filename: str, contents: str
+) -> None:
+    path = tmp_path / filename
+    path.write_text(contents, encoding="utf-8")
+    if loader is otel_adapter.load:
+        monkeypatch.setattr(otel_adapter, "opentelemetry", True)
+
+    steps = loader(path)
+
+    assert steps == []

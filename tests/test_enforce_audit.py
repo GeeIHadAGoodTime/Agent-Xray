@@ -22,7 +22,6 @@ from agent_xray.enforce_audit import (
     quality_distribution,
 )
 
-
 # ---------------------------------------------------------------------------
 # detect_test_file_modification
 # ---------------------------------------------------------------------------
@@ -32,7 +31,7 @@ class TestDetectTestFileModification:
         sig = detect_test_file_modification(["tests/test_foo.py"])
         assert sig is not None
         assert sig.name == "test_file_modification"
-        assert sig.confidence > 0.5
+        assert sig.confidence == pytest.approx(0.3)
 
     def test_detects_test_prefix(self):
         sig = detect_test_file_modification(["src/test_bar.py"])
@@ -114,6 +113,23 @@ class TestDetectHardcodedValues:
         sig = detect_hardcoded_values(diff)
         assert sig is None
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '+    return "no visible effect"\n',
+            '+    return "not found"\n',
+            '+    return "error"\n',
+            '+    return "success"\n',
+        ],
+    )
+    def test_allows_common_production_strings(self, line: str):
+        sig = detect_hardcoded_values(line)
+        assert sig is None
+
+    def test_respects_project_allowlist(self):
+        sig = detect_hardcoded_values('+    return "custom benign marker"\n', ["custom benign"])
+        assert sig is None
+
 
 # ---------------------------------------------------------------------------
 # detect_special_case_branching
@@ -171,6 +187,7 @@ class TestDetectMockInsertion:
         sig = detect_mock_insertion(diff)
         assert sig is not None
         assert sig.name == "mock_stub_insertion"
+        assert sig.confidence == pytest.approx(0.2)
 
     def test_detects_magicmock(self):
         diff = """\
@@ -402,6 +419,16 @@ class TestAuditChange:
             allow_test_modification=True,
         )
         assert verdict == "VALID"
+
+    def test_project_allowlist_filters_signal(self):
+        verdict, reasons, signals = audit_change(
+            diff='+    return "custom benign marker"\n',
+            files_modified=["src/main.py"],
+            project_allowlist=["custom benign"],
+        )
+        assert verdict == "VALID"
+        assert reasons == ["No gaming signals detected"]
+        assert signals == []
 
 
 # ---------------------------------------------------------------------------

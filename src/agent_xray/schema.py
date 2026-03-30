@@ -125,15 +125,22 @@ def _coerce_optional_bool(value: Any) -> bool | None:
         return None
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        return bool(value)
+    if isinstance(value, int):
+        if value in {0, 1}:
+            return bool(value)
+        return None
+    if isinstance(value, float):
+        if value in {0.0, 1.0}:
+            return bool(int(value))
+        return None
     if isinstance(value, str):
         lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "y"}:
+        if lowered in {"true", "1"}:
             return True
-        if lowered in {"false", "0", "no", "n"}:
+        if lowered in {"false", "0"}:
             return False
-    return bool(value)
+        return None
+    return None
 
 
 def _coerce_list_of_str(value: Any) -> list[str] | None:
@@ -155,6 +162,16 @@ def _merge_extensions(
     for key, value in payload.items():
         if key not in RESERVED_STEP_FIELDS and key not in merged:
             merged[key] = value
+    for context_name, coercions in CONTEXT_FIELD_COERCIONS.items():
+        context_payload = _coerce_dict(payload.get(context_name))
+        unknown = {
+            key: value for key, value in context_payload.items()
+            if key not in coercions
+        }
+        if not unknown:
+            continue
+        existing = _coerce_dict(merged.get(context_name))
+        merged[context_name] = {**unknown, **existing}
     return merged
 
 
@@ -864,7 +881,8 @@ class TaskOutcome:
             TaskOutcome: Parsed outcome data with unknown keys stored in
             ``metadata``.
         """
-        metadata = {
+        metadata = _coerce_dict(payload.get("metadata"))
+        metadata.update({
             key: value
             for key, value in payload.items()
             if key
@@ -878,8 +896,9 @@ class TaskOutcome:
                 "total_duration_s",
                 "timestamp",
                 "ts",
+                "metadata",
             }
-        }
+        })
         return cls(
             task_id=str(payload.get("task_id", "")),
             status=str(

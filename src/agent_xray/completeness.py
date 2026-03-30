@@ -7,7 +7,6 @@ that could cause false confidence in grading or root-cause classification.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from .schema import AgentTask
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_xray.grader import RuleSet, grade_task, load_rules, normalize_score
+from agent_xray.grader import GradeResult, RuleSet, grade_task, load_rules, normalize_score
 from agent_xray.schema import AgentStep, AgentTask
 
 
@@ -142,6 +142,20 @@ def test_grade_task_includes_normalized_score() -> None:
     assert result.normalized_score == pytest.approx((1 - (-1)) / (5 - (-1)))
 
 
+def test_grade_result_string_includes_structural_qualifier() -> None:
+    result = GradeResult(
+        task_id="task-1",
+        grade="GOLDEN",
+        score=4,
+        reasons=[],
+        metrics={},
+        signals=[],
+    )
+
+    assert result.grade_type == "structural"
+    assert "GOLDEN (structural)" in str(result)
+
+
 def test_load_rules_prints_validation_warnings(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -171,3 +185,16 @@ def test_load_rules_prints_validation_warnings(
     assert "rules warning" in err
     assert "unknown operator 'mystery'" in err
     assert "unknown field 'missing.metric'" in err
+
+
+def test_default_rules_golden_threshold_matches_max_positive_score() -> None:
+    rules = load_rules("default")
+
+    max_positive_score = sum(
+        int(rule.get("points", 0))
+        for rule in rules.signals
+        if int(rule.get("points", 0)) > 0
+    )
+
+    assert rules.grade_thresholds["GOLDEN"] == 4
+    assert max_positive_score >= rules.grade_thresholds["GOLDEN"]

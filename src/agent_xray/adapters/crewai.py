@@ -1,5 +1,8 @@
 """Adapter for CrewAI task and tool execution traces.
 
+Status: experimental. Validated against fixture traces only, not live CrewAI
+webhook output. See ``V1_ROADMAP.md`` for planned improvements.
+
 This module handles CrewAI-flavored JSONL logs that expose agent role metadata
 alongside tool execution inputs and outputs.
 """

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
-from .dedup import _dedupe_tasks, _normalize_task_text, _task_recency_key
+from .dedup import _dedupe_tasks
 
 server = FastMCP("agent-xray")
 
@@ -44,10 +44,44 @@ _REPORT_TYPES = [
     "prompt-impact",
     "compare",
 ]
+_STRUCTURAL_GRADE_NOTE = (
+    "Grades measure execution structure (tool diversity, loop resistance, error "
+    "rate, completion). They do NOT verify output correctness. Use surface_task "
+    "or inspect_task to verify."
+)
+
+
+def _default_suggestion(message: str) -> str:
+    lowered = message.lower()
+    if "not found" in lowered:
+        return "Check the identifier or path and retry."
+    if "grade_filter" in lowered:
+        return "Retry without grade_filter or use one of: BROKEN, WEAK, OK, GOOD, GOLDEN."
+    if "rules" in lowered:
+        return "Verify the rules path or choose a valid built-in ruleset."
+    if "baseline" in lowered:
+        return "Capture or point to a valid baseline directory, then retry."
+    if "day1" in lowered or "day2" in lowered or "compare report" in lowered:
+        return "Provide both day1 and day2 in YYYYMMDD format."
+    return "Check the input parameters and retry."
+
+
+def _normalize_error_payload(payload: Any) -> Any:
+    if isinstance(payload, dict) and "error" in payload:
+        error = str(payload.get("error", ""))
+        suggestion = payload.get("suggestion")
+        if suggestion is None:
+            suggestion = payload.get("hint")
+        suggestion_text = str(suggestion).strip() if suggestion is not None else ""
+        return {
+            "error": error,
+            "suggestion": suggestion_text or _default_suggestion(error),
+        }
+    return payload
 
 
 def _json_response(payload: Any) -> str:
-    return json.dumps(payload, separators=(",", ":"))
+    return json.dumps(_normalize_error_payload(payload), separators=(",", ":"))
 
 
 def _compact_json(payload: Any) -> str:
@@ -56,6 +90,7 @@ def _compact_json(payload: Any) -> str:
     Always compact (no indent). On overflow, returns a valid JSON envelope
     with a truncation notice instead of slicing mid-object.
     """
+    payload = _normalize_error_payload(payload)
     result = json.dumps(payload, separators=(",", ":"))
     if len(result) <= _MCP_MAX_CHARS:
         return result
@@ -79,6 +114,11 @@ def _serialize(value: Any) -> Any:
     return value
 
 
+def _with_grade_note(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.setdefault("grade_note", _STRUCTURAL_GRADE_NOTE)
+    return payload
+
+
 def _truncate_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
@@ -90,11 +130,7 @@ def _truncate_text(value: str, max_chars: int) -> str:
 def _truncate_test_result_outputs(value: Any) -> Any:
     if isinstance(value, dict):
         serialized = {str(key): _truncate_test_result_outputs(item) for key, item in value.items()}
-        if (
-            "output" in serialized
-            and {"passed", "failed", "errors", "total"}.issubset(serialized)
-            and isinstance(serialized["output"], str)
-        ):
+        if "output" in serialized and isinstance(serialized["output"], str):
             serialized["output"] = _truncate_text(
                 serialized["output"], _MCP_TEST_OUTPUT_MAX_CHARS,
             )
@@ -158,7 +194,7 @@ def _load_tasks(
     days: int | None = None,
     site: str | None = None,
     outcome: str | None = None,
-    dedupe: bool = False,
+    dedupe: bool = True,
 ) -> list[Any]:
     from agent_xray.analyzer import load_adapted_tasks, load_tasks
 
@@ -171,11 +207,11 @@ def _load_tasks(
         tasks = list(cached[1])  # shallow copy to avoid mutation
     else:
         if format_name != "auto":
-            tasks = load_adapted_tasks(log_dir, format=format_name)
+            tasks = load_adapted_tasks(log_dir, format=format_name, days=days, dedup=False)
         else:
-            tasks = load_tasks(log_dir, days=days)
+            tasks = load_tasks(log_dir, days=days, dedup=False)
             if not tasks:
-                tasks = load_adapted_tasks(log_dir, format="auto")
+                tasks = load_adapted_tasks(log_dir, format="auto", days=days, dedup=False)
 
         # Store in cache (evict oldest if full)
         if len(_task_cache) >= _CACHE_MAX_ENTRIES:
@@ -184,14 +220,14 @@ def _load_tasks(
         _task_cache[cache_key] = (current_mtime, tasks)
 
     # Post-filters (not cached — applied fresh each call)
-    if dedupe:
-        tasks = _dedupe_tasks(tasks)
     if site:
         site_lower = site.lower()
         tasks = [t for t in tasks if site_lower in _extract_site(t).lower()]
     if outcome:
         outcome_lower = outcome.lower()
         tasks = [t for t in tasks if t.outcome is not None and outcome_lower in t.outcome.status.lower()]
+    if dedupe:
+        tasks = _dedupe_tasks(tasks)
     return tasks
 
 
@@ -383,8 +419,9 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
                 for fp in fix_plan[:5]
             ] if fix_plan else [],
             "suggested_next_tools": suggestions,
+            "suggested_next": suggestions[0] if suggestions else None,
         }
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -392,21 +429,6 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
 @server.tool()
 def enforce(verb: str = "auto", hypothesis: str = "", project_root: str = ".", format: str = "json") -> str:
     """Run the enforce discipline workflow.
-
-    Enforce helps maintain investigation discipline by tracking hypotheses,
-    checking progress, and preventing common debugging anti-patterns.
-
-    Verbs:
-      auto      - Full automated workflow: init + check + guard (DEFAULT, recommended)
-      init      - Start a new investigation with a hypothesis
-      check     - Evaluate current progress against hypothesis
-      plan      - Show the current investigation plan
-      diff      - Show what changed since investigation started
-      guard     - Check for anti-patterns (spin detection, scope creep)
-      status    - Current enforce state summary
-      challenge - Challenge your own conclusions
-      reset     - Reset enforce state for a fresh investigation
-      report    - Generate investigation report (use format='json' or 'markdown')
 
     Most users should just call enforce() with default verb='auto'.
     """
@@ -421,7 +443,7 @@ def enforce(verb: str = "auto", hypothesis: str = "", project_root: str = ".", f
         )
 
         def _pretty_json(payload: Any) -> str:
-            return json.dumps(payload, indent=2)
+            return json.dumps(_normalize_error_payload(payload), indent=2)
 
         def _invoke_simple(func: Any, **kwargs: Any) -> Any:
             signature = inspect.signature(func)
@@ -520,7 +542,36 @@ def enforce(verb: str = "auto", hypothesis: str = "", project_root: str = ".", f
 
         return _pretty_json(payload)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps(_normalize_error_payload({"error": str(e)}), indent=2)
+
+
+@server.tool()
+def enforce_quick(
+    test_command: str,
+    hypothesis: str = "",
+    log_dir: str | None = None,
+    max_files: int = 10,
+    max_diff_lines: int = 500,
+) -> str:
+    """Run enforce init+check in one call and return the combined review payload."""
+    try:
+        import agent_xray.enforce as enforce_module
+
+        payload = _truncate_test_result_outputs(
+            _serialize(
+                enforce_module.enforce_quick(
+                    test_command=test_command,
+                    hypothesis=hypothesis,
+                    log_dir=log_dir,
+                    max_files=max_files,
+                    max_diff_lines=max_diff_lines,
+                    project_root=".",
+                )
+            )
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return json.dumps(_normalize_error_payload({"error": str(e)}), indent=2)
 
 
 @server.tool()
@@ -605,18 +656,18 @@ def analyze(log_dir: str, rules: str | None = None, format: str = "auto", task_b
             ],
             "note": "Showing 10 worst tasks. Use CLI `agent-xray analyze` for full per-task output.",
         }
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
 
 @server.tool()
-def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None, dedupe: bool = True) -> str:
     """Grade traces against a ruleset and return scored per-task details — outcome filters by task status (failed/success), grade_filter filters by xray grade (BROKEN/WEAK/OK/GOOD/GOLDEN)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=dedupe)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -643,6 +694,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
                 "task_bank": task_bank or "none (generic grading only)",
                 "distribution": distribution,
             },
+            "structural_qualifier": "summary_only",
             "worst_tasks": [
                 {
                     "task_id": r.task_id,
@@ -654,19 +706,19 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
             ],
             "next": f"inspect_task(log_dir=log_dir, task_id='{worst[0].task_id}') for full investigation, diagnose(log_dir=log_dir) for fix plan, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after fixes" if worst else "No failures found.",
         }
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
 
 @server.tool()
-def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None, dedupe: bool = True) -> str:
     """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site/outcome/grade_filter)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=dedupe)
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
@@ -690,7 +742,7 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
             payload["note"] = f"Showing 20 worst of {len(failures)}. Next: diagnose() for prioritized fix plan, or surface_task(task_id)/reasoning(task_id) to inspect specific failures."
         else:
             payload["next"] = f"inspect_task(log_dir=log_dir, task_id='{shown[0].task_id}') for full investigation, diagnose(log_dir=log_dir) for fix plan, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after fixes" if shown else "diagnose(log_dir=log_dir) for fix plan"
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -730,6 +782,7 @@ def surface_task(log_dir: str, task_id: str, format: str = "auto", task_bank: st
             return _json_response({"error": f"Task {task_id!r} not found in {log_dir}"})
 
         surface = run_surface(task)
+        surface.setdefault("grade_note", _STRUCTURAL_GRADE_NOTE)
 
         if task_bank:
             from agent_xray.analyzer import analyze_task
@@ -849,14 +902,14 @@ def search_tasks(log_dir: str, query: str, format: str = "auto", days: int | Non
 
 
 @server.tool()
-def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None) -> str:
+def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None, grade_filter: str | None = None, dedupe: bool = True) -> str:
     """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site/outcome/grade_filter)."""
     try:
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures
 
-        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=True)
+        tasks = _load_tasks(log_dir, format, days=days, site=site, outcome=outcome, dedupe=dedupe)
         rule_set = load_rules(rules)
 
         if task_bank:
@@ -871,7 +924,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
         failures = classify_failures(tasks, grades)
         plan = build_fix_plan(failures, log_dir=log_dir)
 
-        return _compact_json({
+        return _compact_json(_with_grade_note({
             "summary": {
                 "tasks": len(tasks),
                 "rules": rule_set.name,
@@ -881,7 +934,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
             },
             "fix_plan": [_serialize(entry) for entry in plan],
             "next": f"inspect_task(log_dir=log_dir, task_id='{plan[0].investigate_task}') to replay top fix target, enforce(hypothesis='<why>') to start fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after" if plan and plan[0].investigate_task else "enforce(hypothesis='<why>') to start disciplined fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after",
-        })
+        }))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -890,7 +943,9 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
 def compare_runs(left_log_dir: str, right_log_dir: str, rules: str = "default", format: str = "auto") -> str:
     """Compare two trace sets side by side to find grade shifts, cost deltas, and decision divergences."""
     try:
+        from agent_xray.baseline import suggest_baseline_capture
         from agent_xray.comparison import compare_model_runs
+        from agent_xray.grader import grade_tasks, load_rules
 
         result = compare_model_runs(
             left_log_dir,
@@ -898,7 +953,22 @@ def compare_runs(left_log_dir: str, right_log_dir: str, rules: str = "default", 
             rules_path=rules if rules != "default" else None,
         )
 
-        return _compact_json(_serialize(result))
+        payload = _serialize(result)
+        if isinstance(payload, dict):
+            rule_set = load_rules(rules if rules != "default" else None)
+            before_grades = {
+                grade.task_id: grade.grade
+                for grade in grade_tasks(_load_tasks(left_log_dir, format), rule_set)
+            }
+            after_grades = {
+                grade.task_id: grade.grade
+                for grade in grade_tasks(_load_tasks(right_log_dir, format), rule_set)
+            }
+            baseline_suggestions = suggest_baseline_capture(before_grades, after_grades)
+            if baseline_suggestions:
+                payload["baseline_suggestions"] = baseline_suggestions
+            return _compact_json(_with_grade_note(payload))
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -972,12 +1042,13 @@ def report(
             grade_map = {g.task_id: g.grade for g in grades} if grades else {}
             results = measure_all_overhead(tasks, grade_map, baselines)
             hash_groups = group_by_prompt_hash(tasks, analyses, grade_map, baselines)
-            return _compact_json({
+            payload = {
                 "report_type": "overhead",
                 "tasks": len(tasks),
                 "rules": rule_name,
                 "data": overhead_report_data(results, hash_groups),
-            })
+            }
+            return _compact_json(_with_grade_note(payload))
 
         # Handle prompt-impact report
         if report_type == "prompt-impact":
@@ -987,23 +1058,25 @@ def report(
             )
             grade_map = {g.task_id: g.grade for g in grades} if grades else {}
             hash_groups = group_by_prompt_hash(tasks, analyses, grade_map)
-            return _compact_json({
+            payload = {
                 "report_type": "prompt-impact",
                 "tasks": len(tasks),
                 "rules": rule_name,
                 "data": prompt_impact_data(hash_groups),
-            })
+            }
+            return _compact_json(_with_grade_note(payload))
 
         # Handle compare (day-over-day) report
         if report_type == "compare":
             if not day1 or not day2:
                 return _json_response({"error": "compare report requires day1 and day2 parameters (YYYYMMDD format)"})
-            return _compact_json({
+            payload = {
                 "report_type": "compare",
                 "tasks": len(tasks),
                 "rules": rule_name,
                 "data": report_compare_days_data(tasks, grades, analyses, day1, day2),
-            })
+            }
+            return _compact_json(_with_grade_note(payload))
 
         data_funcs: dict[str, Any] = {
             "health": lambda: report_health_data(tasks, grades, analyses),
@@ -1021,12 +1094,15 @@ def report(
             "spins": lambda: report_spins_data(tasks, analyses),
         }
 
-        return _compact_json({
+        payload = {
             "report_type": report_type,
             "tasks": len(tasks),
             "rules": rule_name,
             "data": data_funcs[report_type](),
-        })
+        }
+        if needs_grades:
+            _with_grade_note(payload)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1156,12 +1232,15 @@ def tree(log_dir: str, rules: str | None = None, format: str = "auto", days: int
                     ],
                     **outcomes,
                 }
-        return _compact_json({
+        payload = {
             "task_count": len(tasks),
             "rules": rules or "none",
             "tree": compact_tree,
             "note": "Sites collapsed to counts with up to 3 sample_task_ids. Use CLI `agent-xray tree` for per-task details.",
-        })
+        }
+        if grades is not None:
+            _with_grade_note(payload)
+        return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1172,28 +1251,31 @@ def golden_rank(
     rules: str | None = None,
     optimize: str = "balanced",
     format: str = "auto",
+    per_site: bool = True,
 ) -> str:
     """Rank best runs by efficiency, grouping by site with configurable optimization profile."""
     try:
-        from agent_xray.golden import rank_golden_runs
+        from agent_xray.golden import STRUCTURAL_RANKING_NOTE, rank_golden_runs
         from agent_xray.grader import load_rules
 
         tasks = _load_tasks(log_dir, format)
         rule_set = load_rules(rules) if rules else load_rules()
-        rankings = rank_golden_runs(tasks, rules=rule_set, optimize=optimize)
+        rankings = rank_golden_runs(tasks, rules=rule_set, optimize=optimize, per_site=per_site)
 
         payload: dict[str, Any] = {
             "summary": {
                 "tasks": len(tasks),
                 "optimize": optimize,
                 "sites_ranked": len(rankings),
+                "per_site": per_site,
             },
             "rankings": {
                 site: [_serialize(r) for r in ranks]
                 for site, ranks in rankings.items()
             },
+            "note": STRUCTURAL_RANKING_NOTE,
         }
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1270,10 +1352,11 @@ def golden_compare(
         if skipped:
             summary["fixtures_skipped"] = len(skipped)
             summary["skip_errors"] = skipped[:10]
-        return _compact_json({
+        payload = {
             "summary": summary,
             "comparisons": results,
-        })
+        }
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1347,7 +1430,7 @@ def flywheel(log_dir: str, rules: str | None = None, format: str = "auto") -> st
         # MCP: remove per-task maps (available via grade tool if needed)
         payload.pop("task_grades", None)
         payload.pop("task_scores", None)
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1419,7 +1502,6 @@ def validate_targets(log_dir: str, project_root: str, rules: str = "default", fo
     try:
         from agent_xray.diagnose import (
             build_fix_plan,
-            get_target_resolver,
             validate_fix_targets,
         )
         from agent_xray.grader import grade_tasks, load_rules
@@ -1583,21 +1665,22 @@ def baseline_list(baselines_dir: str) -> str:
 def golden_best(log_dir: str, rules: str | None = None, optimize: str = "balanced", format: str = "auto") -> str:
     """Find the single best exemplar per site — the most efficient golden run. Use to identify which tasks to capture as baselines or fixtures."""
     try:
-        from agent_xray.golden import find_exemplars
+        from agent_xray.golden import STRUCTURAL_RANKING_NOTE, find_exemplars
         from agent_xray.grader import load_rules
 
         tasks = _load_tasks(log_dir, format)
         rule_set = load_rules(rules) if rules else load_rules()
         exemplars = find_exemplars(tasks, rules=rule_set, optimize=optimize)
 
-        return _compact_json({
+        return _compact_json(_with_grade_note({
             "summary": {
                 "tasks": len(tasks),
                 "optimize": optimize,
                 "exemplars_found": len(exemplars),
             },
             "exemplars": [_serialize(e) for e in exemplars],
-        })
+            "note": STRUCTURAL_RANKING_NOTE,
+        }))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1606,7 +1689,7 @@ def golden_best(log_dir: str, rules: str | None = None, optimize: str = "balance
 def golden_profiles() -> str:
     """Show available optimization profiles with their weight distributions for golden ranking."""
     try:
-        from agent_xray.golden import OPTIMIZATION_PROFILES
+        from agent_xray.golden import OPTIMIZATION_PROFILES, STRUCTURAL_RANKING_NOTE
 
         return _compact_json({
             "profiles": {
@@ -1614,6 +1697,7 @@ def golden_profiles() -> str:
                 for name, weights in sorted(OPTIMIZATION_PROFILES.items())
             },
             "usage": "Pass the profile name to golden_rank or golden_best's 'optimize' parameter",
+            "note": STRUCTURAL_RANKING_NOTE,
         })
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -1711,12 +1795,17 @@ def format_detect(log_path: str) -> str:
 
 
 @server.tool()
-def gaming_audit(diff: str, files_modified: list[str] | None = None, allow_test_modification: bool = False) -> str:
+def gaming_audit(diff: str, files_modified: list[str] | None = None, allow_test_modification: bool = False, project_allowlist: list[str] | None = None) -> str:
     """Run 8 gaming detectors on a diff to check for test-gaming, hardcoded values, mock injection, etc."""
     try:
         from agent_xray.enforce_audit import audit_change, classify_diff_quality
 
-        verdict, reasons, signal_names = audit_change(diff, files_modified, allow_test_modification=allow_test_modification)
+        verdict, reasons, signal_names = audit_change(
+            diff,
+            files_modified,
+            allow_test_modification=allow_test_modification,
+            project_allowlist=project_allowlist,
+        )
         quality = classify_diff_quality(diff, files_modified or [], 0)
         return _compact_json({
             "verdict": verdict,
@@ -1800,9 +1889,10 @@ def inspect_task(log_dir: str, task_id: str, format: str = "auto") -> str:
             "next": {
                 "signals": f"signal_detect(log_dir=log_dir, task_id='{task.task_id}') for domain-specific signals (commerce, research, planning)",
                 "compare": f"diff_tasks(log_dir=log_dir, task_id_a='<good_task_id>', task_id_b='{task.task_id}') to compare with a working task",
-                "fix": f"diagnose(log_dir=log_dir) for prioritized fix plan, then enforce(hypothesis='<why>') to start fixing",
+                "fix": "diagnose(log_dir=log_dir) for prioritized fix plan, then enforce(hypothesis='<why>') to start fixing",
             },
         }
+        _with_grade_note(payload)
 
         result = json.dumps(payload, separators=(",", ":"))
         if len(result) > _MCP_MAX_CHARS:
@@ -1832,7 +1922,7 @@ def golden_capture(
         from pathlib import Path
 
         from agent_xray.analyzer import analyze_task
-        from agent_xray.golden import capture_exemplar
+        from agent_xray.golden import STRUCTURAL_EXEMPLAR_WARNING, capture_exemplar
         from agent_xray.grader import load_rules
 
         tasks = _load_tasks(log_dir, format)
@@ -1843,10 +1933,13 @@ def golden_capture(
             tasks, rules=rules, site=site, optimize=optimize, output_path=output,
         )
         exemplar = json.loads(Path(exemplar_path).read_text(encoding="utf-8"))
-        payload: dict[str, Any] = {"exemplar": exemplar}
+        payload: dict[str, Any] = {
+            "exemplar": exemplar,
+            "correctness_warning": STRUCTURAL_EXEMPLAR_WARNING,
+        }
         if output:
             payload["saved_to"] = str(exemplar_path)
-        return _compact_json(payload)
+        return _compact_json(_with_grade_note(payload))
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1901,6 +1994,75 @@ def match_task(log_dir: str, task_id: str, bank_path: str, format: str = "auto")
         })
     except Exception as e:
         return _json_response({"error": str(e)})
+
+
+_TOOL_DOC_OVERRIDES: dict[str, str] = {
+    "triage": "Summarize a trace set into grade distribution, the single worst task, and a prioritized fix plan, returning JSON text or an error payload.",
+    "analyze": (
+        "Analyze agent traces to get grade distribution, root causes, and a fix plan "
+        "(filterable by days/site)."
+    ),
+    "enforce_quick": "Run enforce init+check in one call and return the combined review payload.",
+    "report": "Generate a focused report such as health, tools, flows, outcomes, cost, fixes, timeline, overhead, or compare, returning JSON text or an error payload.",
+}
+
+_TOOL_NAMES = (
+    "triage",
+    "enforce",
+    "enforce_quick",
+    "preflight_diff",
+    "analyze",
+    "grade",
+    "root_cause",
+    "completeness",
+    "surface_task",
+    "search_tasks",
+    "diagnose",
+    "compare_runs",
+    "report",
+    "diff_tasks",
+    "reasoning",
+    "tree",
+    "golden_rank",
+    "golden_compare",
+    "task_bank_validate",
+    "task_bank_list",
+    "capture_task",
+    "pricing_show",
+    "replay",
+    "validate_targets",
+    "rules_list",
+    "rules_show",
+    "baseline_capture",
+    "baseline_list",
+    "golden_best",
+    "golden_profiles",
+    "task_bank_show",
+    "format_detect",
+    "gaming_audit",
+    "inspect_task",
+    "golden_capture",
+    "signal_detect",
+    "match_task",
+)
+
+
+def _apply_tool_docstrings() -> None:
+    """Ensure every MCP tool docstring states what it does, when to use it, and what it returns."""
+    for tool_name in _TOOL_NAMES:
+        func = globals().get(tool_name)
+        if not callable(func):
+            continue
+        override = _TOOL_DOC_OVERRIDES.get(tool_name)
+        if override:
+            func.__doc__ = override
+            continue
+        doc = (func.__doc__ or "").strip()
+        if not doc:
+            func.__doc__ = f"{tool_name} tool for the corresponding agent-xray analysis."
+
+
+_apply_tool_docstrings()
 
 
 def main() -> None:

@@ -11,13 +11,12 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -47,6 +46,8 @@ class EnforceConfig:
 
     test_command: str
     max_iterations: int = 50
+    max_duration_seconds: int = 3600
+    max_total_cost_usd: float = 0.0
     challenge_every: int = 5
     require_improvement: bool = True
     allow_test_modification: bool = False
@@ -212,6 +213,7 @@ class EnforceReport:
     final_result: TestResult | None = None
     net_improvement: int = 0
     duration_seconds: float = 0.0
+    stopped_reason: str = ""
     # GAP 13: Cumulative report improvements
     prediction_accuracy_summary: dict[str, Any] = field(default_factory=dict)
     efficiency_ratio: float = 0.0
@@ -233,6 +235,7 @@ class EnforceReport:
             "final_result": self.final_result.to_dict() if self.final_result else None,
             "net_improvement": self.net_improvement,
             "duration_seconds": self.duration_seconds,
+            "stopped_reason": self.stopped_reason,
             "prediction_accuracy_summary": self.prediction_accuracy_summary,
             "efficiency_ratio": self.efficiency_ratio,
             "change_map": self.change_map,
@@ -465,29 +468,110 @@ def _git_diff_names(cwd: str | None = None, *, scope: list[str] | None = None) -
     return _filter_git_output_lines(out)
 
 
-def _git_stage_all(cwd: str | None = None, *, scope: list[str] | None = None) -> bool:
+def _git_stage_all(cwd: str | None = None, *, scope: list[str] | None = None) -> tuple[bool, str]:
     if scope:
         # Only stage scoped files — do NOT touch other agents' work
         for f in scope:
-            code, _ = _run_shell(f'git add -- "{f}"', cwd)
+            code, out = _run_shell(f'git add -- "{f}"', cwd)
             if code != 0:
-                return False
-        return True
-    code, _ = _run_shell(
+                return False, out
+        return True, ""
+    code, out = _run_shell(
         f'git add -A -- . ":(exclude){SESSION_DIR_NAME}"', cwd,
     )
-    return code == 0
+    return code == 0, out
+
+
+def _git_command_failure_message(
+    action: str,
+    output: str,
+    *,
+    return_code: int | None = None,
+    head_before: str = "",
+    head_after: str = "",
+) -> str:
+    """Map common Git failures to clearer human-facing errors."""
+    details = output.strip() or "git produced no output"
+    normalized = details.casefold()
+
+    if (
+        "filename too long" in normalized
+        or "file name too long" in normalized
+        or "path too long" in normalized
+    ):
+        return (
+            f"{action} failed: Windows path length limits blocked the operation. "
+            "Shorten the path or enable long paths.\n"
+            f"{details}"
+        )
+
+    if any(
+        marker in normalized
+        for marker in (
+            "hook declined",
+            "pre-commit",
+            "pre commit",
+            "commit-msg",
+            "post-commit",
+            "hook failed",
+        )
+    ):
+        return f"{action} failed: a Git hook rejected the change.\n{details}"
+
+    if any(
+        marker in normalized
+        for marker in (
+            "unable to convert",
+            "failed to encode",
+            "cannot encode",
+            "illegal byte sequence",
+            "encoding error",
+            "utf-8",
+            "utf8",
+        )
+    ) and any(marker in normalized for marker in ("fatal", "error", "failed")):
+        return (
+            f"{action} failed: Git hit an encoding problem. "
+            "Check file encodings and commit message text.\n"
+            f"{details}"
+        )
+
+    if return_code == 0 and head_before and head_after == head_before:
+        return (
+            f"{action} reported success but HEAD did not change "
+            f"({head_before}). The commit was not created.\n"
+            f"{details}"
+        )
+
+    if return_code is not None:
+        return f"{action} failed with exit code {return_code}.\n{details}"
+    return f"{action} failed.\n{details}"
 
 
 def _git_commit(message: str, cwd: str | None = None, *, scope: list[str] | None = None) -> str | None:
     """Commit staged changes. Returns commit hash or None."""
-    _git_stage_all(cwd, scope=scope)
+    staged, stage_output = _git_stage_all(cwd, scope=scope)
+    if not staged:
+        raise RuntimeError(_git_command_failure_message("git add", stage_output))
+
+    head_before = _git_head_hash(cwd)
     code, out = _run_shell(f'git commit -m "{message}"', cwd)
     if code != 0:
-        return None
-    # Extract commit hash
-    _, hash_out = _run_shell("git rev-parse --short HEAD", cwd)
-    return hash_out.strip() or None
+        raise RuntimeError(
+            _git_command_failure_message("git commit", out, return_code=code)
+        )
+    head_after = _git_head_hash(cwd)
+    if not head_after or head_after == head_before:
+        raise RuntimeError(
+            _git_command_failure_message(
+                "git commit",
+                out,
+                return_code=code,
+                head_before=head_before,
+                head_after=head_after,
+            )
+        )
+    return head_after
 
 
 def _git_revert_to(commit_hash: str, cwd: str | None = None, *, scope: list[str] | None = None) -> bool:
@@ -504,6 +588,16 @@ def _git_revert_to(commit_hash: str, cwd: str | None = None, *, scope: list[str]
 def _git_head_hash(cwd: str | None = None) -> str:
     _, out = _run_shell("git rev-parse --short HEAD", cwd)
     return out.strip()
+
+
+def _write_enforce_quick_log(log_dir: str, payload: dict[str, Any]) -> str:
+    """Persist a JSON snapshot of an enforce_quick run when requested."""
+    root = Path(log_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = root / f"enforce-quick-{stamp}.json"
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return str(path)
 
 
 def _git_stash(cwd: str | None = None) -> bool:
@@ -629,6 +723,15 @@ def _update_session_iteration_count(project_root: str | None, count: int) -> Non
     session_path = sd / "session.json"
     data = json.loads(session_path.read_text(encoding="utf-8"))
     data["iteration_count"] = count
+    _atomic_write(session_path, json.dumps(data, indent=2))
+
+
+def _update_session_field(project_root: str | None, key: str, value: Any) -> None:
+    """Persist a single session metadata field."""
+    sd = _session_dir(project_root)
+    session_path = sd / "session.json"
+    data = json.loads(session_path.read_text(encoding="utf-8"))
+    data[key] = value
     _atomic_write(session_path, json.dumps(data, indent=2))
 
 
@@ -892,7 +995,11 @@ def _heuristic_regression_cause(diff: str, regressed: list[str], files: list[str
     if "except" in diff and ("pass" in diff or "return" in diff):
         causes.append("error handling modification may have masked real failures")
     # Check if imports were removed
-    removed_imports = [l for l in diff.splitlines() if l.startswith("-") and ("import " in l or "from " in l)]
+    removed_imports = [
+        line
+        for line in diff.splitlines()
+        if line.startswith("-") and ("import " in line or "from " in line)
+    ]
     if removed_imports:
         causes.append(f"removed {len(removed_imports)} import(s) which may be needed by regressed tests")
     # Check if function signatures changed
@@ -1019,7 +1126,8 @@ def enforce_init(
     if _run_tests_fn:
         runner = _run_tests_fn
     else:
-        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
+        def runner(cmd: str, cwd: str | None) -> TestResult:
+            return run_tests(cmd, cwd, timeout=test_timeout)
     sd = _ensure_session_dir(project_root)
 
     stash_saved = False
@@ -1081,9 +1189,9 @@ def enforce_check(
     if _run_tests_fn:
         runner = _run_tests_fn
     else:
-        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
+        def runner(cmd: str, cwd: str | None) -> TestResult:
+            return run_tests(cmd, cwd, timeout=test_timeout)
     audit_fn = _audit_fn or audit_change
-    head_fn = _git_head_fn or _git_head_hash
     scope = config.scope
 
     # When scope is set and no test-injection override, create scope-aware wrappers.
@@ -1092,27 +1200,20 @@ def enforce_check(
     if _git_diff_fn:
         diff_stat_fn = _git_diff_fn
     else:
-        diff_stat_fn = lambda cwd: _git_diff_stat(cwd, scope=scope)
+        def diff_stat_fn(cwd: str | None) -> str:
+            return _git_diff_stat(cwd, scope=scope)
 
     if _git_names_fn:
         diff_names_fn = _git_names_fn
     else:
-        diff_names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
-
-    if _git_commit_fn:
-        commit_fn = _git_commit_fn
-    else:
-        commit_fn = lambda msg, cwd: _git_commit(msg, cwd, scope=scope)
-
-    if _git_revert_fn:
-        revert_fn = _git_revert_fn
-    else:
-        revert_fn = lambda hash, cwd: _git_revert_to(hash, cwd, scope=scope)
+        def diff_names_fn(cwd: str | None) -> list[str]:
+            return _git_diff_names(cwd, scope=scope)
 
     if _git_diff_content_fn:
         diff_content_fn = _git_diff_content_fn
     else:
-        diff_content_fn = lambda cwd: _git_diff_content(cwd, scope=scope)
+        def diff_content_fn(cwd: str | None) -> str:
+            return _git_diff_content(cwd, scope=scope)
 
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -1139,9 +1240,6 @@ def enforce_check(
         before = iterations[-1].after or baseline
     else:
         before = baseline
-
-    # Snapshot current HEAD before potential commit
-    head_before = head_fn(project_root)
 
     # Run tests
     after = runner(config.test_command, project_root)
@@ -1310,6 +1408,86 @@ def enforce_check(
     return record
 
 
+def enforce_quick(
+    test_command: str,
+    hypothesis: str = "",
+    project_root: str = ".",
+    *,
+    log_dir: str | None = None,
+    max_files: int = 10,
+    max_diff_lines: int = 500,
+    _run_tests_fn: Any = None,
+    _audit_fn: Any = None,
+    _git_diff_fn: Any = None,
+    _git_names_fn: Any = None,
+    _git_commit_fn: Any = None,
+    _git_revert_fn: Any = None,
+    _git_head_fn: Any = None,
+    _git_diff_content_fn: Any = None,
+) -> dict[str, Any]:
+    """Initialize or reuse an enforce session, then run a single check."""
+    root = project_root or "."
+    session_path = _session_dir(root) / "session.json"
+    session_reused = session_path.exists()
+    warnings: list[str] = []
+
+    if session_reused:
+        config, baseline, _ = _load_session(root)
+        session_dir = _session_dir(root)
+        if config.test_command != test_command:
+            warnings.append(
+                f"Existing session reused with stored test command {config.test_command!r}; "
+                f"ignored requested {test_command!r}."
+            )
+        if config.max_files_per_change != max_files:
+            warnings.append(
+                f"Existing session reused with max_files_per_change={config.max_files_per_change}; "
+                f"ignored requested {max_files}."
+            )
+        if config.max_diff_lines != max_diff_lines:
+            warnings.append(
+                f"Existing session reused with max_diff_lines={config.max_diff_lines}; "
+                f"ignored requested {max_diff_lines}."
+            )
+    else:
+        config = EnforceConfig(
+            test_command=test_command,
+            project_root=root,
+            max_files_per_change=max_files,
+            max_diff_lines=max_diff_lines,
+        )
+        baseline, session_dir = enforce_init(config, _run_tests_fn=_run_tests_fn)
+
+    record = enforce_check(
+        hypothesis=hypothesis,
+        project_root=root,
+        _run_tests_fn=_run_tests_fn,
+        _audit_fn=_audit_fn,
+        _git_diff_fn=_git_diff_fn,
+        _git_names_fn=_git_names_fn,
+        _git_commit_fn=_git_commit_fn,
+        _git_revert_fn=_git_revert_fn,
+        _git_head_fn=_git_head_fn,
+        _git_diff_content_fn=_git_diff_content_fn,
+    )
+
+    payload = record.to_dict()
+    payload.update(
+        {
+            "session_initialized": not session_reused,
+            "session_reused": session_reused,
+            "session_dir": str(session_dir),
+            "baseline": baseline.to_dict(),
+            "test_command": config.test_command,
+        }
+    )
+    if warnings:
+        payload["warnings"] = warnings
+    if log_dir:
+        payload["log_path"] = _write_enforce_quick_log(log_dir, payload)
+    return payload
+
+
 def enforce_plan(
     hypothesis: str,
     expected_tests: list[str] | None = None,
@@ -1358,12 +1536,14 @@ def enforce_diff(
     if _git_names_fn:
         names_fn = _git_names_fn
     else:
-        names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
+        def names_fn(cwd: str | None) -> list[str]:
+            return _git_diff_names(cwd, scope=scope)
 
     if _git_diff_content_fn:
         diff_content_fn = _git_diff_content_fn
     else:
-        diff_content_fn = lambda cwd: _git_diff_content(cwd, scope=scope)
+        def diff_content_fn(cwd: str | None) -> str:
+            return _git_diff_content(cwd, scope=scope)
 
     files = names_fn(project_root)
     diff_content = diff_content_fn(project_root)
@@ -1416,8 +1596,11 @@ def enforce_guard(
         scoped_names_fn = _git_names_fn
         all_names_fn = _git_names_fn
     else:
-        scoped_names_fn = lambda cwd: _git_diff_names(cwd, scope=scope)
-        all_names_fn = lambda cwd: _git_diff_names(cwd, scope=None)
+        def scoped_names_fn(cwd: str | None) -> list[str]:
+            return _git_diff_names(cwd, scope=scope)
+
+        def all_names_fn(cwd: str | None) -> list[str]:
+            return _git_diff_names(cwd, scope=None)
 
     iterations = _load_iterations(project_root)
     current_head = head_fn(project_root)
@@ -1615,6 +1798,7 @@ def build_enforce_report(project_root: str | None = None) -> EnforceReport:
         final_result=final,
         net_improvement=net,
         duration_seconds=dur,
+        stopped_reason=str(session_data.get("stopped_reason", "")),
         prediction_accuracy_summary=prediction_accuracy_summary,
         efficiency_ratio=round(efficiency_ratio, 3),
         change_map=change_map,
@@ -1644,57 +1828,111 @@ def enforce_auto(
     if _run_tests_fn:
         runner = _run_tests_fn
     else:
-        runner = lambda cmd, cwd: run_tests(cmd, cwd, timeout=test_timeout)
+        def runner(cmd: str, cwd: str | None) -> TestResult:
+            return run_tests(cmd, cwd, timeout=test_timeout)
     shell_fn = _run_shell_fn or _run_shell
     project_root = config.project_root
+    loop_started_at = perf_counter()
+    stop_reason = ""
+    total_cost_usd = 0.0
+
+    def _extract_result_cost(result: Any) -> float | None:
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            raw = result.get("cost_usd")
+        else:
+            raw = getattr(result, "cost_usd", None)
+        try:
+            return None if raw is None else float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _limits_exceeded() -> str:
+        elapsed = perf_counter() - loop_started_at
+        if config.max_duration_seconds > 0 and elapsed >= config.max_duration_seconds:
+            return "max_duration"
+        if config.max_total_cost_usd > 0 and total_cost_usd >= config.max_total_cost_usd:
+            return "max_cost"
+        return ""
+
+    def _finalize(reason: str = "") -> EnforceReport:
+        _update_session_field(project_root, "stopped_reason", reason)
+        report = build_enforce_report(project_root)
+        report.stopped_reason = reason
+        return report
 
     # Step 1: Initialize
-    baseline, sd = enforce_init(config, _run_tests_fn=runner)
+    baseline, _ = enforce_init(config, _run_tests_fn=runner)
+    baseline_cost = _extract_result_cost(baseline)
+    if baseline_cost is not None:
+        total_cost_usd += baseline_cost
 
     # If all tests pass already, return immediately
     if baseline.failed == 0 and baseline.errors == 0:
-        return build_enforce_report(project_root)
+        return _finalize()
 
     latest_result = baseline
     latest_hypothesis = ""
 
-    for iteration in range(1, config.max_iterations + 1):
-        rendered_agent_cmd = _format_agent_command(
-            agent_cmd,
-            latest_result,
-            iteration,
-            latest_hypothesis,
-        )
+    exceeded_reason = _limits_exceeded()
+    if exceeded_reason:
+        return _finalize(exceeded_reason)
 
-        # Step 2: Run agent command
-        agent_exit, _ = shell_fn(rendered_agent_cmd, project_root)
+    try:
+        for iteration in range(1, config.max_iterations + 1):
+            exceeded_reason = _limits_exceeded()
+            if exceeded_reason:
+                stop_reason = exceeded_reason
+                break
 
-        # Skip check if agent failed AND produced no changes (no point measuring)
-        if agent_exit != 0 and not _git_diff_names(project_root, scope=config.scope):
-            continue
+            rendered_agent_cmd = _format_agent_command(
+                agent_cmd,
+                latest_result,
+                iteration,
+                latest_hypothesis,
+            )
 
-        # Step 3: enforce_check
-        record = enforce_check(
-            hypothesis=f"auto iteration {iteration}",
-            project_root=project_root,
-            _run_tests_fn=runner,
-        )
+            # Step 2: Run agent command
+            agent_exit, _ = shell_fn(rendered_agent_cmd, project_root)
 
-        if record.after is not None:
-            latest_result = record.after
-        latest_hypothesis = record.hypothesis
+            # Skip check if agent failed AND produced no changes (no point measuring)
+            if agent_exit != 0 and not _git_diff_names(project_root, scope=config.scope):
+                continue
 
-        # Step 4: Run challenge at configured intervals
-        iter_count = _iteration_count(project_root)
-        if config.challenge_every > 0 and iter_count % config.challenge_every == 0 and iter_count > 0:
-            enforce_challenge(project_root)
+            # Step 3: enforce_check
+            record = enforce_check(
+                hypothesis=f"auto iteration {iteration}",
+                project_root=project_root,
+                _run_tests_fn=runner,
+            )
 
-        # Step 5: Check stopping condition -- all tests pass
-        if record.after and record.after.failed == 0 and record.after.errors == 0:
-            break
+            if record.after is not None:
+                latest_result = record.after
+                after_cost = _extract_result_cost(record.after)
+                if after_cost is not None:
+                    total_cost_usd += after_cost
+            latest_hypothesis = record.hypothesis
+
+            # Step 4: Run challenge at configured intervals
+            iter_count = _iteration_count(project_root)
+            if config.challenge_every > 0 and iter_count % config.challenge_every == 0 and iter_count > 0:
+                enforce_challenge(project_root)
+
+            # Step 5: Check stopping conditions
+            exceeded_reason = _limits_exceeded()
+            if exceeded_reason:
+                stop_reason = exceeded_reason
+                break
+            if record.after and record.after.failed == 0 and record.after.errors == 0:
+                break
+        else:
+            stop_reason = "max_iterations"
+    except KeyboardInterrupt:
+        stop_reason = "user_abort"
 
     # Step 6: Generate report
-    return build_enforce_report(project_root)
+    return _finalize(stop_reason)
 
 
 class _SafeTemplateDict(defaultdict[str]):

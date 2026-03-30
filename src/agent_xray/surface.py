@@ -728,9 +728,9 @@ def _detect_key_differences(diff_data: dict[str, Any]) -> list[str]:
                 f"vs Right has '{key_added[0][:80]}'"
             )
         elif key_removed:
-            differences.append(f"Prompt diff: Left missing content present in Right")
+            differences.append("Prompt diff: Left missing content present in Right")
         elif key_added:
-            differences.append(f"Prompt diff: Right missing content present in Left")
+            differences.append("Prompt diff: Right missing content present in Left")
 
     return differences
 

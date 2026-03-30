@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .dedup import _dedupe_tasks
 from .schema import AgentStep, AgentTask, TaskOutcome
 from .signals import SignalDetector, run_detection
 from .text_utils import tool_result_text
@@ -117,6 +118,7 @@ class TaskAnalysis:
     final_answer_failure_keywords_matched: list[str] = field(default_factory=list)
     # DOM element ref mismatch
     element_ref_mismatches: int = 0
+    ungrounded_answer: bool = False
 
     @property
     def task_id(self) -> str:
@@ -250,6 +252,7 @@ class TaskAnalysis:
             "final_answer_indicates_failure": self.final_answer_contains_failure_keywords,
             # DOM element ref mismatch
             "element_ref_mismatches": self.element_ref_mismatches,
+            "ungrounded_answer": self.ungrounded_answer,
             # Consultative response (no browser needed)
             "is_consultative_response": self.is_consultative_response,
         }
@@ -307,6 +310,7 @@ class TaskAnalysis:
             # Backward compat alias
             "final_answer_indicates_failure": self.final_answer_contains_failure_keywords,
             "element_ref_mismatches": self.element_ref_mismatches,
+            "ungrounded_answer": self.ungrounded_answer,
         }
         if include_task:
             d["task"] = self.task.to_dict()
@@ -407,6 +411,7 @@ class TaskAnalysis:
                 payload.get("final_answer_failure_keywords_matched", [])
             ),
             element_ref_mismatches=_int(payload.get("element_ref_mismatches")),
+            ungrounded_answer=_bool(payload.get("ungrounded_answer")),
         )
 
 
@@ -512,6 +517,11 @@ _FINAL_ANSWER_FAILURE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _INLINE_TOOL_ERROR_PATTERN = re.compile(r"\berror:", re.IGNORECASE)
+_URL_TOKEN_PATTERN = re.compile(r"https?://[^\s)>]+", re.IGNORECASE)
+_EMAIL_TOKEN_PATTERN = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
+_NUMBER_TOKEN_PATTERN = re.compile(r"[$#]?\d[\d,./:-]{1,}\d|[$#]?\d{3,}")
+_DOMAIN_TOKEN_PATTERN = re.compile(r"\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b")
+_CAMEL_OR_ALL_CAPS_TOKEN_PATTERN = re.compile(r"\b(?:[A-Z]{2,}|[A-Z][a-z]+[A-Z][A-Za-z]*)\b")
 
 
 def classify_soft_error(tool_result: Any) -> str:
@@ -550,6 +560,44 @@ def final_answer_failure_keywords(final_answer: str | None) -> list[str]:
         kw for kw in _FINAL_ANSWER_FAILURE_KEYWORDS
         if re.search(r"\b" + re.escape(kw) + r"\b", normalized, re.IGNORECASE)
     ]
+
+
+def _normalize_grounding_token(token: str) -> str:
+    return token.strip().strip(".,;:!?()[]{}<>\"'").lower()
+
+
+def _grounding_candidate_tokens(final_answer: str | None) -> list[str]:
+    if not final_answer:
+        return []
+    candidates: list[str] = []
+    for pattern in (
+        _URL_TOKEN_PATTERN,
+        _EMAIL_TOKEN_PATTERN,
+        _NUMBER_TOKEN_PATTERN,
+        _DOMAIN_TOKEN_PATTERN,
+        _CAMEL_OR_ALL_CAPS_TOKEN_PATTERN,
+    ):
+        for match in pattern.findall(final_answer):
+            normalized = _normalize_grounding_token(match)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+    return candidates
+
+
+def has_ungrounded_answer(task: AgentTask) -> bool:
+    if task.outcome is None or not task.outcome.final_answer:
+        return False
+    candidates = _grounding_candidate_tokens(task.outcome.final_answer)
+    if not candidates:
+        return False
+    grounded_text = " ".join(
+        tool_result_text(step.tool_result)
+        for step in task.sorted_steps
+        if step.tool_result
+    ).lower()
+    if not grounded_text:
+        return True
+    return any(candidate not in grounded_text for candidate in candidates)
 
 
 def summarize_tool_result(step: AgentStep, limit: int = 240) -> str:
@@ -708,7 +756,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
                 timestamps_ms.append(int(ts_float * 1000))
             except (TypeError, ValueError):
                 try:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     dt = datetime.fromisoformat(str(step.timestamp))
                     timestamps_ms.append(int(dt.timestamp() * 1000))
                 except (TypeError, ValueError):
@@ -771,6 +819,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
     )
     final_answer_failure_kws = final_answer_failure_keywords(final_answer)
     final_answer_failure_flag = bool(final_answer_failure_kws)
+    ungrounded_answer = has_ungrounded_answer(task)
     # --- DOM element ref mismatch ---
     element_ref_mismatches = 0
     ref_pattern = re.compile(r"@e\d+")
@@ -855,6 +904,7 @@ def _compute_core_metrics(task: AgentTask, pricing_data: dict[str, Any] | None =
         "final_answer_contains_failure_keywords": final_answer_failure_flag,
         "final_answer_failure_keywords_matched": final_answer_failure_kws,
         "element_ref_mismatches": element_ref_mismatches,
+        "ungrounded_answer": ungrounded_answer,
     }
 
 
@@ -935,7 +985,7 @@ def _sniff_agent_trace(path: Path) -> bool:
                 return True
             # Check line-by-line for JSONL agent-step format
             f.seek(0)
-            for _, line in zip(range(5), f):
+            for _, line in zip(range(5), f, strict=False):
                 try:
                     row = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
@@ -993,6 +1043,7 @@ def load_adapted_tasks(
     *,
     format: str = "auto",
     days: int | None = None,
+    dedup: bool = True,
 ) -> list[AgentTask]:
     """Load tasks through a framework adapter.
 
@@ -1000,6 +1051,8 @@ def load_adapted_tasks(
         log_dir: Directory or single ``.jsonl`` trace file to load.
         format: Explicit adapter format or ``"auto"`` for auto-detection.
         days: Optional number of most recent ``.jsonl`` files to include.
+        dedup: When ``True``, keep only the latest task per normalized
+            ``task_text``.
 
     Returns:
         list[AgentTask]: Normalized tasks reconstructed from adapted steps.
@@ -1062,11 +1115,15 @@ def load_adapted_tasks(
         except OSError:
             continue
 
-    return [tasks[key] for key in sorted(tasks)]
+    loaded_tasks = [tasks[key] for key in sorted(tasks)]
+    return _dedupe_tasks(loaded_tasks) if dedup else loaded_tasks
 
 
 def load_tasks(
-    log_dir: str | Path, days: int | None = None, pattern: str | None = None
+    log_dir: str | Path,
+    days: int | None = None,
+    pattern: str | None = None,
+    dedup: bool = True,
 ) -> list[AgentTask]:
     """Load native agent-xray JSONL traces into normalized tasks.
 
@@ -1075,6 +1132,8 @@ def load_tasks(
         days: Optional number of most recent ``.jsonl`` files to include.
         pattern: Glob pattern to filter files (e.g. ``"agent-steps-*.jsonl"``).
             When omitted, auto-detects files containing agent traces.
+        dedup: When ``True``, keep only the latest task per normalized
+            ``task_text``.
 
     Returns:
         list[AgentTask]: Parsed tasks ordered by ``task_id``.
@@ -1162,7 +1221,8 @@ def load_tasks(
             msg,
             stacklevel=2,
         )
-    return [tasks[key] for key in sorted(tasks)]
+    loaded_tasks = [tasks[key] for key in sorted(tasks)]
+    return _dedupe_tasks(loaded_tasks) if dedup else loaded_tasks
 
 
 def resolve_task(tasks: list[AgentTask], query: str) -> AgentTask:

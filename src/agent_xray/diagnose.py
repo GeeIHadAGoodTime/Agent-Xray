@@ -34,10 +34,20 @@ INVESTIGATION_HINTS: dict[str, list[str]] = {
         "selector strategy or element identification approach",
         "wait conditions for page or environment readiness",
     ],
+    "timeout": [
+        "task timeout or max-step budget configuration",
+        "progress checks that detect stalled final steps before budget exhaustion",
+        "task decomposition or retry budgeting for long-running traces",
+    ],
     "tool_bug": [
         "tool handler implementation where the tool produces errors",
         "tool result format that the LLM must parse",
         "tool input validation that should reject malformed requests",
+    ],
+    "rate_limit_cascade": [
+        "rate-limit backoff and retry logic in tool wrappers",
+        "request budgeting or batching that reduces repeated 429s",
+        "fallback behavior after repeated rate-limit responses",
     ],
     "tool_selection_bug": [
         "tool descriptions that guide the LLM toward correct tool choice",
@@ -72,6 +82,11 @@ INVESTIGATION_HINTS: dict[str, list[str]] = {
         "context compaction or summarization strategy",
         "task decomposition for long-running interactions",
         "message trimming or eviction policy before context fills",
+    ],
+    "context_overflow": [
+        "prompt growth and message accumulation over long runs",
+        "context compaction thresholds before reasoning quality degrades",
+        "fallback decomposition once the model starts losing earlier context",
     ],
     "delegation_failure": [
         "delegation routing that decides which tasks get delegated",
@@ -123,14 +138,17 @@ PROMPT_SECTION_TARGETS = {
     "browser": ["browser navigation prompt section", "progress detection or stuck-page instructions"],
     "payment": ["payment fill instructions or form field identification guidance", "payment gate or checkout handling logic"],
     "planning": ["task planning prompt section", "multi-step strategy or decomposition guidance"],
+    "auth": ["authentication and login prompt guidance", "credential and sign-in flow instructions"],
 }
 
 
 SEVERITY_BY_ROOT_CAUSE = {
     "approval_block": 5,
     "environment_drift": 4,
+    "timeout": 3,
     "routing_bug": 4,
     "tool_bug": 4,
+    "rate_limit_cascade": 4,
     "spin": 3,
     "stuck_loop": 3,
     "tool_selection_bug": 3,
@@ -139,6 +157,7 @@ SEVERITY_BY_ROOT_CAUSE = {
     "prompt_bug": 2,
     "reasoning_bug": 1,
     "memory_overload": 4,
+    "context_overflow": 3,
     "delegation_failure": 3,
     "test_failure_loop": 3,
     "tool_rejection_mismatch": 5,
@@ -246,8 +265,10 @@ def _verify_command_for(root_cause: str, task_id: str, log_dir: str | None = Non
     commands = {
         "approval_block": f"agent-xray surface {task_id} | grep approval",
         "environment_drift": f"agent-xray surface {task_id} | grep page_url",
+        "timeout": f"agent-xray surface {task_id} | grep -E 'status|step|timeout|max_iterations'",
         "routing_bug": f"agent-xray surface {task_id} | grep tools_available",
         "tool_bug": f"agent-xray surface {task_id} | grep tools_available",
+        "rate_limit_cascade": f"agent-xray surface {task_id} | grep -Ei '429|rate limit|too many requests'",
         "spin": f"agent-xray grade {dir_placeholder} --rules default | grep SPIN",
         "stuck_loop": f"agent-xray surface {task_id} | grep page_url",
         "tool_selection_bug": f"agent-xray surface {task_id} | grep tool_name",
@@ -256,6 +277,7 @@ def _verify_command_for(root_cause: str, task_id: str, log_dir: str | None = Non
         "prompt_bug": f"agent-xray reasoning {task_id} | grep -i prompt",
         "reasoning_bug": f"agent-xray reasoning {task_id}",
         "memory_overload": f"agent-xray surface {task_id} | grep context",
+        "context_overflow": f"agent-xray reasoning {task_id} | grep -Ei 'context|truncated|lost track'",
         "delegation_failure": f"agent-xray surface {task_id} | grep delegat",
         "test_failure_loop": f"agent-xray surface {task_id} | grep test",
         "tool_rejection_mismatch": f"agent-xray surface {task_id} | grep rejected",
