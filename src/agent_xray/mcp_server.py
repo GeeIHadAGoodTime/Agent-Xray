@@ -1233,16 +1233,29 @@ def capture_task(log_dir: str, task_id: str, format: str = "auto") -> str:
 
 @server.tool()
 def pricing_show(model_name: str) -> str:
-    """Look up per-token pricing for a model, showing input/output/cached costs."""
+    """Look up per-token pricing for a model, showing input/output/cached costs and alias resolution."""
     try:
         from agent_xray.pricing import format_model_pricing, load_pricing
 
         pricing_data = load_pricing()
         formatted = format_model_pricing(model_name, pricing_data)
-        return _json_response({
-            "model": model_name,
-            "pricing": formatted,
-        })
+        result: dict[str, Any] = {"model": model_name, "pricing": formatted}
+        # Show alias resolution path
+        models = pricing_data.get("models", {})
+        aliases = pricing_data.get("aliases", {})
+        if model_name in models:
+            result["resolved_via"] = "exact"
+        elif model_name in aliases:
+            result["resolved_via"] = "alias"
+            result["canonical_model"] = aliases[model_name]
+        else:
+            # Check prefix match
+            for key in models:
+                if model_name.startswith(key):
+                    result["resolved_via"] = "prefix"
+                    result["canonical_model"] = key
+                    break
+        return _json_response(result)
     except Exception as e:
         return _json_response({"error": str(e)})
 
@@ -1543,12 +1556,12 @@ def format_detect(log_path: str) -> str:
 
 
 @server.tool()
-def gaming_audit(diff: str, files_modified: list[str] | None = None) -> str:
-    """Run 9 gaming detectors on a diff to check for test-gaming, hardcoded values, mock injection, etc."""
+def gaming_audit(diff: str, files_modified: list[str] | None = None, allow_test_modification: bool = False) -> str:
+    """Run 8 gaming detectors on a diff to check for test-gaming, hardcoded values, mock injection, etc."""
     try:
         from agent_xray.enforce_audit import audit_change, classify_diff_quality
 
-        verdict, reasons, signal_names = audit_change(diff, files_modified)
+        verdict, reasons, signal_names = audit_change(diff, files_modified, allow_test_modification=allow_test_modification)
         quality = classify_diff_quality(diff, files_modified or [], 0)
         return _compact_json({
             "verdict": verdict,
