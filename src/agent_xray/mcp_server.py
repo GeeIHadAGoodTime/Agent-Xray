@@ -128,7 +128,7 @@ _CACHE_MAX_ENTRIES = 8
 
 
 def _dir_mtime(log_dir: str) -> float:
-    """Fast mtime check: max mtime of .jsonl files, with dir-level short-circuit."""
+    """Fast mtime check: max mtime of .jsonl and .json trace files, with dir-level short-circuit."""
     from pathlib import Path
     root = Path(log_dir)
     if root.is_file():
@@ -141,8 +141,9 @@ def _dir_mtime(log_dir: str) -> float:
     prev = _dir_mtime_cache.get(log_dir)
     if prev and prev[0] == dir_mt:
         return prev[1]
-    # Directory changed — rescan individual file mtimes
+    # Directory changed — rescan individual file mtimes (both .jsonl and .json)
     mtimes = [f.stat().st_mtime for f in root.glob("*.jsonl")]
+    mtimes.extend(f.stat().st_mtime for f in root.glob("*.json"))
     max_mt = max(mtimes) if mtimes else 0.0
     _dir_mtime_cache[log_dir] = (dir_mt, max_mt)
     return max_mt

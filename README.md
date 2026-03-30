@@ -656,7 +656,7 @@ Supporting pieces:
 
 ## MCP Server Tools
 
-`src/agent_xray/mcp_server.py` exposes 48 tools:
+`src/agent_xray/mcp_server.py` exposes 49 tools:
 
 | MCP tool | What it returns |
 | --- | --- |
