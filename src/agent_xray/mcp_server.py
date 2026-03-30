@@ -198,7 +198,10 @@ def _filter_by_grade(tasks: list[Any], grades: list[Any], grade_filter: str | No
     """
     if not grade_filter:
         return tasks, grades
-    grade_upper = grade_filter.upper()
+    grade_upper = grade_filter.strip().upper()
+    _VALID_GRADES = {"BROKEN", "WEAK", "OK", "GOOD", "GOLDEN"}
+    if grade_upper not in _VALID_GRADES:
+        return [], []  # Callers handle empty with clear error messages
     grade_map = {g.task_id: g for g in grades}
     filtered_tasks = []
     filtered_grades = []
@@ -532,6 +535,8 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
             grades = grade_tasks(tasks, rule_set)
 
         tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
+        if grade_filter and not tasks:
+            return _json_response({"error": "No tasks match grade_filter", "hint": f"No tasks graded as {grade_filter!r}. Valid grades: BROKEN, WEAK, OK, GOOD, GOLDEN."})
 
         distribution: dict[str, int] = {}
         for result in grades:
@@ -574,6 +579,8 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
         rule_set = load_rules(rules)
         grades = grade_tasks(tasks, rule_set)
         tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
+        if grade_filter and not tasks:
+            return _json_response({"error": "No tasks match grade_filter", "hint": f"No tasks graded as {grade_filter!r}. Valid grades: BROKEN, WEAK, OK, GOOD, GOLDEN."})
         failures = classify_failures(tasks, grades)
 
         # MCP: cap to 20 worst failures sorted by score ascending
@@ -754,6 +761,8 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
             grades = grade_tasks(tasks, rule_set)
 
         tasks, grades = _filter_by_grade(tasks, grades, grade_filter)
+        if grade_filter and not tasks:
+            return _json_response({"error": "No tasks match grade_filter", "hint": f"No tasks graded as {grade_filter!r}. Valid grades: BROKEN, WEAK, OK, GOOD, GOLDEN."})
         failures = classify_failures(tasks, grades)
         plan = build_fix_plan(failures, log_dir=log_dir)
 

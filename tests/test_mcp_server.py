@@ -381,10 +381,10 @@ def test_root_cause_with_grade_filter(tmp_trace_dir: Path) -> None:
 
     payload = json.loads(mcp_server.root_cause(str(tmp_trace_dir), grade_filter="BROKEN"))
     assert isinstance(payload, dict)
-    # If tasks matched, all classified failures should come from BROKEN tasks
-    if "tasks" in payload and payload["tasks"]:
+    assert payload["summary"]["tasks"] > 0, "Expected at least 1 BROKEN task in fixture"
+    # All classified failures should come from BROKEN tasks
+    if payload["tasks"]:
         for task_result in payload["tasks"]:
-            # root_cause only classifies BROKEN/WEAK grades, so filtered BROKEN should all be BROKEN
             if "grade" in task_result:
                 assert task_result["grade"] == "BROKEN"
 
@@ -395,8 +395,43 @@ def test_diagnose_with_grade_filter(tmp_trace_dir: Path) -> None:
 
     payload = json.loads(mcp_server.diagnose(str(tmp_trace_dir), grade_filter="BROKEN"))
     assert isinstance(payload, dict)
-    assert "summary" in payload
+    assert payload["summary"]["tasks"] > 0, "Expected at least 1 BROKEN task in fixture"
     assert "fix_plan" in payload
+
+
+def test_grade_filter_empty_after_filter_returns_error(tmp_trace_dir: Path) -> None:
+    """When grade_filter matches no tasks, all callers should return an explicit error."""
+    mcp_server = _load_mcp_server_module()
+
+    # GOLDEN is unlikely to be the grade for all tasks; use a nonexistent grade to be sure
+    for fn in [mcp_server.grade, mcp_server.root_cause, mcp_server.diagnose]:
+        payload = json.loads(fn(str(tmp_trace_dir), grade_filter="INVALID_GRADE"))
+        assert "error" in payload, f"{fn.__name__} should return error for invalid grade_filter"
+
+    # triage also handles it
+    triage_payload = json.loads(mcp_server.triage(str(tmp_trace_dir), grade_filter="INVALID_GRADE"))
+    assert "error" in triage_payload
+
+
+def test_grade_filter_whitespace_stripped(tmp_trace_dir: Path) -> None:
+    """grade_filter=' BROKEN ' (with spaces) should still match BROKEN tasks."""
+    mcp_server = _load_mcp_server_module()
+
+    # With whitespace: should still find BROKEN tasks
+    payload = json.loads(mcp_server.grade(str(tmp_trace_dir), grade_filter=" BROKEN "))
+    assert payload["summary"]["tasks"] > 0, "Whitespace-padded grade_filter should be stripped"
+    for t in payload["worst_tasks"]:
+        assert t["grade"] == "BROKEN"
+
+
+def test_grade_filter_case_insensitive(tmp_trace_dir: Path) -> None:
+    """grade_filter='broken' (lowercase) should match BROKEN tasks."""
+    mcp_server = _load_mcp_server_module()
+
+    payload = json.loads(mcp_server.grade(str(tmp_trace_dir), grade_filter="broken"))
+    assert payload["summary"]["tasks"] > 0, "Lowercase grade_filter should match"
+    for t in payload["worst_tasks"]:
+        assert t["grade"] == "BROKEN"
 
 
 def test_grade_filter_uses_caller_rules_not_default(tmp_trace_dir: Path) -> None:
@@ -410,9 +445,9 @@ def test_grade_filter_uses_caller_rules_not_default(tmp_trace_dir: Path) -> None
     # Grade with default rules and grade_filter=BROKEN
     broken_default = json.loads(mcp_server.grade(str(tmp_trace_dir), rules="default", grade_filter="BROKEN"))
     # All returned tasks must actually be BROKEN per the output
-    if broken_default["summary"]["tasks"] > 0:
-        for t in broken_default["worst_tasks"]:
-            assert t["grade"] == "BROKEN", f"grade_filter=BROKEN returned non-BROKEN task: {t}"
+    assert broken_default["summary"]["tasks"] > 0, "Expected BROKEN tasks in fixture"
+    for t in broken_default["worst_tasks"]:
+        assert t["grade"] == "BROKEN", f"grade_filter=BROKEN returned non-BROKEN task: {t}"
 
 
 def test_report_tools_skips_grading(monkeypatch: pytest.MonkeyPatch) -> None:
