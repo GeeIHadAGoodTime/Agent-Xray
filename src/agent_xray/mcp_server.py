@@ -1630,7 +1630,25 @@ def task_bank_show(path: str, task_id: str) -> str:
 def format_detect(log_path: str) -> str:
     """Auto-detect the trace format of a log file or directory with confidence score."""
     try:
+        from pathlib import Path
+
         from agent_xray.adapters import format_info
+
+        p = Path(log_path)
+        if p.is_dir():
+            # format_info expects a file; pick the first trace file in the directory
+            candidates = sorted(
+                set(p.glob("*.jsonl")) | set(p.glob("*.json"))
+            )
+            if not candidates:
+                return _json_response({"error": f"No .jsonl or .json files found in {log_path}"})
+            fmt, confidence = format_info(candidates[0])
+            return _compact_json({
+                "format": fmt,
+                "confidence": round(confidence, 3),
+                "detected_from": candidates[0].name,
+                "total_files": len(candidates),
+            })
 
         fmt, confidence = format_info(log_path)
         return _compact_json({

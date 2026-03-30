@@ -897,9 +897,18 @@ def _extract_day(path: Path, payload: dict[str, Any]) -> str | None:
 
 
 def _sniff_agent_trace(path: Path) -> bool:
-    """Check if a JSONL file contains agent traces by inspecting its first few lines."""
+    """Check if a file contains agent traces by inspecting its first few lines.
+
+    Supports both JSONL agent-step files and OTel JSON span exports.
+    """
     try:
         with path.open(encoding="utf-8", errors="ignore") as f:
+            # Peek at the beginning to detect OTel JSON exports
+            head = f.read(8192)
+            if '"resourceSpans"' in head or '"scopeSpans"' in head:
+                return True
+            # Check line-by-line for JSONL agent-step format
+            f.seek(0)
             for _, line in zip(range(5), f):
                 try:
                     row = json.loads(line)
@@ -926,9 +935,13 @@ def _iter_jsonl_files(
 ) -> list[Path]:
     if log_dir.is_file():
         return [log_dir]
-    glob_pat = pattern or "*.jsonl"
-    files = sorted(log_dir.glob(glob_pat))
-    if not pattern:
+    if pattern:
+        files = sorted(log_dir.glob(pattern))
+    else:
+        # Include both *.jsonl (agent step logs) and *.json (OTel exports)
+        files = sorted(
+            set(log_dir.glob("*.jsonl")) | set(log_dir.glob("*.json"))
+        )
         # Only sniff recent files — scanning thousands of old files is wasteful
         candidates = files[-_MAX_SNIFF_FILES:] if len(files) > _MAX_SNIFF_FILES else files
         files = [f for f in candidates if _sniff_agent_trace(f)]
