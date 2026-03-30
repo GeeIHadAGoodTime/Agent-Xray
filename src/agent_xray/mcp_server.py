@@ -192,6 +192,20 @@ def _load_tasks(
     return tasks
 
 
+def _resolve_task(tasks: list[Any], task_id: str) -> Any:
+    """Find a task by exact or prefix match, or raise."""
+    task_map = {t.task_id: t for t in tasks}
+    task = task_map.get(task_id)
+    if task is None:
+        # Prefix match
+        prefix = [t for t in tasks if t.task_id.startswith(task_id)]
+        if len(prefix) == 1:
+            task = prefix[0]
+    if task is None:
+        raise ValueError(f"Task {task_id!r} not found")
+    return task
+
+
 @server.tool()
 def enforce_init(
     test_command: str,
@@ -1362,6 +1376,81 @@ def golden_profiles() -> str:
                 for name, weights in sorted(OPTIMIZATION_PROFILES.items())
             },
             "usage": "Pass the profile name to golden_rank or golden_best's 'optimize' parameter",
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def pricing_list() -> str:
+    """List all known models with input/output/cached token pricing per 1M tokens."""
+    try:
+        from agent_xray.pricing import load_pricing
+
+        pricing_data = load_pricing()
+        models = pricing_data.get("models", {})
+        rows = []
+        for model_name in sorted(models):
+            entry = models[model_name]
+            rows.append({
+                "model": model_name,
+                "input_per_1m": entry.get("input", 0.0),
+                "output_per_1m": entry.get("output", 0.0),
+                "cached_per_1m": entry.get("cached_input"),
+            })
+        aliases = pricing_data.get("aliases", {})
+        return _compact_json({
+            "models": rows,
+            "aliases": aliases,
+            "total": f"{len(models)} models, {len(aliases)} aliases",
+        })
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def baseline_generate(log_dir: str, task_id: str, format: str = "auto") -> str:
+    """Generate a naked prompt (system message only, no tools/history) for baseline comparison."""
+    try:
+        from agent_xray.baseline import generate_naked_prompt
+
+        tasks = _load_tasks(log_dir, format)
+        task = _resolve_task(tasks, task_id)
+        prompt = generate_naked_prompt(task)
+        return _compact_json({"task_id": task.task_id, "naked_prompt": prompt})
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def task_bank_show(path: str, task_id: str) -> str:
+    """Show a single task bank entry by ID or prefix match."""
+    try:
+        from agent_xray.contrib.task_bank import load_task_bank as load_entries
+
+        entries = load_entries(path)
+        matched = next((e for e in entries if str(e.get("id")) == task_id), None)
+        if matched is None:
+            prefix = [e for e in entries if str(e.get("id", "")).startswith(task_id)]
+            if len(prefix) == 1:
+                matched = prefix[0]
+        if matched is None:
+            return _json_response({"error": f"Task bank entry not found: {task_id}"})
+        return _compact_json(matched)
+    except Exception as e:
+        return _json_response({"error": str(e)})
+
+
+@server.tool()
+def format_detect(log_path: str) -> str:
+    """Auto-detect the trace format of a log file or directory with confidence score."""
+    try:
+        from agent_xray.adapters import format_info
+
+        fmt, confidence = format_info(log_path)
+        return _compact_json({
+            "format": fmt,
+            "confidence": round(confidence, 3),
         })
     except Exception as e:
         return _json_response({"error": str(e)})

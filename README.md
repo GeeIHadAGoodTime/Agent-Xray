@@ -691,6 +691,10 @@ Supporting pieces:
 | `baseline_list` | lists all saved baselines in a directory with their metrics |
 | `golden_best` | finds the single best exemplar per site for baseline/fixture capture |
 | `golden_profiles` | shows available optimization profiles with weight distributions |
+| `pricing_list` | lists all known models with input/output/cached token pricing |
+| `baseline_generate` | generates a naked prompt (system message only) for baseline comparison |
+| `task_bank_show` | shows a single task bank entry by ID or prefix match |
+| `format_detect` | auto-detects the trace format of a log file with confidence score |
 
 Run the MCP server over stdio with:
 

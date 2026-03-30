@@ -49,6 +49,10 @@ MCP_TOOL_NAMES = [
     "baseline_list",
     "golden_best",
     "golden_profiles",
+    "pricing_list",
+    "baseline_generate",
+    "task_bank_show",
+    "format_detect",
 ]
 
 BANNED_DOCSTRING_MARKERS = (
