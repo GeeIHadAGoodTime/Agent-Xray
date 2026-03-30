@@ -212,7 +212,7 @@ def _resolve_task(tasks: list[Any], task_id: str) -> Any:
 
 @server.tool()
 def triage(log_dir: str, format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan."""
+    """START HERE — one-call investigation: grades all tasks, surfaces the worst failure step-by-step, and returns a prioritized fix plan (filterable by days/site/outcome)."""
     try:
         from agent_xray.analyzer import analyze_task
         from agent_xray.diagnose import build_fix_plan
@@ -285,11 +285,11 @@ def triage(log_dir: str, format: str = "auto", days: int | None = None, site: st
                 for fp in fix_plan[:5]
             ] if fix_plan else [],
             "next": {
-                "deep_dive": f"inspect_task(log_dir, '{worst.task_id}')" if worst else None,
-                "reasoning": f"reasoning(log_dir, '{worst.task_id}')" if worst else None,
-                "compare_good_vs_bad": "diff_tasks(log_dir, good_task_id, bad_task_id)" if len(tasks) > 1 else None,
-                "after_fix": "compare_runs(old_log_dir, new_log_dir) to verify improvement day-over-day",
-                "signals": f"signal_detect(log_dir, '{worst.task_id}') for domain-specific signals" if worst else None,
+                "deep_dive": f"inspect_task(log_dir=log_dir, task_id='{worst.task_id}')" if worst else None,
+                "reasoning": f"reasoning(log_dir=log_dir, task_id='{worst.task_id}')" if worst else None,
+                "compare_good_vs_bad": f"diff_tasks(log_dir=log_dir, task_id_a='<good_task_id>', task_id_b='{worst.task_id}')" if worst else None,
+                "after_fix": "compare_runs(left_log_dir='<before_dir>', right_log_dir='<after_dir>') to verify improvement",
+                "signals": f"signal_detect(log_dir=log_dir, task_id='{worst.task_id}') for domain-specific signals" if worst else None,
             },
         }
         return _compact_json(payload)
@@ -537,7 +537,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
                 }
                 for r in worst
             ],
-            "next": f"inspect_task(log_dir, '{worst[0].task_id}') for full investigation, diagnose() for fix plan, compare_runs(old_dir, new_dir) after fixes" if worst else "No failures found.",
+            "next": f"inspect_task(log_dir=log_dir, task_id='{worst[0].task_id}') for full investigation, diagnose(log_dir=log_dir) for fix plan, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after fixes" if worst else "No failures found.",
         }
         return _compact_json(payload)
     except Exception as e:
@@ -546,7 +546,7 @@ def grade(log_dir: str, rules: str = "default", format: str = "auto", task_bank:
 
 @server.tool()
 def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site)."""
+    """Classify weak/broken tasks into root cause categories with evidence — understand WHY tasks fail before fixing (filterable by days/site/outcome)."""
     try:
         from agent_xray.grader import grade_tasks, load_rules
         from agent_xray.root_cause import classify_failures, summarize_root_causes
@@ -571,7 +571,7 @@ def root_cause(log_dir: str, rules: str = "default", format: str = "auto", days:
         if len(failures) > 20:
             payload["note"] = f"Showing 20 worst of {len(failures)}. Next: diagnose() for prioritized fix plan, or surface_task(task_id)/reasoning(task_id) to inspect specific failures."
         else:
-            payload["next"] = f"inspect_task(log_dir, '{shown[0].task_id}') for full investigation, diagnose() for fix plan, compare_runs(old, new) after fixes" if shown else "diagnose() for fix plan"
+            payload["next"] = f"inspect_task(log_dir=log_dir, task_id='{shown[0].task_id}') for full investigation, diagnose(log_dir=log_dir) for fix plan, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after fixes" if shown else "diagnose(log_dir=log_dir) for fix plan"
         return _compact_json(payload)
     except Exception as e:
         return _json_response({"error": str(e)})
@@ -718,7 +718,7 @@ def search_tasks(log_dir: str, query: str, format: str = "auto", days: int | Non
 
 @server.tool()
 def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_bank: str | None = None, days: int | None = None, site: str | None = None, outcome: str | None = None) -> str:
-    """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site)."""
+    """Build a prioritized fix plan from classified failures — decide WHAT to fix before starting an enforce cycle (filterable by days/site/outcome)."""
     try:
         from agent_xray.diagnose import build_fix_plan
         from agent_xray.grader import grade_tasks, load_rules
@@ -745,7 +745,7 @@ def diagnose(log_dir: str, rules: str = "default", format: str = "auto", task_ba
                 "fix_plan_entries": len(plan),
             },
             "fix_plan": [_serialize(entry) for entry in plan],
-            "next": f"inspect_task(log_dir, '{plan[0].investigate_task}') to replay top fix target, enforce_init()+enforce_plan() to start fixing, compare_runs(old, new) after" if plan and plan[0].investigate_task else "enforce_init() + enforce_plan() to start disciplined fixing, compare_runs(old, new) after",
+            "next": f"inspect_task(log_dir=log_dir, task_id='{plan[0].investigate_task}') to replay top fix target, enforce_init(test_command='<cmd>') then enforce_plan(hypothesis='<why>') to start fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after" if plan and plan[0].investigate_task else "enforce_init(test_command='<cmd>') then enforce_plan(hypothesis='<why>') to start disciplined fixing, compare_runs(left_log_dir='<before>', right_log_dir='<after>') after",
         })
     except Exception as e:
         return _json_response({"error": str(e)})

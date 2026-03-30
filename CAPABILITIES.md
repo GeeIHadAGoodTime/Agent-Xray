@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.18.0 | Audit date: 2026-03-30
+Version: 1.21.0 | Audit date: 2026-03-30
 
 ---
 
@@ -70,7 +70,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 | `contrib/novviola.py` | ~406 | NOVVIOLA-specific target resolver |
 | `protocols.py` | ~97 | ToolRegistry, PromptBuilder, StepAdapter protocols |
 | `runner.py` | ~84 | TaskRunner protocol, GenericHTTPRunner |
-| `mcp_server.py` | ~968 | FastMCP server with 22+ tools |
+| `mcp_server.py` | ~1758 | FastMCP server with 48 tools |
 | `cli.py` | ~3500 | 30+ CLI subcommands |
 | `tui/app.py` | ~80+ | Textual-based interactive inspector |
 | `pytest_plugin.py` | ~73 | pytest fixture for in-test grading |
@@ -90,29 +90,49 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 
 ## Complete Tool/Command Registry
 
-### MCP Tools (47 exposed via `mcp_server.py`)
+### MCP Tools (48 exposed via `mcp_server.py`)
 
 | MCP Tool | Maps To | Description |
 |----------|---------|-------------|
+| `triage` | grade + surface + diagnose | **START HERE** — one-call investigation: grades all, surfaces worst failure, returns fix plan |
+| `inspect_task` | grade + root_cause + surface + reasoning | Comprehensive single-task report with grade, root cause, surface, reasoning |
 | `analyze` | `analyzer.analyze_task` | Analyze a single task, return 50+ metrics |
-| `grade` | `grader.grade_task` | Grade tasks with rulesets |
-| `root_cause` | `root_cause.classify_task` | Classify root cause of WEAK/BROKEN tasks |
+| `grade` | `grader.grade_task` | Grade tasks with rulesets (filterable by days/site/outcome) |
+| `root_cause` | `root_cause.classify_task` | Classify root cause of WEAK/BROKEN tasks (filterable by days/site/outcome) |
 | `completeness` | `completeness.check_completeness` | 14-dimension data completeness check |
 | `surface_task` | `surface.surface_for_task` | Reconstruct full decision surface for a task |
 | `search_tasks` | `analyzer.search_tasks` | Search tasks by text/site/grade (limit 25) |
-| `diagnose` | `diagnose.build_fix_plan` | Build prioritized fix plan from root causes |
+| `diagnose` | `diagnose.build_fix_plan` | Build prioritized fix plan from root causes (filterable by days/site/outcome) |
 | `compare_runs` | `comparison.compare_model_runs` | Compare two log directories (model/day/run) |
-| `report` | `reports.*` | Generate health/golden/broken/tools/flows/outcomes/actions/cost/fixes/coding/research/timeline/spin reports |
+| `report` | `reports.*` | Generate 15 report types: health/golden/broken/tools/flows/outcomes/actions/cost/fixes/coding/research/timeline/spin/overhead/prompt-impact/compare |
 | `diff_tasks` | `surface.diff_tasks` | Diff two tasks step-by-step |
 | `reasoning` | `surface.extract_reasoning_chain` | Extract full reasoning chain for a task |
-| `tree` | `surface.build_task_tree` / `analyzer.build_task_tree` | Build hierarchical task tree |
+| `tree` | `surface.build_task_tree` | Build hierarchical task tree |
+| `signal_detect` | `signals.run_detection` | Run signal detectors on a task, optionally filter by detector name |
+| `match_task` | `contrib.task_bank.match_task_to_bank` | Fuzzy-match a task to the best task bank entry |
 | `golden_rank` | `golden.rank_golden_runs` | Rank golden/good runs by efficiency |
 | `golden_compare` | `golden.explain_efficiency_gap` | Explain efficiency gap between two tasks |
+| `golden_best` | `golden.find_exemplars` | Find single best exemplar per site |
+| `golden_capture` | `golden.capture_exemplar` | Capture a golden exemplar task for efficiency benchmarking |
+| `golden_profiles` | `golden.OPTIMIZATION_PROFILES` | Show the 4 optimization profiles with weight details |
 | `task_bank_validate` | `contrib.task_bank.grade_with_task_bank` | Grade tasks against curated expectations |
 | `task_bank_list` | `task_bank.TaskBank.load_json` | List task bank entries with filtering |
+| `task_bank_show` | `task_bank.TaskBank.load_json` | Show a single task bank entry by ID |
 | `flywheel` | `flywheel.run_flywheel` | Full quality loop (grade + root cause + baseline) |
 | `capture_task` | `capture.capture_task` | Capture task as fixture with PII sanitization |
-| `pricing_show` | `pricing.load_pricing` | Show pricing data for a model |
+| `replay` | `replay.replay_fixture` | Compare saved fixture to current logs (IMPROVED/REGRESSION/STABLE) |
+| `validate_targets` | `diagnose.validate_fix_targets` | Check that fix-plan file paths actually exist on disk |
+| `pricing_show` | `pricing.load_pricing` | Show pricing data for a model (with alias resolution) |
+| `pricing_list` | `pricing.load_pricing` | List all model pricing |
+| `pricing_update` | `pricing.update_pricing` | Fetch latest pricing from GitHub |
+| `format_detect` | `adapters.format_info` | Auto-detect trace format with confidence score |
+| `gaming_audit` | `enforce_audit.audit_change` | Run 8 gaming detectors on a diff |
+| `rules_list` | `grader.load_rules` | List available rulesets |
+| `rules_show` | `grader.load_rules` | Show ruleset details (signals, thresholds, requirements) |
+| `rules_init` | `grader.load_rules` | Scaffold a new custom ruleset |
+| `baseline_capture` | `baseline.build_baseline` | Capture baseline from a task |
+| `baseline_list` | filesystem scan | List saved baselines in a directory |
+| `baseline_generate` | `baseline.generate_naked_prompt` | Generate naked prompt baseline for a task |
 | `enforce_init` | `enforce.EnforceSession.init` | Initialize enforce session |
 | `enforce_check` | `enforce.EnforceSession.check` | Check test results after a change |
 | `enforce_diff` | `enforce.EnforceSession.diff` | Show current git diff in enforce scope |
@@ -127,66 +147,72 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 
 | CLI Command | MCP Exposed? | Description |
 |------------|-------------|-------------|
-| `agent-xray grade <dir>` | Yes | Grade all tasks in a directory |
-| `agent-xray surface <task_id> <dir>` | Yes | Surface replay for a task |
-| `agent-xray diagnose <dir>` | Yes | Build fix plan |
-| `agent-xray completeness <dir>` | Yes | Data completeness check |
-| `agent-xray compare <left_dir> <right_dir>` | Yes | Compare two runs |
-| `agent-xray report <type> <dir>` | Yes | Generate reports (12 types) |
-| `agent-xray golden rank <dir>` | Yes | Golden efficiency ranking |
-| `agent-xray golden compare <task1> <task2> <dir>` | Yes | Explain efficiency gap |
-| `agent-xray golden best <dir>` | **NO** | Find best exemplar per site |
-| `agent-xray golden capture <task_id> <dir> <output>` | Yes (via capture_task) | Capture exemplar fixture |
-| `agent-xray golden profiles` | **NO** | Show available optimization profiles |
-| `agent-xray task-bank validate <dir>` | Yes | Validate against task bank |
-| `agent-xray task-bank list` | Yes | List task bank entries |
-| `agent-xray flywheel <dir>` | Yes | Full quality loop |
-| `agent-xray enforce init` | Yes | Initialize enforce session |
-| `agent-xray enforce check` | Yes | Check after change |
-| `agent-xray enforce diff` | Yes | Show enforce diff |
-| `agent-xray enforce plan` | Yes | Record hypothesis |
-| `agent-xray enforce guard` | Yes | Audit for gaming |
-| `agent-xray enforce status` | Yes | Session status |
-| `agent-xray enforce challenge` | Yes | Cross-iteration challenge |
-| `agent-xray enforce reset` | Yes | Reset session |
-| `agent-xray enforce report` | Yes | Generate session report |
+| `agent-xray grade <dir>` | Yes (`grade`) | Grade all tasks in a directory |
+| `agent-xray surface <task_id> <dir>` | Yes (`surface_task`) | Surface replay for a task |
+| `agent-xray diagnose <dir>` | Yes (`diagnose`) | Build fix plan |
+| `agent-xray completeness <dir>` | Yes (`completeness`) | Data completeness check |
+| `agent-xray compare <left_dir> <right_dir>` | Yes (`compare_runs`) | Compare two runs |
+| `agent-xray report <type> <dir>` | Yes (`report`) | Generate reports (15 types incl. overhead/prompt-impact/compare) |
+| `agent-xray golden rank <dir>` | Yes (`golden_rank`) | Golden efficiency ranking |
+| `agent-xray golden compare <task1> <task2> <dir>` | Yes (`golden_compare`) | Explain efficiency gap |
+| `agent-xray golden best <dir>` | Yes (`golden_best`) | Find best exemplar per site |
+| `agent-xray golden capture <task_id> <dir> <output>` | Yes (`golden_capture`) | Capture exemplar fixture |
+| `agent-xray golden profiles` | Yes (`golden_profiles`) | Show available optimization profiles |
+| `agent-xray task-bank validate <dir>` | Yes (`task_bank_validate`) | Validate against task bank |
+| `agent-xray task-bank list` | Yes (`task_bank_list`) | List task bank entries |
+| `agent-xray task-bank show <id>` | Yes (`task_bank_show`) | Show single task bank entry |
+| `agent-xray flywheel <dir>` | Yes (`flywheel`) | Full quality loop |
+| `agent-xray enforce init` | Yes (`enforce_init`) | Initialize enforce session |
+| `agent-xray enforce check` | Yes (`enforce_check`) | Check after change |
+| `agent-xray enforce diff` | Yes (`enforce_diff`) | Show enforce diff |
+| `agent-xray enforce plan` | Yes (`enforce_plan`) | Record hypothesis |
+| `agent-xray enforce guard` | Yes (`enforce_guard`) | Audit for gaming |
+| `agent-xray enforce status` | Yes (`enforce_status`) | Session status |
+| `agent-xray enforce challenge` | Yes (`enforce_challenge`) | Cross-iteration challenge |
+| `agent-xray enforce reset` | Yes (`enforce_reset`) | Reset session |
+| `agent-xray enforce report` | Yes (`enforce_report`) | Generate session report |
 | `agent-xray enforce auto` | **NO** | **Autonomous enforce loop** (--agent-cmd) |
 | `agent-xray tui <dir>` | **NO** | Interactive TUI inspector |
 | `agent-xray watch <file>` | **NO** | Live tail JSONL with real-time grading |
 | `agent-xray quickstart` | **NO** | Demo walkthrough |
 | `agent-xray record <cmd>` | **NO** | Capture tool calls from subprocess stdout |
-| `agent-xray replay <fixture> <dir>` | **NO** | Compare fixture to current logs |
-| `agent-xray validate-targets <dir>` | **NO** | Check fix-plan target paths exist |
-| `agent-xray baseline capture <task_id> <dir> <output>` | **NO** | Capture baseline from task |
-| `agent-xray baseline generate <dir> <output_dir>` | **NO** | Generate baselines for all golden tasks |
-| `agent-xray baseline list <dir>` | **NO** | List saved baselines |
-| `agent-xray rules list` | **NO** | List available rulesets |
-| `agent-xray rules show <name>` | **NO** | Show ruleset details |
-| `agent-xray rules init <name> <output>` | **NO** | Scaffold a new ruleset |
-| `agent-xray pricing list` | **NO** | List model pricing |
-| `agent-xray pricing update` | **NO** | Fetch latest pricing from GitHub |
+| `agent-xray replay <fixture> <dir>` | Yes (`replay`) | Compare fixture to current logs |
+| `agent-xray validate-targets <dir>` | Yes (`validate_targets`) | Check fix-plan target paths exist |
+| `agent-xray baseline capture <task_id> <dir> <output>` | Yes (`baseline_capture`) | Capture baseline from task |
+| `agent-xray baseline generate <dir> <output_dir>` | Yes (`baseline_generate`) | Generate naked prompt baseline for a task |
+| `agent-xray baseline list <dir>` | Yes (`baseline_list`) | List saved baselines |
+| `agent-xray rules list` | Yes (`rules_list`) | List available rulesets |
+| `agent-xray rules show <name>` | Yes (`rules_show`) | Show ruleset details |
+| `agent-xray rules init <name> <output>` | Yes (`rules_init`) | Scaffold a new ruleset |
+| `agent-xray pricing list` | Yes (`pricing_list`) | List model pricing |
+| `agent-xray pricing update` | Yes (`pricing_update`) | Fetch latest pricing from GitHub |
 | `agent-xray pricing path` | **NO** | Show pricing file path |
-| `agent-xray report overhead <dir>` | **NO** | Prompt overhead report |
-| `agent-xray report prompt-impact <dir>` | **NO** | Prompt-hash impact report |
-| `agent-xray report compare <dir> <day1> <day2>` | **NO** | Day-over-day comparison report |
+| `agent-xray report overhead <dir>` | Yes (via `report`) | Prompt overhead report |
+| `agent-xray report prompt-impact <dir>` | Yes (via `report`) | Prompt-hash impact report |
+| `agent-xray report compare <dir> <day1> <day2>` | Yes (via `report`) | Day-over-day comparison report |
+
+### Filtering Options Available in MCP
+
+| Flag (CLI) | MCP Parameter | Available On |
+|------------|--------------|-------------|
+| `--days N` | `days` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
+| `--site SITE` | `site` | triage, analyze, grade, root_cause, diagnose, tree, search_tasks, report |
+| `--grade GRADE` | `grade_filter` | (via `_load_tasks` internal) |
+| `--outcome STATUS` | `outcome` | triage, grade, root_cause, diagnose |
+| `--rules PATH` | `rules` | grade, root_cause, diagnose, tree, golden_rank, compare_runs |
+| `--task-bank PATH` | `task_bank` | analyze, grade, diagnose |
 
 ### CLI-Only Filtering Options (Not Available in MCP)
 
 | Flag | Description |
 |------|-------------|
-| `--days N` | Filter to last N days of logs |
 | `--pattern GLOB` | Filter log files by glob pattern |
-| `--site SITE` | Filter to specific site name |
-| `--grade GRADE` | Filter to specific grade |
-| `--outcome STATUS` | Filter by outcome status |
 | `--since DATE` | Filter to logs since date |
 | `--markdown` | Output in GitHub-flavored Markdown |
 | `--json` | Output in JSON |
-| `--rules PATH` | Custom rules file |
 | `--pricing PATH` | Custom pricing file |
 | `--project-root PATH` | Project root for target validation |
 | `--profile PROFILE` | Optimization profile (balanced/cost/speed/steps) |
-| `--task-bank PATH` | Task bank JSON file |
 | `--baseline-dir PATH` | Baseline directory for comparison |
 
 ---
@@ -728,8 +754,8 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 ## Dark Abilities (CLI-only, Not in MCP)
 
-> **Status: Nearly all gaps CLOSED as of v1.18.0 (2026-03-30).**
-> 47 MCP tools total. 20 new MCP tools + 3 report types + filtering params added across four audit rounds.
+> **Status: Nearly all gaps CLOSED as of v1.20.0 (2026-03-30).**
+> 48 MCP tools total. 26 new MCP tools added across five audit rounds. Workflow hints now include correct parameter names and task IDs.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 
@@ -739,7 +765,8 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 4. **`record`** -- Subprocess stdout capture. Niche instrumentation use case.
 5. **`quickstart`** -- Demo walkthrough for humans.
 6. **`--markdown` output** -- MCP truncates to 20,000 chars. CLI can produce full Markdown for docs/PRs.
-7. **`--outcome`, `--since`, `--pattern` filters** -- `days`, `site`, and `grade_filter` are now in MCP; remaining filters are lower priority.
+7. **`--since`, `--pattern` filters** -- `days`, `site`, `outcome`, and `grade_filter` are now in MCP; remaining filters are lower priority.
+8. **`pricing path`** -- Show pricing cache file location. Niche debugging use case.
 
 ### CLOSED Gaps (Now in MCP)
 
@@ -762,12 +789,18 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 **Round 3 (v1.17.0):**
 - `triage` -- one-call investigation entry point (grade + worst failure + fix plan)
 - `inspect_task` -- comprehensive single-task report (grade + root cause + surface + reasoning)
-- `gaming_audit` -- run 9 gaming detectors on a diff
+- `gaming_audit` -- run 8 gaming detectors on a diff
 - `pricing_update` -- fetch latest pricing from GitHub
 
-**Round 4 (v1.18.0, challenger audit):**
+**Round 4 (v1.18.0):**
 - `signal_detect` -- run signal detectors on a single task, filter by detector name
 - `match_task` -- fuzzy-match a task to a task bank entry
+
+**Round 5 (v1.20.0, challenger audit):**
+- `golden_capture` -- capture golden exemplar task for efficiency benchmarking
+- `outcome` filter -- added to triage, grade, root_cause, diagnose
+- Workflow hints fixed: correct parameter names (`left_log_dir`/`right_log_dir`), task IDs included, required params shown
+- Docstrings updated: outcome param documented on all tools that accept it
 
 ---
 
@@ -801,7 +834,7 @@ Both the commerce detector and the default grading rules detect "suspiciously sh
 Each `TaskBankEntry` can include a `test_command` -- a shell command that independently verifies the task was completed correctly. This is not currently surfaced in any MCP tool.
 
 ### 10. Adapter Confidence Scoring
-`format_info(path)` returns not just the detected format but a confidence score (0.0-1.0) based on heuristic scoring + load verification. This could be exposed as an MCP tool for trace format debugging.
+`format_info(path)` returns not just the detected format but a confidence score (0.0-1.0) based on heuristic scoring + load verification. Now exposed via the `format_detect` MCP tool.
 
 ---
 
