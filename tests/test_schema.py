@@ -163,6 +163,36 @@ def test_task_outcome_from_dict_merges_nested_metadata_without_double_nesting() 
     assert outcome.to_dict()["metadata"]["source"] == "nested"
 
 
+def test_task_outcome_round_trip_preserves_metadata_structure() -> None:
+    original = TaskOutcome(
+        task_id="task-1",
+        status="success",
+        metadata={"source": "nested", "details": {"attempt": 2}},
+    )
+
+    cloned = TaskOutcome.from_dict(original.to_dict())
+
+    assert cloned.metadata == original.metadata
+
+
+def test_task_outcome_from_dict_flattens_double_nested_metadata() -> None:
+    outcome = TaskOutcome.from_dict(
+        {
+            "task_id": "task-1",
+            "status": "success",
+            "metadata": {
+                "metadata": {"source": "nested"},
+                "details": {"attempt": 2},
+            },
+        }
+    )
+
+    assert outcome.metadata == {
+        "source": "nested",
+        "details": {"attempt": 2},
+    }
+
+
 # ── New context fields (decision surface expansion) ──────────────────
 
 

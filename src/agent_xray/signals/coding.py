@@ -33,9 +33,10 @@ class CodingDetector:
     LINT_TOOLS = {"lint", "ruff", "eslint", "mypy", "typecheck"}
     GIT_TOOLS = {"git_commit", "git_push", "git_diff", "git_status"}
     SHELL_TOOLS = {"bash", "shell", "terminal", "execute", "run_command"}
+    VERSION_RE = re.compile(r"^v?\d+(?:\.\d+){1,4}(?:[-+][0-9A-Za-z.-]+)?$")
     FILE_PATH_RE = re.compile(
         r"(?<![\w.-])"
-        r"(?!v?\d+(?:\.\d+){1,4}\b)"
+        r"(?!v?\d+(?:\.\d+){1,4}(?:[-+][0-9A-Za-z.-]+)?(?:\b|$))"
         r"(?:(?:[A-Za-z]:)?[\\/][^\s'\"`]+"
         r"|[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+"
         r"|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[A-Za-z][A-Za-z0-9]{0,7})"
@@ -95,16 +96,20 @@ class CodingDetector:
             candidate = match.group(0).rstrip(".,:;")
             if (
                 candidate
+                and not self._looks_like_version(candidate)
                 and not self._is_likely_url(candidate)
                 and not self._is_likely_non_path(candidate)
             ):
                 yield candidate
 
+    def _looks_like_version(self, value: str) -> bool:
+        return bool(self.VERSION_RE.fullmatch(value.strip().rstrip(".,:;")))
+
     def _is_likely_non_path(self, value: str) -> bool:
         text = value.strip().rstrip(".,:;")
         if re.fullmatch(r"\d+(?:[\\/]\d+)+", text):
             return True
-        return bool(re.fullmatch(r"v?\d+(?:\.\d+){1,4}", text))
+        return self._looks_like_version(text)
 
     def _is_likely_url(self, value: str) -> bool:
         text = value.strip().rstrip(".,:;")

@@ -468,6 +468,21 @@ def _run_command(args: argparse.Namespace, action: Callable[[], int]) -> int:
         return 1
 
 
+def _emit_top_level_error(message: str, args: argparse.Namespace | None) -> None:
+    if bool(getattr(args, "json", False)):
+        _safe_print(
+            json.dumps(
+                {
+                    "error": {
+                        "message": message,
+                    }
+                }
+            )
+        )
+        return
+    _safe_print_stderr(message)
+
+
 def _copy_traversable_tree(source: Any, destination: Path) -> int:
     copied = 0
     destination.mkdir(parents=True, exist_ok=True)
@@ -4214,6 +4229,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    args: argparse.Namespace | None = None
     try:
         args = build_parser().parse_args()
         handler = getattr(args, "func", None)
@@ -4222,16 +4238,26 @@ def main() -> int:
         command_handler = cast(Callable[[argparse.Namespace], int], handler)
         return command_handler(args)
     except CliError as exc:
-        _safe_print_stderr(_format_cli_error(str(exc)))
+        _emit_top_level_error(_format_cli_error(str(exc)), args)
         return 1
     except FileNotFoundError as exc:
-        _safe_print_stderr(_format_missing_trace_error(exc))
+        _emit_top_level_error(_format_missing_trace_error(exc), args)
         return 1
     except json.JSONDecodeError as exc:
-        _safe_print_stderr(_format_malformed_trace_error(exc))
+        _emit_top_level_error(_format_malformed_trace_error(exc), args)
+        return 1
+    except KeyError as exc:
+        message = str(exc.args[0]) if exc.args else str(exc)
+        _emit_top_level_error(_format_cli_error(message), args)
         return 1
     except ValueError as exc:
-        _safe_print_stderr(_format_cli_error(str(exc)))
+        _emit_top_level_error(_format_cli_error(str(exc)), args)
+        return 1
+    except KeyboardInterrupt:
+        _emit_top_level_error("Interrupted.", args)
+        return 1
+    except ImportError as exc:
+        _emit_top_level_error(_format_cli_error(str(exc)), args)
         return 1
 
 

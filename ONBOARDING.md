@@ -125,7 +125,7 @@ Capture a task as a sanitized (or raw) fixture for replay and regression testing
 
 #### rules -- Ruleset management
 
-- **`agent-xray rules list`** -- List available built-in rulesets (default, browser_flow, coding_agent, research_agent).
+- **`agent-xray rules list`** -- List available built-in rulesets (default, simple, browser_flow, coding_agent, research_agent). Use `simple` for 1-2 step tasks (timers, memory writes, single-query lookups) where short execution is expected.
 - **`agent-xray rules show browser_flow`** -- Show a ruleset's full JSON definition.
 - **`agent-xray rules init --base browser_flow`** -- Scaffold a custom ruleset to stdout, extending an existing base.
 

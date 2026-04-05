@@ -881,8 +881,7 @@ class TaskOutcome:
             TaskOutcome: Parsed outcome data with unknown keys stored in
             ``metadata``.
         """
-        metadata = _coerce_dict(payload.get("metadata"))
-        metadata.update({
+        extra_metadata = {
             key: value
             for key, value in payload.items()
             if key
@@ -898,7 +897,10 @@ class TaskOutcome:
                 "ts",
                 "metadata",
             }
-        })
+        }
+        metadata_payload = _coerce_dict(payload.get("metadata"))
+        nested_metadata = _coerce_dict(metadata_payload.pop("metadata", None))
+        metadata = {**nested_metadata, **metadata_payload, **extra_metadata}
         return cls(
             task_id=str(payload.get("task_id", "")),
             status=str(

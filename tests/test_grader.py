@@ -197,4 +197,4 @@ def test_default_rules_golden_threshold_matches_max_positive_score() -> None:
     )
 
     assert rules.grade_thresholds["GOLDEN"] == 4
-    assert max_positive_score >= rules.grade_thresholds["GOLDEN"]
+    assert max_positive_score == rules.grade_thresholds["GOLDEN"]

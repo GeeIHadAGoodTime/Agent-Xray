@@ -40,6 +40,40 @@ def test_coding_detector_url_not_counted_as_file_path() -> None:
     assert summary["unique_files_touched"] == 0
 
 
+def test_coding_detector_version_string_not_counted_as_file_path() -> None:
+    detector = CodingDetector()
+    step = AgentStep(
+        task_id="task-1",
+        step=1,
+        tool_name="respond",
+        tool_input={"note": "Current release is 1.2.3"},
+    )
+
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=[step]), [detector.detect_step(step)]
+    )
+
+    assert detector.detect_step(step)["has_file_path"] is False
+    assert summary["unique_files_touched"] == 0
+
+
+def test_coding_detector_semver_prerelease_not_counted_as_file_path() -> None:
+    detector = CodingDetector()
+    step = AgentStep(
+        task_id="task-1",
+        step=1,
+        tool_name="respond",
+        tool_input={"note": "Pinned version is v1.2.3-beta.1"},
+    )
+
+    summary = detector.summarize(
+        AgentTask(task_id="task-1", steps=[step]), [detector.detect_step(step)]
+    )
+
+    assert detector.detect_step(step)["has_file_path"] is False
+    assert summary["unique_files_touched"] == 0
+
+
 def test_research_detector_no_false_positive_on_coding_task(coding_task: AgentTask) -> None:
     detector = ResearchDetector()
     summary = detector.summarize(

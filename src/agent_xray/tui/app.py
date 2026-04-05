@@ -85,23 +85,27 @@ class AgentXrayApp(App[None]):
         self.tasks = load_tasks(self.log_dir)
         if not self.tasks:
             raise ValueError(f"No tasks found under {self.log_dir}")
-        self.task = resolve_task(self.tasks, task_id) if task_id else self.tasks[-1]
+        self.agent_task = resolve_task(self.tasks, task_id) if task_id else self.tasks[-1]
         self.rules = load_rules()
-        self.analysis = analyze_task(self.task)
-        self.grade = grade_task(self.task, self.rules, analysis=self.analysis)
+        self.analysis = analyze_task(self.agent_task)
+        self.grade = grade_task(self.agent_task, self.rules, analysis=self.analysis)
         self.root_cause = (
-            classify_task(self.task, self.grade, self.analysis)
+            classify_task(self.agent_task, self.grade, self.analysis)
             if self.grade.grade in {"WEAK", "BROKEN"}
             else None
         )
-        self.surface = surface_for_task(self.task)
+        self.surface = surface_for_task(self.agent_task)
         self.mode = "surface"
         self.selected_index = 0
         self.repeat_signatures = self._build_repeat_signatures()
         self.last_successful_step = max(
-            (index for index, step in enumerate(self.task.sorted_steps) if not step.error),
+            (index for index, step in enumerate(self.agent_task.sorted_steps) if not step.error),
             default=None,
         )
+
+    @property
+    def task(self):  # type: ignore[override]
+        return self.agent_task
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -176,8 +180,8 @@ class AgentXrayApp(App[None]):
 
     def _summary_text(self) -> str:
         return (
-            f"Task: {self.task.task_id}  Grade: {self.grade.grade} ({self.grade.score}pts)  "
-            f"Steps: {len(self.task.steps)}  Cost: {_format_money(self.analysis.total_cost_usd)}"
+            f"Task: {self.agent_task.task_id}  Grade: {self.grade.grade} ({self.grade.score}pts)  "
+            f"Steps: {len(self.agent_task.steps)}  Cost: {_format_money(self.analysis.total_cost_usd)}"
         )
 
     def _build_repeat_signatures(self) -> set[int]:

@@ -330,6 +330,7 @@ Structural grades are produced by configurable JSON rulesets. Bundled rulesets:
 | Ruleset | Domain |
 |---------|--------|
 | `default` | General reliability and loop-detection signals |
+| `simple` | Short 1-2 step tasks (timers, memory writes, single-query lookups) |
 | `browser_flow` | Browser and commerce progression signals |
 | `coding_agent` | File-edit, test, lint, and shell behavior |
 | `research_agent` | Browsing and evidence-gathering signals |

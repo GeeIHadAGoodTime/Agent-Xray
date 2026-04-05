@@ -70,6 +70,38 @@ def _iter_json_objects(
                 break
 
 
+def _load_json_document(path: Path) -> Any:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+
+
+def _document_payloads(document: Any, *, limit: int = 25) -> list[dict[str, Any]]:
+    if isinstance(document, dict):
+        if isinstance(document.get("events"), list):
+            return [
+                {str(key): value for key, value in item.items()}
+                for item in document["events"]
+                if isinstance(item, dict)
+            ][:limit]
+        return [{str(key): value for key, value in document.items()}]
+    if isinstance(document, list):
+        return [
+            {str(key): value for key, value in item.items()}
+            for item in document
+            if isinstance(item, dict)
+        ][:limit]
+    return []
+
+
 def _normalize_tool_input(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return {str(key): item for key, item in value.items()}
@@ -184,6 +216,10 @@ def _has_nested_tool_name(payload: dict[str, Any]) -> bool:
 
 
 def _sample_payloads(path: Path, *, limit: int = 25) -> list[dict[str, Any]]:
+    document = _load_json_document(path)
+    payloads = _document_payloads(document, limit=limit)
+    if payloads:
+        return payloads
     return [payload for _, payload in _iter_json_objects(path, limit=limit)]
 
 
@@ -210,6 +246,10 @@ def _heuristic_scores(path: Path, payloads: list[dict[str, Any]]) -> dict[str, i
             scores["openai"] += 8
             if payload.get("type") == "tool_calls":
                 scores["openai"] += 4
+        elif object_type in {"chat.completion", "chat.completion.chunk"}:
+            scores["openai_chat"] += 20
+            if isinstance(payload.get("choices"), list):
+                scores["openai_chat"] += 8
 
         if payload.get("role") == "assistant" and isinstance(payload.get("tool_calls"), list):
             scores["openai"] += 3
@@ -236,6 +276,12 @@ def _heuristic_scores(path: Path, payloads: list[dict[str, Any]]) -> dict[str, i
 
         if "agent_role" in payload or any(str(key).startswith("crew_") for key in payload):
             scores["crewai"] += 10
+
+        if {"type", "ns", "data"} <= set(payload):
+            scores["langchain"] += 8
+
+        if "resourceSpans" in payload:
+            scores["otel"] += 30
 
         if _has_nested_tool_name(payload):
             scores["generic"] += 6
@@ -273,15 +319,23 @@ def format_info(path: str | Path) -> tuple[str, float]:
     resolved_path = Path(path) if not isinstance(path, Path) else path
     payloads = _sample_payloads(resolved_path)
     heuristic_scores = _heuristic_scores(resolved_path, payloads)
-
-    candidates = [name for name, score in heuristic_scores.items() if score > 0]
-    if "generic" not in candidates:
-        candidates.append("generic")
+    candidate_formats = [name for name in FORMATS if name != "auto"]
+    load_counts = {
+        format_name: _load_count(resolved_path, format_name)
+        for format_name in candidate_formats
+    }
+    candidates = [
+        format_name
+        for format_name in candidate_formats
+        if heuristic_scores.get(format_name, 0) > 0 or load_counts.get(format_name, 0) > 0
+    ]
+    if not candidates:
+        candidates = ["generic"]
 
     combined_scores: dict[str, int] = {}
     for format_name in candidates:
         combined_scores[format_name] = heuristic_scores.get(format_name, 0) * 10 + (
-            _load_count(resolved_path, format_name) * 5
+            load_counts.get(format_name, 0) * 5
         )
 
     ranked = sorted(

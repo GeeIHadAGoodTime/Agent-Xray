@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import agent_xray.adapters.anthropic as anthropic_adapter
+import agent_xray.adapters as adapters
 import agent_xray.adapters.crewai as crewai_adapter
 import agent_xray.adapters.generic as generic_adapter
 import agent_xray.adapters.langchain as langchain_adapter
@@ -38,6 +39,53 @@ def test_autodetect_generic() -> None:
 
 def test_autodetect_openai_chat() -> None:
     assert autodetect(FIXTURES / "openai_chat_trace.jsonl") == "openai_chat"
+
+
+def test_autodetect_raw_openai_chat_completion_document(tmp_path: Path) -> None:
+    path = tmp_path / "chat_completion.json"
+    path.write_text(
+        json.dumps(
+            {
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done"}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert autodetect(path) == "openai_chat"
+
+
+def test_format_info_prefers_specific_loader_evidence_over_generic_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "real-trace.jsonl"
+    path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(adapters, "_sample_payloads", lambda _path: [])
+    monkeypatch.setattr(
+        adapters,
+        "_heuristic_scores",
+        lambda _path, _payloads: {
+            "generic": 0,
+            "openai": 0,
+            "openai_chat": 0,
+            "langchain": 0,
+            "anthropic": 0,
+            "crewai": 0,
+            "otel": 0,
+        },
+    )
+    monkeypatch.setattr(
+        adapters,
+        "_load_count",
+        lambda _path, format_name: 2 if format_name == "openai" else 0,
+    )
+
+    assert format_info(path) == ("openai", 1.0)
+    assert autodetect(path) == "openai"
 
 
 def test_adapt_openai_produces_valid_steps() -> None:
@@ -129,6 +177,16 @@ def test_format_info_reports_openai_chat_confidence() -> None:
     format_name, confidence = format_info(FIXTURES / "openai_chat_trace.jsonl")
     assert format_name == "openai_chat"
     assert confidence > 0.5
+
+
+def test_format_info_handles_json_document_without_jsonl_warnings(tmp_path: Path) -> None:
+    path = tmp_path / "otel_trace.json"
+    path.write_text(json.dumps({"resourceSpans": []}), encoding="utf-8")
+
+    format_name, confidence = format_info(path)
+
+    assert format_name == "otel"
+    assert confidence == 1.0
 
 
 def test_adapt_otel_produces_valid_steps(monkeypatch) -> None:

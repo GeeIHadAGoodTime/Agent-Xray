@@ -70,7 +70,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 | `contrib/novviola.py` | ~406 | NOVVIOLA-specific target resolver |
 | `protocols.py` | ~97 | ToolRegistry, PromptBuilder, StepAdapter protocols |
 | `runner.py` | ~84 | TaskRunner protocol, GenericHTTPRunner |
-| `mcp_server.py` | ~1758 | FastMCP server with 48 tools |
+| `mcp_server.py` | ~1758 | FastMCP server with 37 tools |
 | `cli.py` | ~3500 | 30+ CLI subcommands |
 | `tui/app.py` | ~80+ | Textual-based interactive inspector |
 | `pytest_plugin.py` | ~73 | pytest fixture for in-test grading |

@@ -485,6 +485,44 @@ def test_main_catches_malformed_trace_without_traceback(
     assert (captured.out + captured.err).strip() == f"Malformed trace file: {trace_path}"
 
 
+def test_main_catches_import_error_with_json_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Parser:
+        def parse_args(self) -> Namespace:
+            def _handler(_: Namespace) -> int:
+                raise ImportError("missing optional dependency")
+
+            return Namespace(func=_handler, json=True)
+
+    monkeypatch.setattr("agent_xray.cli.build_parser", lambda: _Parser())
+
+    assert main() == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"error": {"message": "Error: missing optional dependency"}}
+
+
+def test_main_catches_keyboard_interrupt_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Parser:
+        def parse_args(self) -> Namespace:
+            def _handler(_: Namespace) -> int:
+                raise KeyboardInterrupt
+
+            return Namespace(func=_handler)
+
+    monkeypatch.setattr("agent_xray.cli.build_parser", lambda: _Parser())
+
+    assert main() == 1
+
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).strip() == "Interrupted."
+
+
 def test_cmd_quickstart_runs_and_creates_demo(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
