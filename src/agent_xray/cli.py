@@ -1014,6 +1014,29 @@ def cmd_triage(args: argparse.Namespace) -> int:
                         lines.append(f"     >> agent-xray surface {fp.investigate_task} {log_dir}")
             lines.extend(["", STRUCTURAL_GRADE_SUMMARY_NOTE])
             _emit("\n".join(lines), args, final=True)
+
+        # --fail-on: exit 1 if any task matches the threshold grade or worse
+        fail_on = getattr(args, "fail_on", None)
+        if fail_on:
+            grade_order = ["GOLDEN", "GOOD", "OK", "WEAK", "BROKEN"]
+            fail_on_upper = fail_on.upper()
+            if fail_on_upper not in grade_order:
+                print(
+                    f"Unknown grade '{fail_on}'. Use one of: {', '.join(grade_order)}",
+                    file=sys.stderr,
+                )
+                return 2
+            threshold_idx = grade_order.index(fail_on_upper)
+            failing = [
+                g for g in grades
+                if g.grade in grade_order[threshold_idx:]
+            ]
+            if failing:
+                print(
+                    f"\n--fail-on {fail_on_upper}: {len(failing)} task(s) at {fail_on_upper} or worse",
+                    file=sys.stderr,
+                )
+                return 1
         return 0
 
     return _run_command(args, _action)
@@ -1281,6 +1304,29 @@ def cmd_grade(args: argparse.Namespace) -> int:
                 )
             sections.append(f"Tip: use 'agent-xray golden rank' to see best performers, 'agent-xray report {short_path} broken' for worst.")
             _emit("\n".join(sections), args, final=True)
+
+        # --fail-on: exit 1 if any task matches the threshold grade or worse
+        fail_on = getattr(args, "fail_on", None)
+        if fail_on:
+            grade_order = ["GOLDEN", "GOOD", "OK", "WEAK", "BROKEN"]
+            fail_on_upper = fail_on.upper()
+            if fail_on_upper not in grade_order:
+                print(
+                    f"Unknown grade '{fail_on}'. Use one of: {', '.join(grade_order)}",
+                    file=sys.stderr,
+                )
+                return 2
+            threshold_idx = grade_order.index(fail_on_upper)
+            failing = [
+                g for g in grades
+                if g.grade in grade_order[threshold_idx:]
+            ]
+            if failing:
+                print(
+                    f"\n--fail-on {fail_on_upper}: {len(failing)} task(s) at {fail_on_upper} or worse",
+                    file=sys.stderr,
+                )
+                return 1
         return 0
 
     return _run_command(args, _action)
@@ -3069,6 +3115,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_option(p_triage)
     _add_filter_options(p_triage)
     p_triage.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_triage.add_argument(
+        "--fail-on",
+        metavar="GRADE",
+        help="Exit with code 1 if any task matches this grade or worse (e.g. --fail-on BROKEN)",
+    )
     p_triage.set_defaults(func=cmd_triage)
 
     # inspect — single-task deep dive
@@ -3199,6 +3250,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_filter_options(p_grade)
     _add_root_cause_config_options(p_grade)
     p_grade.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_grade.add_argument(
+        "--fail-on",
+        metavar="GRADE",
+        help="Exit with code 1 if any task matches this grade or worse (e.g. --fail-on BROKEN)",
+    )
     p_grade.set_defaults(func=cmd_grade)
 
     p_root_cause = _add_subparser(
