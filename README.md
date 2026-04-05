@@ -46,7 +46,7 @@ agent-xray inspect task-123 ./traces
 
 ## What Grades Mean
 
-> **Grades measure execution structure, not output correctness.**
+> **Grades measure execution structure, not output correctness.** Default rules are generic starting points — create [custom rulesets](docs/custom-rules.md) that encode your product's definition of quality before running optimization campaigns. See [Adapt the Rules Before You Optimize](ONBOARDING.md#adapt-the-rules-before-you-optimize).
 
 This distinction matters. Structural grades are triage signals, not verdicts:
 

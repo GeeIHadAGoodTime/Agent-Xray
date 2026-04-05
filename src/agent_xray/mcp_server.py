@@ -46,8 +46,11 @@ _REPORT_TYPES = [
 ]
 _STRUCTURAL_GRADE_NOTE = (
     "Grades measure execution structure (tool diversity, loop resistance, error "
-    "rate, completion). They do NOT verify output correctness. Use surface_task "
-    "or inspect_task to verify."
+    "rate, completion). They do NOT verify output correctness — a GOLDEN task "
+    "can still have the wrong answer. Default rules are generic starting points; "
+    "create product-specific rulesets (see rules_init) before running optimization "
+    "campaigns, otherwise you will optimize for structure instead of your product's "
+    "actual quality definition. Use surface_task or inspect_task to verify behavior."
 )
 
 

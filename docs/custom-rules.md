@@ -2,6 +2,19 @@
 
 `agent-xray` rules are JSON files that score analyzer metrics and detector metrics. This guide covers the file format, every supported operator, `golden_requirements`, and a worked example for coding agents.
 
+## Why You Must Customize
+
+Default rules are generic triage signals, not product quality definitions. If you use them as optimization targets, agents (human or AI) will optimize for structure instead of outcomes:
+
+- Default rewards `unique_tools >= 3` → agents add unnecessary tool calls to inflate scores
+- Default rewards `step_count >= 4` → agents add steps that don't help the user
+- Default ignores answer correctness → structurally clean runs with wrong answers score GOLDEN
+- Default ignores friction → agents that ask unnecessary questions aren't penalized
+
+**Every product has a different definition of GOLDEN.** A coding agent's GOLDEN is "tests pass, code is clean." A voice assistant's GOLDEN is "handled it like a friend in minimal steps." A research agent's GOLDEN is "correct answer from credible sources." None of these map to the default's "used 3+ tools in 4+ steps with no errors."
+
+Create your custom rules before running any optimization campaign. The format below gives you full control over what GOLDEN means for your product.
+
 ## Ruleset File Format
 
 A ruleset is a single JSON object.

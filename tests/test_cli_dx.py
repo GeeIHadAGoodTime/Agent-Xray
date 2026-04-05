@@ -284,8 +284,16 @@ class TestFiltering:
         golden_task: AgentTask,
         broken_task: AgentTask,
     ) -> None:
-        # Task timestamps are 2026-03-26, current date is 2026-03-28.
-        # --since 7d should keep all tasks (they are within the last 7 days).
+        # Patch step timestamps to 1 hour ago so --since 7d always includes
+        # them regardless of when the test suite runs.
+        from datetime import datetime, timezone, timedelta
+
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        for task in (golden_task, broken_task):
+            for step in task.steps:
+                step.timestamp = recent
+            if task.outcome:
+                task.outcome.timestamp = recent
         tasks = [golden_task, broken_task]
         filtered = _filter_tasks(tasks, since_filter="7d")
         assert len(filtered) == 2
@@ -295,8 +303,15 @@ class TestFiltering:
         golden_task: AgentTask,
         broken_task: AgentTask,
     ) -> None:
-        # Task timestamps are 2026-03-26, current date is 2026-03-28.
-        # --since 1h should exclude tasks from 2 days ago.
+        # Patch step timestamps to 2 days ago so --since 1h excludes them.
+        from datetime import datetime, timezone, timedelta
+
+        old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        for task in (golden_task, broken_task):
+            for step in task.steps:
+                step.timestamp = old
+            if task.outcome:
+                task.outcome.timestamp = old
         tasks = [golden_task, broken_task]
         filtered = _filter_tasks(tasks, since_filter="1h")
         assert len(filtered) == 0

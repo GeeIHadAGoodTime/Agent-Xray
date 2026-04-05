@@ -211,6 +211,39 @@ commerce_tasks = bank.filter_by_category("commerce")
 
 Commands that accept `--task-bank`: `analyze`, `grade`, `root-cause`, `diagnose`, `report`, `surface`.
 
+## Adapt the Rules Before You Optimize
+
+**This is the most important section in this document.**
+
+The default ruleset measures execution structure: tool diversity, step count, error rate, completion. These are reasonable triage signals for any agent, but they are **not** your product's definition of quality. If you optimize for default grades without customizing the rules, you will systematically drift from what your users actually care about.
+
+This is Goodhart's Law: when a measure becomes a target, it ceases to be a good measure.
+
+**Real example.** A team spent a week driving 85 tasks from BROKEN to GOLDEN using the default ruleset. The default rewards more tools (`unique_tools >= 3`) and more steps (`step_count >= 4`). So the agent added forcing functions to make the model call tools, added categories to route to more tools, and added nudges to keep the agent running longer. Tasks scored higher. But a 1-step task that perfectly handled the user's request was capped at OK because it didn't use enough tools. A 2-step timer set — the ideal interaction — could never be GOLDEN. The team had spent a week optimizing for the ruler instead of the thing the ruler was supposed to measure.
+
+**Before your first optimization cycle:**
+
+1. Run `agent-xray rules show default` to see what the default ruleset actually scores.
+2. Ask: *"Does GOLDEN in this ruleset mean what GOLDEN means for my product?"*
+3. If not (it usually doesn't), create a custom ruleset:
+   ```bash
+   agent-xray rules init --base default > my_rules.json
+   ```
+4. Edit the signals to match your definition of quality. Common adaptations:
+   - **Replace tool diversity with tool correctness.** Instead of `unique_tools >= 3`, score whether the agent used the expected tools for this task type. A 1-tool task done right is better than a 5-tool task that wandered.
+   - **Replace step count with efficiency.** Instead of `step_count >= 4`, reward tasks that complete within a target step range. Fewer steps for simple tasks, more steps for complex ones.
+   - **Add friction penalties.** If your agent asks unnecessary questions, penalize it. Unnecessary confirmations are a product quality issue that default rules ignore entirely.
+   - **Add answer correctness.** If your task bank defines expected outputs (`must_answer_contains`, `expected_outcome`), wire those into scoring. A structurally perfect run with the wrong answer should not be GOLDEN.
+   - **Use category-aware rulesets.** A timer task, a research task, and a checkout flow need different scales. Create separate rulesets and apply them by category.
+
+5. Use your custom rules for all grading:
+   ```bash
+   agent-xray grade ./traces --rules my_rules.json
+   agent-xray triage ./traces --rules my_rules.json
+   ```
+
+See [Custom Rules Guide](docs/custom-rules.md) for the full format and worked examples.
+
 ## Common Mistakes
 
 - Running random unit tests: enforce mode needs the same deterministic command every iteration or the comparison is meaningless.
