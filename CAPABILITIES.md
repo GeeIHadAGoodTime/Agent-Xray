@@ -1,6 +1,6 @@
 # agent-xray: Comprehensive Capabilities Audit
 
-Version: 1.25.3 | Audit date: 2026-03-30
+Version: 1.25.4 | Audit date: 2026-04-05
 
 ---
 
@@ -49,7 +49,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 | `schema.py` | ~1100 | Core data model: `AgentStep`, `AgentTask`, `TaskOutcome`, context objects (Model, Tool, Reasoning, Browser) |
 | `analyzer.py` | ~1300 | `TaskAnalysis` with 50+ metrics, error classification, task loading |
 | `grader.py` | ~570 | JSON ruleset evaluation, grade assignment (GOLDEN/GOOD/OK/WEAK/BROKEN) |
-| `root_cause.py` | ~1100 | 17 root cause classifiers with configurable thresholds |
+| `root_cause.py` | ~1100 | 22 root cause classifiers with configurable thresholds |
 | `surface.py` | ~1100 | Decision surface reconstruction, task tree, diff, reasoning extraction |
 | `diagnose.py` | ~500 | Fix plan builder, target resolution, investigation hints |
 | `completeness.py` | ~450 | 14-dimension data completeness checker |
@@ -90,7 +90,7 @@ JSONL logs -> Adapters -> AgentStep/AgentTask -> Analyzer -> Grader -> Root Caus
 
 ## Complete Tool/Command Registry
 
-### MCP Tools (48 exposed via `mcp_server.py`)
+### MCP Tools (37 exposed via `mcp_server.py`)
 
 | MCP Tool | Maps To | Description |
 |----------|---------|-------------|
@@ -757,7 +757,7 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 ## Dark Abilities (CLI-only, Not in MCP)
 
 > **Status: Nearly all gaps CLOSED as of v1.23.0 (2026-03-30).**
-> 49 MCP tools total. 26 new MCP tools added across seven audit rounds. grade_filter uses caller's rules (not hardcoded default). Workflow hints include correct parameter names and task IDs.
+> 37 MCP tools total. 26 new MCP tools added across seven audit rounds. grade_filter uses caller's rules (not hardcoded default). Workflow hints include correct parameter names and task IDs.
 
 ### Remaining CLI-Only (Low Priority for MCP)
 
@@ -833,7 +833,7 @@ CLI option: `--xray-rules <path>` to specify custom rules for the fixture.
 
 **Round 10 (v1.25.1, challenger audit):**
 - Dead `--task-bank` flag removed from inspect CLI
-- Doc counts fixed (48→49 MCP tools, version→1.25.1)
+- Doc counts fixed (48→37 MCP tools, version→1.25.1)
 - 9 parameter asymmetries cataloged (P1-P9), most intentional
 
 **Round 11 (v1.25.1, challenger audit):**
@@ -868,7 +868,7 @@ Root cause classification for `memory_overload` checks for: context usage >85%, 
 Both the commerce detector and the default grading rules detect "suspiciously short" tasks -- those that claim to reach payment in 1-2 steps, which is physically impossible for real commerce flows. This prevents false GOLDEN grades.
 
 ### 8. NOVVIOLA Target Resolver
-`contrib/novviola.py` provides a pre-built `TargetResolver` that maps all 17 root causes to specific NOVVIOLA file paths, plus 14 prompt bug patterns to specific files with fix descriptions. It also includes `NOVVIOLA_VERIFY_COMMANDS` -- shell commands for each root cause. Activate with `register()`.
+`contrib/novviola.py` provides a pre-built `TargetResolver` that maps all 22 root causes to specific NOVVIOLA file paths, plus 14 prompt bug patterns to specific files with fix descriptions. It also includes `NOVVIOLA_VERIFY_COMMANDS` -- shell commands for each root cause. Activate with `register()`.
 
 ### 9. Task Bank Test Commands
 Each `TaskBankEntry` can include a `test_command` -- a shell command that independently verifies the task was completed correctly. This is not currently surfaced in any MCP tool.

@@ -134,6 +134,41 @@ agent-xray grade ./traces
 
 The [tutorial](docs/tutorial.md) walks through the full expected output and explains how to read each section.
 
+## Quality Gates in CI
+
+Add structural quality assertions to your existing test suite — no dashboard, no account, no workflow change:
+
+```python
+def test_checkout_agent(xray):
+    steps = run_my_agent("Buy the blue mug on demo-shop.example.test")
+    report = xray.analyze(steps)
+    assert report.grade in ("GOLDEN", "GOOD"), f"Agent graded {report.grade}: {report.reasons}"
+    assert report.error_rate < 0.1
+```
+
+```bash
+pytest --xray-rules my_rules.json tests/
+```
+
+Or add a quality gate to GitHub Actions:
+
+```yaml
+# .github/workflows/agent-quality.yml
+name: Agent Quality
+on: [push]
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install agent-xray
+      - run: python run_agent.py  # your agent writes traces to ./traces/
+      - run: agent-xray triage ./traces
+      - run: agent-xray grade ./traces --rules my_rules.json
+```
+
+The pytest plugin is registered automatically via the `pytest11` entry point — `pip install agent-xray` is all you need.
+
 ## Supported Frameworks
 
 | Framework | Format Flag | Support Level |
@@ -213,7 +248,7 @@ agent-xray task-bank validate ./task-bank.json
 | `triage` | One-call investigation: structural grade distribution, worst failure surfaced step-by-step, prioritized fix plan |
 | `surface_task` | Reconstructs the full decision surface for one task: prompt, tools, reasoning, browser state, corrections |
 | `grade` | Structural execution grades for all tasks with configurable JSON rulesets |
-| `root_cause` | Classifies failure modes using a 19-category cascade classifier with evidence |
+| `root_cause` | Classifies failure modes using a 22-category cascade classifier with evidence |
 | `inspect_task` | All-in-one single-task deep dive: structural grade + root cause + surface + reasoning |
 
 ### Investigation (10 tools)
@@ -286,7 +321,7 @@ agent-xray task-bank validate ./task-bank.json
 | `validate_targets` | Checks that fix-plan file-path targets exist on disk |
 | `gaming_audit` | Runs 9 gaming detectors on a diff (test-gaming, hardcoded values, mock insertion) |
 
-**Total: 49 MCP tools** available via `python -m agent_xray.mcp_server` or the `agent-xray-mcp` entrypoint.
+**Total: 37 MCP tools** available via `python -m agent_xray.mcp_server` or the `agent-xray-mcp` entrypoint.
 
 ## Structural Grading System
 
@@ -340,7 +375,7 @@ agent-xray grade ./traces --rules my_rules.json
 
 ### Root Cause Classification
 
-When a task grades poorly (structural signal), `root_cause` classifies the likely failure mode using a 19-category cascade classifier. Each classification includes evidence from the decision surface:
+When a task grades poorly (structural signal), `root_cause` classifies the likely failure mode using a 22-category cascade classifier. Each classification includes evidence from the decision surface:
 
 | Root Cause | Evidence pattern |
 | --- | --- |
@@ -362,6 +397,9 @@ When a task grades poorly (structural signal), `root_cause` classifies the likel
 | `model_limit` | Task appears to exceed model capability |
 | `valid_alternative_path` | Goal achieved through an unexpected but valid path |
 | `consultative_success` | Well-reasoned answer without browser interaction |
+| `context_overflow` | Context-window pressure degraded later reasoning quality |
+| `rate_limit_cascade` | Repeated rate-limit errors cascaded into failure |
+| `timeout` | Task hit time or step limit before completing |
 | `unclassified` | No specific root cause identified from available evidence |
 
 The classifier also detects **soft errors** — logical failures in tool results (e.g., "NOT ON A PAYMENT PAGE") even when the tool reported technical success.
@@ -593,7 +631,7 @@ JSONL / framework trace files
   -> analyzer.py          task metrics, cost tracking, soft-error detection
   -> surface.py           decision-surface reconstruction, reasoning chains, tree, diff
   -> grader.py            configurable JSON rulesets (structural execution grades)
-  -> root_cause.py        19-category failure classifier with cascade ordering
+  -> root_cause.py        22-category failure classifier with cascade ordering
   -> contrib/task_bank.py correctness validation with fuzzy task matching
   -> capture.py           sanitized golden fixtures
   -> replay.py            fixture-vs-run comparison
@@ -609,7 +647,7 @@ JSONL / framework trace files
   -> instrument/          OpenAI, Anthropic, LangChain, and MCP auto-instrumentation
   -> runner.py            TaskRunner protocol plus HTTP runner
   -> protocols.py         ToolRegistry / PromptBuilder / StepAdapter protocols
-  -> mcp_server.py        49 MCP tools for investigation, enforce, and analysis
+  -> mcp_server.py        37 MCP tools for investigation, enforce, and analysis
 ```
 
 ## How agent-xray Compares

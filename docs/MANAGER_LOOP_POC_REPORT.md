@@ -162,7 +162,7 @@ Despite these caveats, the direction is unambiguous. The 5 systemic fixes (tool_
 
 ### The 12% problem
 
-agent-xray had 49 MCP tools available. The debugging agent used 6. This is the most important finding for anyone considering adopting the tool.
+agent-xray had 37 MCP tools available. The debugging agent used 6. This is the most important finding for anyone considering adopting the tool.
 
 **Why only 6?**
 

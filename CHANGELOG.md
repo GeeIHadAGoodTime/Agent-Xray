@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.25.4] - 2026-04-05
+
+### Fixed
+- README MCP tool count corrected: 49 → 37 (actual `@server.tool` decorators in `mcp_server.py`)
+- Root cause category count corrected: 19 → 22 across README, CAPABILITIES.md (added `context_overflow`, `rate_limit_cascade`, `timeout` to docs)
+- CAPABILITIES.md version synced to 1.25.4
+- CAPABILITIES.md root cause count corrected: 17 → 22
+- CAPABILITIES.md MCP tool count corrected: 48 → 37
+
 ## [1.25.3] - 2026-03-30
 
 ### Fixed
